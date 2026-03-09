@@ -1,0 +1,28 @@
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Python caches and build artifacts
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Coverage and test output
+.coverage
+htmlcov/
+
+# OS / editor cruft
+.DS_Store
+.idea/
+.vscode/
+
+# Node / frontend (future-proofing)
+node_modules/
+
+# Docker artifacts
+**/.docker/
