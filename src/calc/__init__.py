@@ -1,1 +1,0 @@
-# Calculation engine for Arth

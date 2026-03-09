@@ -1,0 +1,86 @@
+---
+description: Github commits
+alwaysApply: false
+---
+
+### **Rule: The `main` Branch is Sacred (Honor System)**
+
+**Context:** This repository is on a GitHub plan that does not allow for automated branch protection rules on private repositories. To ensure code quality and a stable primary branch, we enforce the following workflow by discipline. Adherence to this rule is non-negotiable for all contributors.
+
+---
+
+### The Golden Rule:
+
+**NEVER, under any circumstances, commit or push directly to the `main` branch.** All changes must be integrated via a Pull Request (PR).
+
+---
+
+### The Workflow
+
+This is the required process for making *any* change to the codebase, no matter how small.
+
+**1. Create a New Branch**
+
+Before you start working, create a new branch from the most up-to-date version of `main`.
+
+```bash
+# First, make sure your local main is up to date
+git checkout main
+git pull origin main
+
+# Then, create your new branch
+git checkout -b <branch-name>
+```
+
+Use a descriptive branch name prefixed with a type:
+*   `feature/add-user-login`: For new features.
+*   `bugfix/fix-broken-form`: For fixing bugs.
+*   `chore/update-readme`: For maintenance, documentation, or other non-feature tasks.
+
+**2. Do Your Work**
+
+Make your code changes on this new branch. Commit your work early and often with clear, descriptive commit messages.
+
+```bash
+git add .
+git commit -m "feat: add email validation to login form"
+```
+
+**3. Push Your Branch to GitHub**
+
+When your work is complete and ready for review, push your *feature branch* to the remote repository.
+
+```bash
+git push -u origin <branch-name>
+```
+
+**4. Open a Pull Request (PR)**
+
+Go to the repository on GitHub. You will see a prompt to create a Pull Request from your newly pushed branch. Click it.
+
+*   Give the PR a clear title.
+*   Write a brief description of the changes you made and *why*.
+*   If you're the only developer, assign yourself to review it. When Aditi joins, you will assign each other.
+
+**5. Review and Merge the PR**
+
+Review the changes in the "Files Changed" tab of the Pull Request. This is your last chance to catch typos or errors.
+
+*   **Self-Review:** If you are working alone, you must still review your own code carefully before merging.
+*   **Peer-Review:** Once the team grows, another developer must review and approve the PR.
+
+Once the PR is approved, click **"Merge pull request"**.
+
+**6. Clean Up**
+
+After the PR is merged, your feature branch is no longer needed.
+
+*   You can delete the remote branch directly from the PR page on GitHub.
+*   Switch your local repository back to `main` and pull the newly merged changes.
+
+```bash
+git checkout main
+git pull origin main
+```
+
+---
