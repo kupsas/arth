@@ -1,0 +1,30 @@
+# Allowed classification values — single source of truth.
+# Keep in sync with pipeline/models.py enums.
+# Tests in test_prompt_yaml.py verify this automatically.
+
+txn_types: |-
+  UPI_EXPENSE, UPI_TRANSFER, BANK_TRANSFER, SELF_TRANSFER,
+  CARD_PAYMENT, INCOME_SALARY, INCOME_OTHER, EXPENSE_OTHER,
+  LOAN_INSURANCE_PAYMENT
+
+upi_types: "P2P, P2M"
+
+categories: |-
+  Entertainment & Events
+  Fees, Charges & Interest
+  Financial Services, Insurance & Banking
+  Food & Dining
+  Friends and Family
+  Gifts & Personal Transfers
+  Healthcare & Pharmacy
+  Miscellaneous
+  Mobile, OTT & Subscriptions
+  Personal Grooming
+  Rent & Housing
+  Salary & Income
+  Self Transfer
+  Shopping & E-commerce
+  Swiggy
+  Transport & Fuel
+  Travel & Stay
+  Utilities & Internet

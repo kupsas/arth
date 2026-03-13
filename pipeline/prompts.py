@@ -1,118 +1,102 @@
 """
 LLM prompt templates for transaction classification.
 
-These are **fresh prompts** informed by the manually-corrected GSheet ground
-truth (647 rows).  The old GSheet prompts (GSheet_prompts_used.md) are kept
-as structural reference only — they produced imperfect results.
+Loads prompt content from YAML files in the ``prompts/`` directory and
+exposes the same three public functions the rest of the pipeline expects:
 
-Each prompt function returns a (system, user) tuple of strings.  The LLM
-classifier calls these and sends them to whichever model is configured.
+  - ``batch_classify_prompt``    — single-pass: all fields at once
+  - ``two_pass_fields_prompt``   — pass 1: txn_type + upi_type + counterparty
+  - ``two_pass_category_prompt`` — pass 2: counterparty_category
 
-Prompt strategies:
-  - ``batch_classify_prompt``   — single-pass: all fields at once
-  - ``two_pass_fields_prompt``  — pass 1: txn_type + upi_type + counterparty
-  - ``two_pass_category_prompt``— pass 2: counterparty_category from "txn_type counterparty"
+Each function returns a (system_message, user_message) tuple of strings.
+The YAML files hold the static content (system templates, enum values,
+few-shot examples); this module handles variable interpolation and
+item formatting.
 """
 
 from __future__ import annotations
 
-# ── Allowed values (kept in sync with models.py enums) ─────────────────────
+from pathlib import Path
 
-_TXN_TYPES = """UPI_EXPENSE, UPI_TRANSFER, BANK_TRANSFER, SELF_TRANSFER,
-CARD_PAYMENT, INCOME_SALARY, INCOME_OTHER, EXPENSE_OTHER,
-LOAN_INSURANCE_PAYMENT"""
+import yaml
 
-_UPI_TYPES = "P2P, P2M"
+# ── Locate the prompts directory relative to repo root ──────────────────────
 
-_CATEGORIES = """Entertainment & Events
-Fees, Charges & Interest
-Financial Services, Insurance & Banking
-Food & Dining
-Friends and Family
-Gifts & Personal Transfers
-Healthcare & Pharmacy
-Miscellaneous
-Mobile, OTT & Subscriptions
-Personal Grooming
-Rent & Housing
-Salary & Income
-Self Transfer
-Shopping & E-commerce
-Swiggy
-Transport & Fuel
-Travel & Stay
-Utilities & Internet"""
-
-# ── Shared few-shot examples ───────────────────────────────────────────────
-
-_FEW_SHOT = """\
-Example 1 — UPI P2M subscription:
-  desc: UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-500693553497-MANDATEREQUEST
-  direction: OUTFLOW | amount: 119 | channel: UPI
-  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Spotify | counterparty_category=Mobile, OTT & Subscriptions
-
-Example 2 — UPI P2M food delivery:
-  desc: UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTIB0000553
-  direction: OUTFLOW | amount: 339 | channel: UPI
-  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Swiggy | counterparty_category=Swiggy
-
-Example 3 — UPI P2M cafe:
-  desc: UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC0000001-504311834904-UPI
-  direction: OUTFLOW | amount: 445 | channel: UPI
-  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Third Wave Coffee | counterparty_category=Food & Dining
-
-Example 4 — UPI P2M pharmacy:
-  desc: UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-500989222413-PAYMENT FOR 154672
-  direction: OUTFLOW | amount: 127.5 | channel: UPI
-  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Apollo Pharmacy | counterparty_category=Healthcare & Pharmacy
-
-Example 5 — UPI P2M utility (Jio is a telecom/utility, NOT a subscription):
-  desc: UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-501647277334-JIO20BR000BO3CODK1
-  direction: OUTFLOW | amount: 349 | channel: UPI
-  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Reliance Jio Infocom | counterparty_category=Utilities & Internet
-
-Example 6 — UPI P2M broadband (JioFiber is a utility):
-  desc: UPI-JIOFIBER PREPAID-JIOFIBERPREPAID@PAYTM-YESB0PTMUPI-500611882017-OIDS8000072010@REL
-  direction: OUTFLOW | amount: 1178.82 | channel: UPI
-  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=JioFiber Prepaid | counterparty_category=Utilities & Internet
-
-Example 7 — UPI P2M OTT subscription (JioCinema IS a subscription):
-  desc: UPI-JIOCINEMA-VIACOM18ONLINE@YBL-YESB0YBLUPI-500779917590-SUBSCRIPTION DEBIT
-  direction: OUTFLOW | amount: 29 | channel: UPI
-  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=JioCinema - Viacom18 | counterparty_category=Mobile, OTT & Subscriptions
-
-Example 8 — BANK credit card bill payment:
-  desc: IB BILLPAY DR-HDFC4U-526873XXXXXX1905
-  direction: OUTFLOW | amount: 30000 | channel: BANK
-  → txn_type=CARD_PAYMENT | counterparty=HDFC Credit Card | counterparty_category=Financial Services, Insurance & Banking
-
-Example 9 — BANK salary (counterparty = the person receiving salary, extracted from narration):
-  desc: NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN52025020104799811
-  direction: INFLOW | amount: 127557 | channel: BANK
-  → txn_type=INCOME_SALARY | counterparty=Sashank Sai Kuppa | counterparty_category=Salary & Income
-
-Example 10 — BANK tax refund:
-  desc: NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SASHANK KUPPA
-  direction: INFLOW | amount: 92370 | channel: BANK
-  → txn_type=INCOME_OTHER | counterparty=IT Department Tax Refund | counterparty_category=Salary & Income
-
-Example 11 — BANK loan EMI:
-  desc: ACH D- IDFC FIRST BANK-1667588167
-  direction: OUTFLOW | amount: 9308 | channel: BANK
-  → txn_type=LOAN_INSURANCE_PAYMENT | counterparty=IDFC FIRST Bank | counterparty_category=Financial Services, Insurance & Banking
-
-Example 12 — UPI Google Pay mobile recharge ("GPAYRECHARGE" in handle = phone plan recharge, NOT a utility bill):
-  desc: UPI-GOOGLE INDIA SERVICE-GPAYRECHARGE@ICICI-ICIC0DC0099-101376305504-UPI
-  direction: OUTFLOW | amount: 399 | channel: UPI
-  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Google Pay Recharge | counterparty_category=Mobile, OTT & Subscriptions
-
-Example 13 — UPI inflow from an individual (friend sending money back — this is UPI_TRANSFER, NOT INCOME_OTHER):
-  desc: UPI-SATYANSH RAI-9151178228@PTYES-SBIN0012980-687912494165-SENT USING
-  direction: INFLOW | amount: 500 | channel: UPI
-  → txn_type=UPI_TRANSFER | upi_type=P2P | counterparty=Satyansh Rai | counterparty_category=Gifts & Personal Transfers"""
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_PROMPTS_DIR = _REPO_ROOT / "prompts"
 
 
-# ── Strategy A: Single-pass (all fields at once) ──────────────────────────
+# ── YAML loading (runs once at import time) ─────────────────────────────────
+
+def _load_yaml(filename: str) -> dict:
+    """Load and parse a YAML file from the prompts directory."""
+    path = _PROMPTS_DIR / filename
+    with open(path, encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
+_enums = _load_yaml("enums.yaml")
+_few_shot_data = _load_yaml("few_shot_examples.yaml")
+_single_pass_cfg = _load_yaml("classify_single_pass.yaml")
+_two_pass_fields_cfg = _load_yaml("classify_two_pass_fields.yaml")
+_two_pass_category_cfg = _load_yaml("classify_two_pass_category.yaml")
+
+
+# ── Render few-shot examples into the text format the LLM expects ───────────
+
+def _render_few_shot(examples: list[dict]) -> str:
+    """Convert structured example dicts into the multi-line text block.
+
+    Each example renders as:
+        Example N — {title}:
+          desc: {desc}
+          direction: {direction} | amount: {amount} | channel: {channel}
+          → txn_type={txn_type} | upi_type={upi_type} | counterparty=... | counterparty_category=...
+
+    Examples without upi_type omit that field from the result line.
+    """
+    blocks: list[str] = []
+    for ex in examples:
+        result_parts = [f"txn_type={ex['txn_type']}"]
+        if "upi_type" in ex:
+            result_parts.append(f"upi_type={ex['upi_type']}")
+        result_parts.append(f"counterparty={ex['counterparty']}")
+        result_parts.append(f"counterparty_category={ex['counterparty_category']}")
+        result_line = " | ".join(result_parts)
+
+        block = (
+            f"Example {ex['number']} \u2014 {ex['title']}:\n"
+            f"  desc: {ex['desc']}\n"
+            f"  direction: {ex['direction']} | amount: {ex['amount']} | channel: {ex['channel']}\n"
+            f"  \u2192 {result_line}"
+        )
+        blocks.append(block)
+
+    return "\n\n".join(blocks)
+
+
+# Pre-render the shared few-shot text (used by single-pass and two-pass-fields)
+_FEW_SHOT_TEXT = _render_few_shot(_few_shot_data["examples"])
+
+
+# ── System template interpolation ───────────────────────────────────────────
+
+def _render_system(template: str, *, include_few_shot: bool = True) -> str:
+    """Replace placeholders in a system template with actual values.
+
+    Uses str.replace() (not str.format()) to avoid conflicts with literal
+    braces in JSON response-format instructions.
+    """
+    result = template
+    result = result.replace("{txn_types}", _enums["txn_types"])
+    result = result.replace("{upi_types}", _enums["upi_types"])
+    result = result.replace("{categories}", _enums["categories"])
+    if include_few_shot:
+        result = result.replace("{few_shot}", _FEW_SHOT_TEXT)
+    return result
+
+
+# ── Strategy A: Single-pass (all fields at once) ───────────────────────────
 
 def batch_classify_prompt(
     items: list[dict[str, str]],
@@ -124,49 +108,7 @@ def batch_classify_prompt(
 
     Returns (system_message, user_message).
     """
-
-    system = f"""\
-You are a financial transaction classifier for Indian bank statements.
-
-For each transaction, fill in ONLY the requested fields from these allowed values:
-
-txn_type (if requested): {_TXN_TYPES}
-upi_type (if requested): {_UPI_TYPES}
-counterparty: A short, clean, human-readable name (2-4 words max).
-counterparty_category (if requested): {_CATEGORIES}
-
-Classification rules:
-- UPI_EXPENSE: UPI payment to a merchant/business/service.
-- UPI_TRANSFER: UPI payment to an individual person.
-- SELF_TRANSFER: Transfer between own accounts or to own UPI Lite wallet.
-- BANK_TRANSFER: NEFT/IMPS transfer that is NOT a self-transfer.
-- P2M: UPI to a business. P2P: UPI to a person.
-- For counterparty, extract the most recognizable consumer-facing brand or person name.
-
-Counterparty naming guidance:
-- For salary from TIDEPLATFO or PAYROLL: counterparty = the employee name from the narration.
-- For IB BILLPAY DR: counterparty = "HDFC Credit Card" (not "HDFC Bank").
-- For STERLING RENT: counterparty = "Sterling Rent".
-- For ACH insurance/loan debits: counterparty = the financial institution name.
-
-Category disambiguation:
-- "Swiggy" category is ONLY for Swiggy/Instamart transactions.
-- "Utilities & Internet": Reliance Jio (mobile recharge), JioFiber, Airtel, gas agencies, electricity. These are utility bills, NOT subscriptions.
-- "Mobile, OTT & Subscriptions": Spotify, Netflix, JioCinema, YouTube Premium, app subscriptions. These are entertainment/media subscriptions.
-- "Transport & Fuel": Uber, Ola, fuel stations, auto-rickshaws, parking, FASTag.
-- "Shopping & E-commerce": Amazon, Flipkart, Myntra, and local retail shops.
-- "Entertainment & Events": Cinemas, malls (entry/events), concert venues, amusement parks.
-- Do NOT confuse small BharatPe/PayTM QR merchant payments with person-to-person transfers.
-
-IMPORTANT for counterparty_category: First identify the txn_type and counterparty, \
-then use their combination to pick the best category. For example, \
-"UPI_EXPENSE Spotify" → "Mobile, OTT & Subscriptions", \
-"UPI_EXPENSE Reliance Jio Infocom" → "Utilities & Internet".
-
-{_FEW_SHOT}
-
-Respond with ONLY a JSON array. Each element must have "id" and then the requested fields.
-No markdown, no explanation, no extra text — just the JSON array."""
+    system = _render_system(_single_pass_cfg["system_template"])
 
     lines = []
     for item in items:
@@ -184,12 +126,12 @@ No markdown, no explanation, no extra text — just the JSON array."""
         parts.append(f'"need":[{item["needs"]}]')
         lines.append("{" + ", ".join(parts) + "}")
 
-    user = "Classify these transactions:\n\n" + "\n".join(lines)
+    user = _single_pass_cfg["user_prefix"] + "\n\n" + "\n".join(lines)
 
     return system, user
 
 
-# ── Strategy B: Two-pass prompts ───────────────────────────────────────────
+# ── Strategy B: Two-pass prompts ────────────────────────────────────────────
 
 def two_pass_fields_prompt(
     items: list[dict[str, str]],
@@ -198,40 +140,15 @@ def two_pass_fields_prompt(
 
     Does NOT ask for counterparty_category — that comes in pass 2.
     """
-
-    system = f"""\
-You are a financial transaction classifier for Indian bank statements.
-
-For each transaction, determine these fields:
-
-txn_type: {_TXN_TYPES}
-upi_type (only for UPI channel): {_UPI_TYPES}
-counterparty: A short, clean, human-readable name (2-4 words max).
-
-Classification rules:
-- UPI_EXPENSE: UPI payment to a merchant/business/service.
-- UPI_TRANSFER: UPI payment to an individual person.
-- SELF_TRANSFER: Transfer between own accounts or to own UPI Lite wallet.
-- BANK_TRANSFER: NEFT/IMPS transfer that is NOT a self-transfer.
-- P2M: UPI to a business. P2P: UPI to a person.
-- For counterparty, extract the most recognizable consumer-facing brand or person name.
-- Nominal UPI P2P amounts (~₹80-₹1200, not round numbers) to unknown persons are often Uber/Ola rides — classify counterparty as "Uber".
-
-{_FEW_SHOT}
-
-Respond with ONLY a JSON array. Each element must have "id", and whichever of \
-"txn_type", "upi_type", "counterparty" are requested.
-No markdown, no explanation, no extra text — just the JSON array."""
+    system = _render_system(_two_pass_fields_cfg["system_template"])
 
     lines = []
     for item in items:
-        # Figure out which pass-1 fields are still needed
         needed_fields = []
         for f in ("txn_type", "upi_type", "counterparty"):
             if f'"{f}"' in item.get("needs", ""):
                 needed_fields.append(f)
 
-        # If rules already filled all three, skip (shouldn't happen often)
         if not needed_fields:
             needed_fields = ["counterparty"]
 
@@ -250,7 +167,7 @@ No markdown, no explanation, no extra text — just the JSON array."""
         parts.append(f'"need":[{need_str}]')
         lines.append("{" + ", ".join(parts) + "}")
 
-    user = "Classify these transactions (pass 1 — type & counterparty only):\n\n" + "\n".join(lines)
+    user = _two_pass_fields_cfg["user_prefix"] + "\n\n" + "\n".join(lines)
 
     return system, user
 
@@ -263,37 +180,10 @@ def two_pass_category_prompt(
     Each item should have "id", "txn_type_counterparty" (e.g. "UPI_EXPENSE Spotify"),
     plus full transaction context.
     """
-
-    system = f"""\
-You are a financial transaction categoriser for Indian bank statements.
-
-For each transaction, you are given a "txn_type + counterparty" string — use this \
-as the primary signal to choose the single best counterparty_category.
-
-Allowed categories: {_CATEGORIES}
-
-Key rules:
-- "Swiggy" category is ONLY for Swiggy/Instamart transactions.
-- "Transport & Fuel" includes Uber, Ola, fuel stations, auto-rickshaws, cabs.
-- "Self Transfer" for transfers between own accounts.
-- "Salary & Income" for salary and tax refunds.
-- "Friends and Family" for person-to-person transfers with friends/family.
-- "Financial Services Insurance & Banking" for loan EMIs, insurance, bank fees.
-
-Examples:
-  "UPI_EXPENSE Spotify" → Mobile, OTT & Subscriptions
-  "UPI_TRANSFER Nimish Gupta" → Friends and Family
-  "UPI_EXPENSE Swiggy" → Swiggy
-  "UPI_TRANSFER Uber" → Transport & Fuel
-  "INCOME_SALARY Sashank Sai Kuppa" → Salary & Income
-  "LOAN_INSURANCE_PAYMENT IDFC FIRST Bank" → Financial Services, Insurance & Banking
-  "EXPENSE_OTHER Sterling Rent" → Rent & Housing
-  "SELF_TRANSFER VINOD" → Self Transfer
-  "UPI_EXPENSE Third Wave Coffee" → Food & Dining
-  "INCOME_OTHER IT Department Tax Refund" → Salary & Income
-
-Respond with ONLY a JSON array. Each element: {{"id": "...", "counterparty_category": "..."}}.
-No markdown, no explanation, no extra text — just the JSON array."""
+    system = _render_system(
+        _two_pass_category_cfg["system_template"],
+        include_few_shot=False,
+    )
 
     lines = []
     for item in items:
@@ -305,6 +195,6 @@ No markdown, no explanation, no extra text — just the JSON array."""
             parts.append(f'"channel":"{item["channel"]}"')
         lines.append("{" + ", ".join(parts) + "}")
 
-    user = "Categorise these transactions (pass 2 — category only):\n\n" + "\n".join(lines)
+    user = _two_pass_category_cfg["user_prefix"] + "\n\n" + "\n".join(lines)
 
     return system, user
