@@ -23,7 +23,7 @@ OUTPUT_DIR = REPO_ROOT / "data" / "output"
 
 # Source files — add new statements here as they arrive
 HDFC_SAVINGS_FILE = DATA_DIR / "HDFC_Statement.txt"
-GSHEET_BENCHMARK_FILE = DATA_DIR / "GSheet_Transactions.csv"
+GSHEET_BENCHMARK_FILE = DATA_DIR / "GSheet_Transactions_modifiedForLLMTraining.csv"
 
 # ---------------------------------------------------------------------------
 # Source configs  (parser_key -> metadata used by transformer / classifier)

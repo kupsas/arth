@@ -46,50 +46,70 @@ Utilities & Internet"""
 # ── Shared few-shot examples ───────────────────────────────────────────────
 
 _FEW_SHOT = """\
-Example 1:
+Example 1 — UPI P2M subscription:
   desc: UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-500693553497-MANDATEREQUEST
   direction: OUTFLOW | amount: 119 | channel: UPI
   → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Spotify | counterparty_category=Mobile, OTT & Subscriptions
 
-Example 2:
-  desc: UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI
-  direction: OUTFLOW | amount: 9000 | channel: UPI
-  → txn_type=UPI_TRANSFER | upi_type=P2P | counterparty=Nimish Gupta | counterparty_category=Friends and Family
-
-Example 3:
+Example 2 — UPI P2M food delivery:
   desc: UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTIB0000553
   direction: OUTFLOW | amount: 339 | channel: UPI
   → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Swiggy | counterparty_category=Swiggy
 
-Example 4:
-  desc: UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-501619205075-UPI
-  direction: OUTFLOW | amount: 112 | channel: UPI
-  → txn_type=UPI_TRANSFER | upi_type=P2P | counterparty=Uber | counterparty_category=Transport & Fuel
-
-Example 5:
+Example 3 — UPI P2M cafe:
   desc: UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC0000001-504311834904-UPI
   direction: OUTFLOW | amount: 445 | channel: UPI
   → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Third Wave Coffee | counterparty_category=Food & Dining
 
-Example 6:
+Example 4 — UPI P2M pharmacy:
   desc: UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-500989222413-PAYMENT FOR 154672
   direction: OUTFLOW | amount: 127.5 | channel: UPI
   → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Apollo Pharmacy | counterparty_category=Healthcare & Pharmacy
 
-Example 7:
-  desc: RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA
-  direction: INFLOW | amount: 20000.46 | channel: BANK
-  → txn_type=INCOME_OTHER | counterparty=Venkata Vinod Krishna Kuppa | counterparty_category=Friends and Family
+Example 5 — UPI P2M utility (Jio is a telecom/utility, NOT a subscription):
+  desc: UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-501647277334-JIO20BR000BO3CODK1
+  direction: OUTFLOW | amount: 349 | channel: UPI
+  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Reliance Jio Infocom | counterparty_category=Utilities & Internet
 
-Example 8:
+Example 6 — UPI P2M broadband (JioFiber is a utility):
+  desc: UPI-JIOFIBER PREPAID-JIOFIBERPREPAID@PAYTM-YESB0PTMUPI-500611882017-OIDS8000072010@REL
+  direction: OUTFLOW | amount: 1178.82 | channel: UPI
+  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=JioFiber Prepaid | counterparty_category=Utilities & Internet
+
+Example 7 — UPI P2M OTT subscription (JioCinema IS a subscription):
+  desc: UPI-JIOCINEMA-VIACOM18ONLINE@YBL-YESB0YBLUPI-500779917590-SUBSCRIPTION DEBIT
+  direction: OUTFLOW | amount: 29 | channel: UPI
+  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=JioCinema - Viacom18 | counterparty_category=Mobile, OTT & Subscriptions
+
+Example 8 — BANK credit card bill payment:
+  desc: IB BILLPAY DR-HDFC4U-526873XXXXXX1905
+  direction: OUTFLOW | amount: 30000 | channel: BANK
+  → txn_type=CARD_PAYMENT | counterparty=HDFC Credit Card | counterparty_category=Financial Services, Insurance & Banking
+
+Example 9 — BANK salary (counterparty = the person receiving salary, extracted from narration):
+  desc: NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN52025020104799811
+  direction: INFLOW | amount: 127557 | channel: BANK
+  → txn_type=INCOME_SALARY | counterparty=Sashank Sai Kuppa | counterparty_category=Salary & Income
+
+Example 10 — BANK tax refund:
   desc: NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SASHANK KUPPA
   direction: INFLOW | amount: 92370 | channel: BANK
   → txn_type=INCOME_OTHER | counterparty=IT Department Tax Refund | counterparty_category=Salary & Income
 
-Example 9:
+Example 11 — BANK loan EMI:
   desc: ACH D- IDFC FIRST BANK-1667588167
   direction: OUTFLOW | amount: 9308 | channel: BANK
-  → txn_type=LOAN_INSURANCE_PAYMENT | counterparty=IDFC FIRST Bank | counterparty_category=Financial Services, Insurance & Banking"""
+  → txn_type=LOAN_INSURANCE_PAYMENT | counterparty=IDFC FIRST Bank | counterparty_category=Financial Services, Insurance & Banking
+
+Example 12 — UPI Google Pay mobile recharge ("GPAYRECHARGE" in handle = phone plan recharge, NOT a utility bill):
+  desc: UPI-GOOGLE INDIA SERVICE-GPAYRECHARGE@ICICI-ICIC0DC0099-101376305504-UPI
+  direction: OUTFLOW | amount: 399 | channel: UPI
+  → txn_type=UPI_EXPENSE | upi_type=P2M | counterparty=Google Pay Recharge | counterparty_category=Mobile, OTT & Subscriptions
+
+Example 13 — UPI inflow from an individual (friend sending money back — this is UPI_TRANSFER, NOT INCOME_OTHER):
+  desc: UPI-SATYANSH RAI-9151178228@PTYES-SBIN0012980-687912494165-SENT USING
+  direction: INFLOW | amount: 500 | channel: UPI
+  → txn_type=UPI_TRANSFER | upi_type=P2P | counterparty=Satyansh Rai | counterparty_category=Gifts & Personal Transfers"""
 
 
 # ── Strategy A: Single-pass (all fields at once) ──────────────────────────
@@ -122,14 +142,26 @@ Classification rules:
 - BANK_TRANSFER: NEFT/IMPS transfer that is NOT a self-transfer.
 - P2M: UPI to a business. P2P: UPI to a person.
 - For counterparty, extract the most recognizable consumer-facing brand or person name.
+
+Counterparty naming guidance:
+- For salary from TIDEPLATFO or PAYROLL: counterparty = the employee name from the narration.
+- For IB BILLPAY DR: counterparty = "HDFC Credit Card" (not "HDFC Bank").
+- For STERLING RENT: counterparty = "Sterling Rent".
+- For ACH insurance/loan debits: counterparty = the financial institution name.
+
+Category disambiguation:
 - "Swiggy" category is ONLY for Swiggy/Instamart transactions.
-- "Transport & Fuel" includes Uber, Ola, fuel stations, auto-rickshaws.
-- Nominal UPI P2P amounts (~₹80-₹1200, not round numbers) to unknown persons are often Uber/Ola rides — classify counterparty as "Uber" and category as "Transport & Fuel".
+- "Utilities & Internet": Reliance Jio (mobile recharge), JioFiber, Airtel, gas agencies, electricity. These are utility bills, NOT subscriptions.
+- "Mobile, OTT & Subscriptions": Spotify, Netflix, JioCinema, YouTube Premium, app subscriptions. These are entertainment/media subscriptions.
+- "Transport & Fuel": Uber, Ola, fuel stations, auto-rickshaws, parking, FASTag.
+- "Shopping & E-commerce": Amazon, Flipkart, Myntra, and local retail shops.
+- "Entertainment & Events": Cinemas, malls (entry/events), concert venues, amusement parks.
+- Do NOT confuse small BharatPe/PayTM QR merchant payments with person-to-person transfers.
 
 IMPORTANT for counterparty_category: First identify the txn_type and counterparty, \
 then use their combination to pick the best category. For example, \
-"UPI_EXPENSE Spotify" → "Mobile OTT & Subscriptions", \
-"UPI_TRANSFER Nimish Gupta" → "Friends and Family".
+"UPI_EXPENSE Spotify" → "Mobile, OTT & Subscriptions", \
+"UPI_EXPENSE Reliance Jio Infocom" → "Utilities & Internet".
 
 {_FEW_SHOT}
 

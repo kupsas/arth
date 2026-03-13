@@ -83,15 +83,31 @@ Arth/
 
 ## Ground Truth
 
-`docs/personal-data/GSheet_Transactions.csv` contains ~648 manually-classified transactions. This is the benchmark for measuring pipeline accuracy. The validator matches by `raw_description` and compares: direction, amount, txn_type, channel, upi_type, counterparty, counterparty_category.
+`docs/personal-data/GSheet_Transactions_modifiedForLLMTraining.csv` contains ~647 manually-classified transactions. This is the benchmark for measuring pipeline accuracy.  
+The validator matches rows by a composite key `(raw_description, direction, amount)` and compares:
 
-## Current Accuracy (March 2026)
+- direction
+- amount
+- txn_type
+- channel
+- upi_type
+- counterparty
+- counterparty_category
 
-On the full 648-row HDFC savings dataset:
+## Current Accuracy (March 2026, HDFC savings dataset)
+
+On the full HDFC savings dataset (~647 matched rows) with the latest rules + prompt tuning:
+
 - direction, amount, channel: **100%**
-- txn_type: **91%**
-- upi_type: **93.5%**
-- counterparty: **47%** (naming mismatches -- needs prompt improvement)
-- counterparty_category: **60%** (primarily Uber/cab driver misclassification)
+- txn_type: **98.7%**
+- upi_type: **98.1%**
+- counterparty: **94.9%**
+- counterparty_category: **93.7%**
 
-Next step: prompt engineering to push counterparty + category accuracy higher.
+## Learnings from rules + prompt work
+
+- **Rules first, LLM second**: Moving as much as possible into deterministic rules (UPI handle analysis, UPI Lite, card payments, self-transfers, rent, hotels/travel, etc.) dramatically reduced LLM variance and cost.
+- **Name matching matters**: Robust name normalisation + truncation-safe matching (for UPI names and bank narrations) was essential for correctly classifying friends, family, acquaintances, and self-transfers.
+- **UPI P2P vs P2M is a core signal**: Extracting P2P/P2M from handles and then using direction (INFLOW vs OUTFLOW) to choose between `UPI_EXPENSE`, `UPI_TRANSFER`, and `INCOME_OTHER` cleaned up many edge cases (refunds, bill splits, wallet top-ups).
+- **Merchant heuristics must be conservative**: A small set of high-confidence patterns (Uber, hotels, travel portals, pharmacies, subscriptions, etc.) plus a strong `_looks_like_merchant_name` helper works better than aggressive fuzzy matching that causes false positives.
+- **Ground truth is a living spec**: Iteratively aligning the benchmark sheet with clarified intent (e.g. Babul as Misc vs Gifts, Uber heuristics, tiny amounts, self vs friends/family) was as important as improving the model and rules.

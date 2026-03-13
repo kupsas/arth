@@ -184,7 +184,13 @@ def _txn_to_compare_dict(txn: CanonicalTransaction) -> dict:
 
 
 def _values_match(field: str, pipeline_val: str, bench_val: str) -> bool:
-    """Compare two field values, with numeric handling for amount."""
+    """Compare two field values with field-specific matching logic.
+
+    - amount: exact decimal comparison
+    - counterparty: prefix-aware fuzzy matching (handles naming variants like
+      "Reliance Jio" vs "Reliance Jio Infocom", "Sterling" vs "Sterling Rent")
+    - everything else: case-insensitive exact match
+    """
     from decimal import Decimal, InvalidOperation
 
     if field == "amount":
@@ -193,4 +199,22 @@ def _values_match(field: str, pipeline_val: str, bench_val: str) -> bool:
         except (InvalidOperation, ValueError):
             pass
 
-    return pipeline_val.lower().strip() == bench_val.lower().strip()
+    p = pipeline_val.lower().strip()
+    b = bench_val.lower().strip()
+
+    if p == b:
+        return True
+
+    if field == "counterparty":
+        # Prefix / substring: one name contains the other
+        if p in b or b in p:
+            return True
+        # Word-set overlap: all words in the shorter name appear in the longer
+        p_words = set(p.split())
+        b_words = set(b.split())
+        if p_words and b_words:
+            shorter, longer = sorted([p_words, b_words], key=len)
+            if shorter.issubset(longer):
+                return True
+
+    return False

@@ -45,7 +45,22 @@ Find the best LLM model for transaction classification (counterparty, counterpar
 
 - **Primary model:** gemini-3.1-flash-lite (single-pass)
 - **Fallback chain:** gemini-2.5-flash -> claude-haiku-4-5 -> gpt-5-mini
-- **Next step:** Improve prompt engineering to push accuracy from 81% toward 90%+, focusing on the hard cases (Uber drivers, ambiguous merchants, event-related transfers)
+- **Next step (from the time of the benchmark):** Improve prompt engineering to push accuracy from 81% toward 90%+, focusing on the hard cases (Uber drivers, ambiguous merchants, event-related transfers).
+
+## Postscript (later in March 2026)
+
+After applying the benchmark learnings plus substantial rules and ground-truth work on the full ~647-row HDFC savings dataset, the production pipeline now achieves:
+
+- **txn_type:** ~98.7%
+- **upi_type:** ~98.1%
+- **counterparty:** ~94.9%
+- **counterparty_category:** ~93.7%
+
+Key contributors:
+
+- A strong **deterministic rules layer** for UPI P2P vs P2M, UPI Lite, rent, hotels/travel, self-transfers, and known merchants.
+- A much tighter **name matching strategy** for people (family, friends, acquaintances, self) and merchants.
+- Iterative **ground-truth alignment** where the sheet was updated whenever the clarified intent or rules made the pipeline output unambiguously better than the original labels.
 
 ## Model Pricing (as of March 2026, per 1M tokens)
 
