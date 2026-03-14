@@ -32,11 +32,17 @@ class Direction(str, Enum):
 
 class TxnType(str, Enum):
     BANK_TRANSFER = "BANK_TRANSFER"
-    CARD_PAYMENT = "CARD_PAYMENT"
+    CARD_EXPENSE = "CARD_EXPENSE"          # individual credit-card swipe / purchase
+    CARD_PAYMENT = "CARD_PAYMENT"          # paying the CC bill from savings account
+    EQUITY_PURCHASE = "EQUITY_PURCHASE"   # buying equities via ICICI Direct (EBA/EQ Trade OUTFLOW)
+    EQUITY_SALE = "EQUITY_SALE"           # selling equities / eATM redemption (EBA/EQ Trade INFLOW)
     EXPENSE_OTHER = "EXPENSE_OTHER"
+    INCOME_DIVIDEND = "INCOME_DIVIDEND"   # dividend credited via ACH from company
     INCOME_OTHER = "INCOME_OTHER"
     INCOME_SALARY = "INCOME_SALARY"
     LOAN_INSURANCE_PAYMENT = "LOAN_INSURANCE_PAYMENT"
+    MF_PURCHASE = "MF_PURCHASE"           # mutual fund purchase (EBA/MFP OUTFLOW)
+    MF_SALE = "MF_SALE"                   # MF redemption proceeds credited (NEFT from fund house)
     SELF_TRANSFER = "SELF_TRANSFER"
     UPI_EXPENSE = "UPI_EXPENSE"
     UPI_TRANSFER = "UPI_TRANSFER"
@@ -58,6 +64,7 @@ class UPIType(str, Enum):
 
 
 class CounterpartyCategory(str, Enum):
+    ASSET_MARKETS = "Asset Markets"        # equities, MFs, dividends via ICICI Direct
     ENTERTAINMENT_EVENTS = "Entertainment & Events"
     FEES_CHARGES_INTEREST = "Fees, Charges & Interest"
     FINANCIAL_SERVICES = "Financial Services, Insurance & Banking"

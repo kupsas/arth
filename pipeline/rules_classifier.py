@@ -51,6 +51,7 @@ _FRIENDS_NAMES = [
     "RUDDHI PRASAD PANDA",
     "ANUBHAV PANDEY",
     "VARANASI SHASHANK",
+    "Chinmay Bhatt",   # ICICI BIL/INFT transfers
 ]
 
 # Acquaintances → counterparty_category = "Gifts & Personal Transfers"
@@ -171,6 +172,7 @@ _P2M_HANDLE_PATTERNS = [
 # Txn types where the category is already well-determined (skip counterparty rules)
 _SKIP_COUNTERPARTY_RULES_TXN_TYPES = frozenset({
     TxnType.LOAN_INSURANCE_PAYMENT,
+    TxnType.CARD_EXPENSE,
     TxnType.CARD_PAYMENT,
     TxnType.INCOME_SALARY,
     TxnType.EXPENSE_OTHER,
@@ -184,6 +186,97 @@ _CARD_PAYMENT_RE = re.compile(r"IB BILLPAY DR", re.IGNORECASE)
 
 # Patterns for rent / standing instruction expenses
 _RENT_RE = re.compile(r"STERLING.*RENT|NET BANKING SI.*RENT", re.IGNORECASE)
+
+# ── ACH dividend company name canonicalisation ────────────────────────────
+# ACH/COMPANY_NAME/REF — the raw company name from the description is
+# title-cased by default, except for known acronyms which we preserve.
+_ACH_COMPANY_TITLES: dict[str, str] = {
+    "IOCL": "IOCL",                              # Indian Oil Corporation Ltd
+    "NTPC": "NTPC",
+    "BPCL": "BPCL",
+    "ONGC": "ONGC",
+    "SBI": "SBI",
+    "IRCTC": "IRCTC",
+    "VEDANTA LIMITED": "Vedanta Limited",
+    "APOLLO TYRES LIMITED": "Apollo Tyres Limited",
+    "INFOSYS LIMITED": "Infosys Limited",
+    "TATA CONSULTANCY SERVICES": "Tata Consultancy Services",
+}
+
+# TxnTypes representing asset-market operations — all get NSE as counterparty
+_ASSET_MARKET_TXN_TYPES = frozenset({
+    TxnType.EQUITY_PURCHASE,
+    TxnType.EQUITY_SALE,
+    TxnType.MF_PURCHASE,
+    TxnType.MF_SALE,
+})
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Credit card merchant classification
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Swiggy ecosystem keywords — if ANY of these appear in the description,
+# the transaction is routed to the Swiggy sub-classifier.
+_SWIGGY_INDICATORS = ("SWIGGY", "INSTAMART", "DINEOUT", "BUNDL TECHNOLOGIES")
+
+# Recurring CC merchants (keyword, counterparty, category).
+# First match wins — put more specific patterns before general ones.
+_CC_MERCHANT_RULES: list[tuple[str, str, CounterpartyCategory]] = [
+    # ── Subscriptions & SaaS ─────────────────────────────────────────
+    ("OPENAI", "OpenAI", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("CHATGPT", "OpenAI", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("CURSOR", "Cursor IDE", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("ELEVENLABS", "ElevenLabs", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("DIGITALOCEAN", "Digital Ocean", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("UIZARD", "Uizard", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("CANVA", "Canva", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("RAILWAY SAN FRANCISC", "Railway", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("MUTV", "MUTV", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("WISPR", "Wispr Flow", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("LINKEDIN", "LinkedIn", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("RELIANCEJIO", "Reliance Jio", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    ("PROXYCURL", "Proxycurl", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
+    # ── Travel & Stay ────────────────────────────────────────────────
+    ("INDIGO AIRLINE", "Indigo", CounterpartyCategory.TRAVEL_STAY),
+    ("MAKEMYTRIP", "MakeMyTrip", CounterpartyCategory.TRAVEL_STAY),
+    ("MAKE MY TRIP", "MakeMyTrip", CounterpartyCategory.TRAVEL_STAY),
+    ("M-MAKEMYTRIP", "MakeMyTrip", CounterpartyCategory.TRAVEL_STAY),
+    ("REDBUS", "Redbus", CounterpartyCategory.TRAVEL_STAY),
+    ("AGODA", "Agoda", CounterpartyCategory.TRAVEL_STAY),
+    ("GOIBIBO", "Ibibo Group", CounterpartyCategory.TRAVEL_STAY),
+    ("IBIBO GROUP", "Ibibo Group", CounterpartyCategory.TRAVEL_STAY),
+    ("INDIAN HOTELS", "Taj", CounterpartyCategory.TRAVEL_STAY),
+    # ── Utilities & Internet ─────────────────────────────────────────
+    ("GPAY UTILITIES", "GPay Utilities", CounterpartyCategory.UTILITIES_INTERNET),
+    ("PAYTM PAYMENTS UTILIT", "ACT Internet", CounterpartyCategory.UTILITIES_INTERNET),
+    # ── Food & Dining ────────────────────────────────────────────────
+    ("THIRD WAVE COFFEE", "Third Wave Coffee", CounterpartyCategory.FOOD_DINING),
+    ("TW COFFEE", "Third Wave Coffee", CounterpartyCategory.FOOD_DINING),
+    ("HUBER AND HOLLY", "Huber and Holly", CounterpartyCategory.FOOD_DINING),
+    ("HIMALAYAN CULINARY", "Bao Bengaluru", CounterpartyCategory.FOOD_DINING),
+    ("MC DONALDS", "McDonalds", CounterpartyCategory.FOOD_DINING),
+    ("DOMINOS", "Dominos", CounterpartyCategory.FOOD_DINING),
+    ("HMS HOST", "Food at Airport", CounterpartyCategory.FOOD_DINING),
+    ("MSW*TRAVEL FOOD", "Food at Airport", CounterpartyCategory.FOOD_DINING),
+    ("GMR HOSPITALITY", "Food at Airport", CounterpartyCategory.FOOD_DINING),
+    ("PIZZA 4 PS", "Pizza 4Ps", CounterpartyCategory.FOOD_DINING),
+    ("NAGARJUNA", "Nagarjuna", CounterpartyCategory.FOOD_DINING),
+    ("LEON GRILL", "Leon Grill", CounterpartyCategory.FOOD_DINING),
+    ("CALIFORNIA BURRITO", "California Burrito", CounterpartyCategory.FOOD_DINING),
+    ("TATA STARBUCKS", "Tata Starbucks", CounterpartyCategory.FOOD_DINING),
+    ("LAVONNE", "Lavonne", CounterpartyCategory.FOOD_DINING),
+    # ── Shopping & E-commerce ────────────────────────────────────────
+    ("MICROSOFTRS", "Microsoft", CounterpartyCategory.SHOPPING_ECOMMERCE),
+    ("IND*MICROSOFT", "Microsoft", CounterpartyCategory.SHOPPING_ECOMMERCE),
+    ("AMAZON SELLER SERVICES", "Amazon", CounterpartyCategory.SHOPPING_ECOMMERCE),
+    ("BOOKMYSHOW", "Book My Show", CounterpartyCategory.SHOPPING_ECOMMERCE),
+    ("CROSSWORD", "Crossword", CounterpartyCategory.SHOPPING_ECOMMERCE),
+    ("PLAYSTATIONNETWORK", "Playstation Network", CounterpartyCategory.SHOPPING_ECOMMERCE),
+    ("UNIQLO", "Uniqlo", CounterpartyCategory.SHOPPING_ECOMMERCE),
+    # ── Personal Grooming ────────────────────────────────────────────
+    ("ENRICH", "Enrich", CounterpartyCategory.PERSONAL_GROOMING),
+    ("TATTVA SPA", "Tattva Spa", CounterpartyCategory.PERSONAL_GROOMING),
+]
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -213,6 +306,14 @@ def classify_rules(txns: list[CanonicalTransaction]) -> list[CanonicalTransactio
 def _classify_channel(txn: CanonicalTransaction) -> None:
     desc = txn.raw_description.upper()
 
+    # ── Credit card account detection ────────────────────────────────────
+    # CC account IDs are "HDFC_CC_1905" and "HDFC_CC_5778".  Check this
+    # FIRST so CC transactions don't accidentally match UPI/BANK prefixes
+    # that can appear in merchant names (e.g. "NEFT" in a description).
+    if txn.account_id.startswith("HDFC_CC_"):
+        txn.channel = Channel.CARD
+        return
+
     # UPI-LITE must be checked before generic UPI
     if desc.startswith("UPI-LITE"):
         txn.channel = Channel.UPI_LITE
@@ -236,6 +337,37 @@ def _classify_channel(txn: CanonicalTransaction) -> None:
     )):
         txn.channel = Channel.BANK
 
+    # ── ICICI-specific channel patterns ──────────────────────────────────
+    # ICICI uses different prefixes from HDFC for the same underlying rails.
+    #
+    # IMPORTANT: Broker-originated NEFT inflows (Quant MF redemptions, NSDL
+    # payouts) MUST be checked before the generic "NEFT-" branch below,
+    # otherwise the NEFT- prefix match fires first and marks them as BANK.
+    elif any(kw in desc for kw in ("QUANT MUTUAL FUND", "NATIONAL SECURITIES DEPOSITORY LTD")):
+        txn.channel = Channel.BROKER
+    elif any(desc.startswith(pfx) for pfx in (
+        "MMT/IMPS/",   # ICICI's IMPS format (HDFC uses "IMPS-")
+        "BIL/NEFT/",   # ICICI's NEFT bill-pay / third-party NEFT
+        "BIL/INFT/",   # Internal ICICI fund transfer
+        "INF/INFT/",   # Linked account transfer
+        "NEFT-",       # Standard NEFT (also used by ICICI)
+        "TO PPF",      # PPF contribution
+        "DPCHG",       # Depository charges shorthand
+    )):
+        txn.channel = Channel.BANK
+    elif desc.startswith("ACH/"):
+        # ICICI ACH/ inflows are dividend credits from companies → routed via
+        # ICICI Direct (broker).  ACH/ outflows would be loan/insurance debits
+        # (none observed in this dataset, but handled correctly as BANK).
+        # HDFC savings uses "ACH " (with space) which is a separate branch above.
+        txn.channel = Channel.BROKER if txn.direction == Direction.INFLOW else Channel.BANK
+    elif "INT.PD:" in desc:
+        # Interest on savings account: "{icici_account_no}:Int.Pd:DD-MM-YYYY to ..."
+        txn.channel = Channel.BANK
+    elif desc.startswith("EBA/"):
+        # All ICICI Direct (broker) transactions use the EBA/ prefix
+        txn.channel = Channel.BROKER
+
 
 # ---------------------------------------------------------------------------
 # Transaction type classification
@@ -250,8 +382,19 @@ def _classify_txn_type(txn: CanonicalTransaction) -> None:
         txn.txn_type = TxnType.SELF_TRANSFER
         return
 
+    # ── HDFC Credit Card transactions ────────────────────────────────────
+    if txn.channel == Channel.CARD:
+        _classify_txn_type_card(txn, desc, desc_upper)
+        return
+
+    # ── ICICI Direct (broker) transactions ───────────────────────────────
+    if txn.channel == Channel.BROKER:
+        _classify_txn_type_broker(txn, desc_upper)
+        return
+
     # --- ACH debits → loan / insurance payment ---
-    if desc_upper.startswith("ACH "):
+    # Handles both HDFC "ACH " and ICICI "ACH/" prefixes.
+    if desc_upper.startswith("ACH ") or desc_upper.startswith("ACH/"):
         txn.txn_type = TxnType.LOAN_INSURANCE_PAYMENT
         return
 
@@ -287,6 +430,12 @@ def _classify_txn_type(txn: CanonicalTransaction) -> None:
         txn.txn_type = TxnType.EXPENSE_OTHER
         return
 
+    # ── ICICI-specific patterns for BANK channel ─────────────────────────
+    if txn.channel == Channel.BANK:
+        icici_result = _classify_txn_type_icici_bank(txn, desc, desc_upper)
+        if icici_result:
+            return  # ICICI rule fired, txn_type already set
+
     # --- Self-transfer detection (own name / aliases in narration) ---
     # For NEFT/IMPS with own name or aliases, and for family transfers
     # that are classified as SELF_TRANSFER in the ground truth.
@@ -313,6 +462,196 @@ def _classify_txn_type(txn: CanonicalTransaction) -> None:
         # UPI distinction between EXPENSE and TRANSFER is hard with rules
         # alone (requires knowing if counterparty is a merchant or person).
         # Leave as None for the LLM to handle.
+
+
+# ---------------------------------------------------------------------------
+# Credit card txn-type helper  (called when channel == CARD)
+# ---------------------------------------------------------------------------
+
+def _classify_txn_type_card(
+    txn: CanonicalTransaction, desc: str, desc_upper: str
+) -> None:
+    """Set txn_type for HDFC credit card transactions.
+
+    The CARD channel means every debit is a purchase (CARD_EXPENSE) unless a
+    more specific pattern matches first (CC bill payment, EMI, fee, cashback).
+    """
+    # ── Inflows ──────────────────────────────────────────────────────────
+    if txn.direction == Direction.INFLOW:
+        # CC bill payment credited back (payment reversal or overpayment)
+        if "CREDIT CARD PAYMENT" in desc_upper or "NETBANKING TRANSFER" in desc_upper:
+            txn.txn_type = TxnType.CARD_PAYMENT
+            return
+        # Cashback credited to the card
+        if "CASHBACK" in desc_upper or "REINSTATED CASHBACK" in desc_upper:
+            txn.txn_type = TxnType.INCOME_OTHER
+            return
+        # Any other inflow (reward redemption, refund) → INCOME_OTHER
+        txn.txn_type = TxnType.INCOME_OTHER
+        return
+
+    # ── Outflows ─────────────────────────────────────────────────────────
+    # EMI payments (on-us or off-us) on the credit card
+    if "OFFUS EMI" in desc_upper or "MER EMI" in desc_upper:
+        txn.txn_type = TxnType.LOAN_INSURANCE_PAYMENT
+        return
+
+    # IGST / GST fees charged on the statement date
+    if desc_upper.startswith("IGST-"):
+        txn.txn_type = TxnType.EXPENSE_OTHER
+        return
+
+    # HDFC SmartBuy portal hold/refund (tiny ₹2 debit or credit from CT HOTEL / CT FLIGHT)
+    # These are not real purchases — they are authorization holds or SmartBuy portal credits.
+    if "VIA SMARTBUY" in desc_upper:
+        txn.txn_type = TxnType.EXPENSE_OTHER
+        return
+
+    # Bank fees (foreign currency markup, DCC fee)
+    if any(kw in desc_upper for kw in (
+        "CONSOLIDATED FCY",
+        "1% ON ALL DCC",
+    )):
+        txn.txn_type = TxnType.EXPENSE_OTHER
+        return
+
+    # Reward-points redemption processing fee — treated as an EMI-adjacent fee
+    # rather than a generic bank expense (consistent with user benchmark labels)
+    if "REDEMPTION PROC FEE" in desc_upper:
+        txn.txn_type = TxnType.LOAN_INSURANCE_PAYMENT
+        return
+
+    # All other outflows are individual card purchases
+    txn.txn_type = TxnType.CARD_EXPENSE
+
+
+# ---------------------------------------------------------------------------
+# Broker txn-type helper  (called when channel == BROKER, i.e. EBA/ prefix)
+# ---------------------------------------------------------------------------
+
+def _classify_txn_type_broker(
+    txn: CanonicalTransaction, desc_upper: str
+) -> None:
+    """Set txn_type for ICICI Direct (EBA/) and ACH dividend transactions.
+
+    Direction is crucial here:
+      - EQ Trade / NSE M / EQ Margin OUTFLOW → buying equities (EQUITY_PURCHASE)
+      - EQ Trade / NSE M / EQ Margin INFLOW  → selling equities (EQUITY_SALE)
+      - eATM is always an inflow (instant redemption back to bank) → EQUITY_SALE
+      - MFP (Mutual Fund Purchase) → always an outflow → MF_PURCHASE
+      - ACH/ inflows → dividend credited by a company → INCOME_DIVIDEND
+    """
+    # Dividend credited via ACH (set to BROKER channel for inflows by _classify_channel)
+    if desc_upper.startswith("ACH/"):
+        txn.txn_type = TxnType.INCOME_DIVIDEND
+        return
+
+    # MF redemption proceeds via NEFT from the fund house (e.g. Quant Mutual Fund)
+    if "QUANT MUTUAL FUND" in desc_upper and txn.direction == Direction.INFLOW:
+        txn.txn_type = TxnType.MF_SALE
+        return
+
+    # NSDL NEFT inflow: proceeds from equity/bond sales distributed via NSDL
+    if "NATIONAL SECURITIES DEPOSITORY LTD" in desc_upper and txn.direction == Direction.INFLOW:
+        txn.txn_type = TxnType.EQUITY_SALE
+        return
+
+    # EQ Trade, NSE M settlement, EQ Margin: direction decides buy vs sell
+    if any(kw in desc_upper for kw in ("EBA/EQ TRADE", "EBA/NSE M", "EBA/EQ MARGIN")):
+        txn.txn_type = (
+            TxnType.EQUITY_SALE if txn.direction == Direction.INFLOW
+            else TxnType.EQUITY_PURCHASE
+        )
+        return
+
+    # eATM = instant equity/MF redemption — money flows back to bank (always inflow)
+    if "EBA/EATM" in desc_upper:
+        txn.txn_type = TxnType.EQUITY_SALE
+        return
+
+    # MFP = Mutual Fund Purchase (EBA/MFP-...) — always an outflow from bank
+    if "EBA/MFP" in desc_upper:
+        txn.txn_type = TxnType.MF_PURCHASE
+        return
+
+    # EBA/PUR_* = "Purchase" via ICICI Direct — still a broker buy order
+    # (e.g. EBA/PUR_PRIME900 is a purchase of a specific scrip/series,
+    # NOT an Amazon Prime subscription despite the name similarity)
+    if "EBA/PUR_" in desc_upper:
+        txn.txn_type = TxnType.EQUITY_PURCHASE
+        return
+
+    # NSDL/CDSL annual depository charges billed via ICICI Direct
+    if "EBA/DEPOSITORY" in desc_upper:
+        txn.txn_type = TxnType.EXPENSE_OTHER
+        return
+
+    # Leave remaining EBA/ transactions for the LLM
+
+
+# ---------------------------------------------------------------------------
+# ICICI savings bank-channel txn-type helper
+# ---------------------------------------------------------------------------
+
+def _classify_txn_type_icici_bank(
+    txn: CanonicalTransaction, desc: str, desc_upper: str
+) -> bool:
+    """Apply ICICI-specific BANK-channel rules.  Returns True if a rule fired."""
+
+    # ── Interest on savings account ───────────────────────────────────────
+    # Format: "{icici_account_no}:Int.Pd:DD-MM-YYYY to DD-MM-YYYY"
+    if "INT.PD:" in desc_upper:
+        txn.txn_type = TxnType.INCOME_OTHER
+        return True
+
+    # ── Depository charges (short form in some months) ────────────────────
+    if desc_upper.startswith("DPCHG"):
+        txn.txn_type = TxnType.EXPENSE_OTHER
+        return True
+
+    # ── PPF contribution (own account) ────────────────────────────────────
+    if desc_upper.startswith("TO PPF"):
+        txn.txn_type = TxnType.SELF_TRANSFER
+        return True
+
+    # Quant MF and NSDL NEFT inflows are re-routed to BROKER channel by
+    # _classify_channel and handled upstream by _classify_txn_type_broker.
+
+    # ── Bike EMI "payment" from ICICI is actually a self-transfer ─────────
+    # The user transfers money from ICICI → HDFC (where the EMI is debited).
+    # From ICICI's perspective the transaction is simply moving money to one's
+    # own HDFC account — the actual loan debit happens at HDFC level.
+    if "BIKEEMI" in desc_upper:
+        txn.txn_type = TxnType.SELF_TRANSFER
+        return True
+
+    # ── BIL/INFT (Internal Fund Transfer) to a known person ──────────────
+    # If the recipient is someone we recognise (family/friends), it is a
+    # genuine bank transfer to that person, NOT a self-transfer.
+    # Unknown recipients are left for the LLM.
+    if "BIL/INFT/" in desc_upper:
+        all_known = _FAMILY_NAMES + _FRIENDS_NAMES + _ACQUAINTANCES_NAMES
+        if "K ADI LAKSHMI" in desc_upper or _find_person_in_desc(desc, all_known):
+            txn.txn_type = TxnType.BANK_TRANSFER
+            return True
+
+    # ── Self / family transfers ───────────────────────────────────────────
+    # "SelfFund" label in IMPS/NEFT narration
+    if "SELFFUND" in desc_upper:
+        txn.txn_type = TxnType.SELF_TRANSFER
+        return True
+
+    # Linked account transfer (INF/INFT/) — always own account
+    if desc_upper.startswith("INF/INFT/"):
+        txn.txn_type = TxnType.SELF_TRANSFER
+        return True
+
+    # Family transfers in ICICI narrations (same ground-truth as HDFC)
+    if "/FAMILY/" in desc_upper:
+        txn.txn_type = TxnType.SELF_TRANSFER
+        return True
+
+    return False
 
 
 def _is_self_transfer(desc_upper: str) -> bool:
@@ -533,6 +872,166 @@ def _detect_upi_p2p_or_p2m(desc: str) -> UPIType | None:
 
 
 # ---------------------------------------------------------------------------
+# Swiggy sub-brand classifier
+# ---------------------------------------------------------------------------
+
+def _classify_swiggy_sub(desc_upper: str) -> str | None:
+    """Identify which Swiggy sub-brand a CC transaction belongs to.
+
+    Returns one of: "Swiggy Food", "Swiggy Instamart", "Swiggy Dineout",
+    or "Swiggy" (generic/ambiguous).  Returns None if not a Swiggy txn.
+
+    Classification hierarchy:
+      1. Explicit sub-brand keyword in description (INSTAMART, DINEOUT, SWIGGY FOOD)
+      2. Payment gateway prefix pattern (CAS* = Dineout, PPSL* = depends, etc.)
+      3. Fallback: ambiguous → "Swiggy"
+    """
+    if not any(kw in desc_upper for kw in _SWIGGY_INDICATORS):
+        return None
+
+    # ── Explicit sub-brand keywords (highest confidence) ──────────────
+    if "INSTAMART" in desc_upper:
+        return "Swiggy Instamart"
+    if "DINEOUT" in desc_upper:
+        return "Swiggy Dineout"
+    if "SWIGGY FOOD" in desc_upper:
+        return "Swiggy Food"
+
+    # ── Payment gateway prefix patterns ───────────────────────────────
+    # CAS*Swiggy (Cashfree routed) → Dineout bookings
+    if desc_upper.startswith("CAS*SWIGGY"):
+        return "Swiggy Dineout"
+    # PPSL*Swiggy (PayU PPSL) → "LIMITED" suffix = Food, otherwise Dineout
+    if desc_upper.startswith("PPSL*SWIGGY"):
+        return "Swiggy Food" if "LIMITED" in desc_upper else "Swiggy Dineout"
+    # BUNDL TECHNOLOGIES (Swiggy's corporate name) without RAZ* gateway = Instamart
+    if "BUNDL TECHNOLOGIES" in desc_upper and not desc_upper.startswith("RAZ*"):
+        return "Swiggy Instamart"
+    # Razorpay*/Cashfree*/ING* routed to Swiggy = Food orders
+    if any(desc_upper.startswith(pfx) for pfx in (
+        "RAZORPAY*SWIGGY", "CASHFREE*SWIGGY", "ING*SWIGGY",
+    )):
+        return "Swiggy Food"
+    # PayU/PYU routed through "Swiggy Limited" (not "Swiggy Food") = Food
+    if any(pfx in desc_upper for pfx in ("PAYU*SWIGGY LIMITED", "PYU*SWIGGY")):
+        return "Swiggy Food"
+    # Payu*Swiggy Food explicitly
+    if "PAYU*SWIGGY FOOD" in desc_upper:
+        return "Swiggy Food"
+
+    # ── Ambiguous ─────────────────────────────────────────────────────
+    # "SWIGGY BANGALORE", "WWW SWIGGY COM", "RAZ*BUNDL TECHNOLOGIES",
+    # "Swiggy Bengaluru" — could be Food, Instamart, or Dineout.
+    # User cross-referenced with the Swiggy app; for the rules classifier
+    # we default to generic "Swiggy" and leave fine-grained splits for
+    # ratio-based allocation in post-processing.
+    return "Swiggy"
+
+
+# ---------------------------------------------------------------------------
+# Credit card counterparty classifier
+# ---------------------------------------------------------------------------
+
+def _classify_cc_counterparty(txn: CanonicalTransaction) -> None:
+    """Set counterparty + category for all CARD channel transactions.
+
+    Covers: cashback credits, bill payments, GST/forex fees, EMI
+    principal/interest, Swiggy sub-brands, and recurring merchants.
+    """
+    desc_upper = txn.raw_description.upper()
+
+    # ── 1. Inflows (cashback, bill payments, refunds) ─────────────────
+    if txn.direction == Direction.INFLOW:
+        if "CASHBACK" in desc_upper or "REINSTATED" in desc_upper:
+            txn.counterparty = "HDFC Bank"
+            txn.counterparty_category = CounterpartyCategory.MISCELLANEOUS
+            return
+        if "NETBANKING TRANSFER" in desc_upper or "CREDIT CARD PAYMENT" in desc_upper:
+            txn.counterparty = "Sashank Sai Kuppa"
+            txn.counterparty_category = CounterpartyCategory.SELF_TRANSFER
+            return
+        # Swiggy refund (inflow from a Swiggy entity)
+        if any(kw in desc_upper for kw in _SWIGGY_INDICATORS):
+            txn.counterparty = "Swiggy"
+            txn.counterparty_category = CounterpartyCategory.MISCELLANEOUS
+            return
+        # HDFC SmartBuy portal reversal/credit (e.g. CT HOTEL VIA SMARTBUY)
+        if "VIA SMARTBUY" in desc_upper:
+            txn.counterparty = "HDFC Bank"
+            txn.counterparty_category = CounterpartyCategory.MISCELLANEOUS
+            return
+        return  # other inflows → LLM
+
+    # ── 2. EXPENSE_OTHER outflows (GST, forex markup, DCC fees, SmartBuy holds) ──
+    if txn.txn_type == TxnType.EXPENSE_OTHER:
+        if desc_upper.startswith("IGST"):
+            txn.counterparty = "GST"
+            txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
+            return
+        if "CONSOLIDATED FCY" in desc_upper:
+            txn.counterparty = "Forex Markup"
+            txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
+            return
+        if "1% ON ALL DCC" in desc_upper:
+            txn.counterparty = "DCC Fee"
+            txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
+            return
+        if "VIA SMARTBUY" in desc_upper:
+            txn.counterparty = "HDFC Bank"
+            txn.counterparty_category = CounterpartyCategory.MISCELLANEOUS
+            return
+        return
+
+    # ── 3. LOAN_INSURANCE_PAYMENT (EMI principal / interest / fees) ───
+    if txn.txn_type == TxnType.LOAN_INSURANCE_PAYMENT:
+        if "PROCNG FEE" in desc_upper or "PROCG FEE" in desc_upper:
+            txn.counterparty = "EMI Processing Fees"
+        elif "REDEMPTION PROC FEE" in desc_upper:
+            txn.counterparty = "EMI Processing Fees"
+        elif "PRIN" in desc_upper:
+            txn.counterparty = "EMI Principal"
+        elif "INT" in desc_upper:
+            txn.counterparty = "EMI Interest"
+        txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
+        return
+
+    # ── 4. CARD_EXPENSE (merchants) ───────────────────────────────────
+    if txn.txn_type == TxnType.CARD_EXPENSE:
+        # 4a. Swiggy ecosystem → sub-brand classification
+        swiggy = _classify_swiggy_sub(desc_upper)
+        if swiggy:
+            txn.counterparty = swiggy
+            txn.counterparty_category = CounterpartyCategory.SWIGGY
+            return
+        # 4b. Recurring merchant keyword table (first match wins)
+        for keyword, counterparty, category in _CC_MERCHANT_RULES:
+            if keyword in desc_upper:
+                txn.counterparty = counterparty
+                txn.counterparty_category = category
+                return
+        # 4c. Unknown merchant → leave for LLM
+
+
+# ---------------------------------------------------------------------------
+# ACH dividend counterparty extraction
+# ---------------------------------------------------------------------------
+
+def _extract_ach_counterparty(desc: str) -> str | None:
+    """Extract and canonicalise the company name from an ACH dividend credit.
+
+    ICICI format: ``ACH/<COMPANY_NAME>/<REFERENCE_NUMBER>``
+    e.g. "ACH/VEDANTA LIMITED/33981805" → "Vedanta Limited"
+         "ACH/IOCL/26483633" → "IOCL"
+    """
+    m = re.match(r"ACH/([^/]+)/\d+", desc.strip(), re.IGNORECASE)
+    if not m:
+        return None
+    raw = m.group(1).strip().upper()
+    # Return the known canonical form; fall back to title-case for unknown companies
+    return _ACH_COMPANY_TITLES.get(raw, raw.title())
+
+
+# ---------------------------------------------------------------------------
 # Counterparty & category classification
 # ---------------------------------------------------------------------------
 
@@ -551,19 +1050,65 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
       6. Anything else → leave for LLM
     """
     desc = txn.raw_description
+    desc_upper = desc.upper()
+
+    # ════════════════════════════════════════════════════════════════════════
+    # PRE-SKIP RULES — run before the skip-list check so that certain
+    # EXPENSE_OTHER / INCOME_OTHER / CARD transactions still get a
+    # deterministic counterparty instead of going to the LLM.
+    # ════════════════════════════════════════════════════════════════════════
+
+    # ── Credit card: full counterparty classification ─────────────────
+    if txn.channel == Channel.CARD:
+        _classify_cc_counterparty(txn)
+        return
 
     # ── Sterling rent payments always go to Ashlesha Naokarkar ───────────
-    # This rule runs BEFORE the skip list so that EXPENSE_OTHER rent txns
-    # still get a named counterparty instead of the LLM guessing "Sterling Rent".
     if txn.txn_type == TxnType.EXPENSE_OTHER and txn.channel == Channel.BANK:
-        desc_upper = desc.upper()
         if "STERLING" in desc_upper and "RENT" in desc_upper:
             txn.counterparty = "Ashlesha Naokarkar"
             txn.counterparty_category = CounterpartyCategory.RENT_HOUSING
             return
 
-    # Transaction types that already imply a specific category (e.g. rent,
-    # loan EMI, salary) — the LLM handles their categories well.
+    # ── ICICI savings account interest ───────────────────────────────────
+    # "{icici_account_no}:Int.Pd:DD-MM-YYYY to DD-MM-YYYY"
+    if "INT.PD:" in desc_upper:
+        txn.counterparty = "ICICI Bank"
+        txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
+        return
+
+    # ── ICICI depository / maintenance charges ────────────────────────────
+    if desc_upper.startswith("DPCHG"):
+        txn.counterparty = "ICICI Bank"
+        txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
+        return
+
+    # ── BIL/INFT to K Adi Lakshmi (family name truncated in ICICI) ───────
+    # ICICI truncates "KUPPA ADI LAKSHMI" to "K ADI LAKSHMI" in narrations.
+    # Handle this before the generic name-list search which won't match it.
+    if "BIL/INFT/" in desc_upper and "K ADI LAKSHMI" in desc_upper:
+        txn.counterparty = "K Adi Lakshmi"
+        txn.counterparty_category = CounterpartyCategory.FRIENDS_FAMILY
+        return
+
+    # ── Asset-market transactions (equity / MF buys and sells) ───────────
+    # All EBA/ trades settle against NSE; MF redemptions / purchases also
+    # route through NSE infrastructure, so NSE is the canonical counterparty.
+    if txn.txn_type in _ASSET_MARKET_TXN_TYPES:
+        txn.counterparty = "NSE"
+        txn.counterparty_category = CounterpartyCategory.ASSET_MARKETS
+        return
+
+    # ── Dividend income (ACH/ from a company) ────────────────────────────
+    if txn.txn_type == TxnType.INCOME_DIVIDEND:
+        txn.counterparty = _extract_ach_counterparty(desc) or "Unknown Company"
+        txn.counterparty_category = CounterpartyCategory.ASSET_MARKETS
+        return
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Transaction types that already imply a specific category — the LLM
+    # handles their counterparty well and adding rules here would be fragile.
+    # ════════════════════════════════════════════════════════════════════════
     if txn.txn_type in _SKIP_COUNTERPARTY_RULES_TXN_TYPES:
         return
 

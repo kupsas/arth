@@ -32,7 +32,12 @@ htmlcov/
 .vscode/
 
 # Personal financial data (do NOT commit)
-docs/personal-data/
+# Note: this is a symlink to Arth/docs/personal-data — trailing slash won't match symlinks
+docs/personal-data
+
+# Generated benchmark CSVs — contain real transaction data (dates, amounts, narrations)
+# Re-generate with: python3 scripts/export_benchmark.py
+data/test/benchmark_*.csv
 
 # Generated pipeline output and LLM cache
 data/output/

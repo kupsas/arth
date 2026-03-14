@@ -35,10 +35,24 @@ SOURCE_CONFIGS: dict[str, dict] = {
         "currency": "INR",
         "source_statement": "HDFC_Statement.txt",
     },
-    # Future:
-    # "icici_savings": { "account_id": "ICICI_SAV_6118", ... },
-    # "hdfc_cc_1905":  { "account_id": "HDFC_CC_1905", ... },
-    # "hdfc_cc_5778":  { "account_id": "HDFC_CC_5778", ... },
+    # HDFC credit cards — each key points at a directory of 12 monthly CSVs.
+    # The HDFCCreditCardParser.parse() accepts either a file or a directory.
+    "hdfc_cc_1905": {
+        "account_id": "HDFC_CC_1905",
+        "currency": "INR",
+        "source_statement": "1905_CC",   # directory of monthly CSVs
+    },
+    "hdfc_cc_5778": {
+        "account_id": "HDFC_CC_5778",
+        "currency": "INR",
+        "source_statement": "5778_CC",   # directory of monthly CSVs
+    },
+    # ICICI savings account — single full-year PDF
+    "icici_savings": {
+        "account_id": "ICICI_SAV_6118",
+        "currency": "INR",
+        "source_statement": "ICICI_PDF_010125_311225.pdf",
+    },
 }
 
 # ---------------------------------------------------------------------------
