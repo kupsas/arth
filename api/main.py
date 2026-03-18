@@ -16,13 +16,27 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
 from api.routes import pipeline, transactions
+from api.routes.scraper import router as scraper_router
+from scraper.scheduler import shutdown_scheduler, start_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: ensure DB tables exist.  Shutdown: nothing special (yet)."""
+    """Startup and shutdown lifecycle for the Arth API server.
+
+    Startup:
+      1. Ensure all DB tables exist (init_db is idempotent — safe to call every boot).
+      2. Start the email scraper scheduler.  If Gmail hasn't been authenticated
+         yet (no token file), start_scheduler() is a no-op and the scheduler
+         stays inactive until the user completes OAuth via /api/scraper/oauth/init.
+
+    Shutdown:
+      3. Clean up the APScheduler background thread so the process exits cleanly.
+    """
     init_db()
+    start_scheduler()
     yield
+    shutdown_scheduler()
 
 
 app = FastAPI(
@@ -50,7 +64,8 @@ app.add_middleware(
 # Routes
 # ---------------------------------------------------------------------------
 app.include_router(transactions.router, prefix="/api/transactions", tags=["Transactions"])
-app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
+app.include_router(pipeline.router,      prefix="/api/pipeline",      tags=["Pipeline"])
+app.include_router(scraper_router,       prefix="/api/scraper",        tags=["Scraper"])
 
 
 # ---------------------------------------------------------------------------

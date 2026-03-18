@@ -1,0 +1,428 @@
+"""
+Scraper control endpoints — /api/scraper/*
+
+These endpoints let the Phase 3 UI (and you from the terminal / Swagger) control
+the Gmail email scraper without ever touching a config file.
+
+Endpoints:
+  GET   /status        — scheduler status + last run summary
+  POST  /trigger       — run one scrape cycle right now (waits for result)
+  POST  /start         — start or resume the scheduler
+  POST  /stop          — pause the scheduler
+  PATCH /config        — change the polling interval
+  GET   /emails        — list processed emails (paginated, filterable)
+  POST  /oauth/init    — kick off Gmail OAuth2 flow (opens browser)
+  GET   /oauth/status  — is Gmail authenticated?
+  GET   /coverage      — which accounts have real-time email coverage
+"""
+
+from __future__ import annotations
+
+import datetime
+import logging
+import threading
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
+from sqlmodel import Session, col, select
+
+from api.database import get_session
+from api.models import ProcessedEmail
+from scraper.config import BANK_SENDERS, GMAIL_TOKEN_PATH
+from scraper.scheduler import (
+    get_status,
+    reschedule,
+    resume_scheduler,
+    stop_scheduler,
+    trigger_now,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+# ─── Request / response schemas ───────────────────────────────────────────────
+
+class ScraperConfigUpdate(BaseModel):
+    """Body for PATCH /config."""
+    interval_minutes: int
+
+
+class ProcessedEmailOut(BaseModel):
+    """Response shape for a single processed email row."""
+    id: int
+    gmail_message_id: str
+    sender: str
+    subject: str
+    received_at: str
+    txn_count: int
+    status: str
+    error_message: str | None
+    processed_at: str
+
+
+class ProcessedEmailsResponse(BaseModel):
+    """Paginated list of processed emails."""
+    items: list[ProcessedEmailOut]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+# ─── GET /status ──────────────────────────────────────────────────────────────
+
+@router.get("/status")
+def scraper_status():
+    """Return the current scheduler status and last run summary.
+
+    Fields:
+      - is_running:            True if the scheduler is actively polling.
+      - is_gmail_authenticated: True if gmail_token.json exists (OAuth done).
+      - is_scraping:           True if a scrape cycle is running right now.
+      - interval_minutes:      Current polling interval.
+      - last_run_at:           ISO-8601 timestamp of last completed cycle.
+      - next_run_at:           ISO-8601 timestamp of next scheduled cycle.
+      - last_emails_processed: Emails that produced transactions in the last run.
+      - last_emails_skipped:   Non-transaction emails skipped in the last run.
+      - last_emails_failed:    Emails that errored in the last run.
+      - last_txns_created:     New DB rows inserted in the last run.
+      - last_error:            First error message from the last run (or null).
+    """
+    return get_status()
+
+
+# ─── POST /trigger ─────────────────────────────────────────────────────────────
+
+@router.post("/trigger")
+async def trigger_scrape():
+    """Run one full scrape cycle immediately and return the result.
+
+    This call blocks until the cycle finishes (usually a few seconds).
+    Uses run_in_threadpool so the FastAPI event loop is not blocked.
+
+    Returns the same fields as ScrapeResult:
+      emails_found, emails_processed, emails_skipped, emails_failed,
+      txns_created, errors (list of error strings).
+
+    Raises 503 if Gmail is not authenticated yet.
+    """
+    try:
+        result = await run_in_threadpool(trigger_now)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    return {
+        "emails_found":     result.emails_found,
+        "emails_processed": result.emails_processed,
+        "emails_skipped":   result.emails_skipped,
+        "emails_failed":    result.emails_failed,
+        "txns_created":     result.txns_created,
+        "errors":           result.errors,
+    }
+
+
+# ─── POST /start ───────────────────────────────────────────────────────────────
+
+@router.post("/start")
+def start_scraper():
+    """Start or resume the email scraper scheduler.
+
+    - If the scheduler was paused via POST /stop, this resumes it.
+    - If the scheduler was never started (e.g. Gmail wasn't authenticated at
+      boot time), this starts a fresh scheduler now.
+    - Returns 503 if Gmail is not authenticated.
+    """
+    if not GMAIL_TOKEN_PATH.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail is not authenticated. Complete OAuth first via POST /api/scraper/oauth/init.",
+        )
+    resume_scheduler()
+    return {"status": "started", **get_status()}
+
+
+# ─── POST /stop ────────────────────────────────────────────────────────────────
+
+@router.post("/stop")
+def stop_scraper():
+    """Pause the scheduler.  No emails will be fetched until POST /start is called.
+
+    A currently-running scrape cycle will finish before the scheduler pauses.
+    """
+    stop_scheduler()
+    return {"status": "stopped", **get_status()}
+
+
+# ─── PATCH /config ─────────────────────────────────────────────────────────────
+
+@router.patch("/config")
+def update_scraper_config(body: ScraperConfigUpdate):
+    """Update the email polling interval.
+
+    The change takes effect immediately on the running scheduler.
+    If the scheduler isn't running, the new interval is stored and used
+    on the next start.
+
+    Body: { "interval_minutes": 30 }
+    Minimum: 1 minute.
+    """
+    try:
+        reschedule(body.interval_minutes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"interval_minutes": body.interval_minutes, **get_status()}
+
+
+# ─── GET /emails ───────────────────────────────────────────────────────────────
+
+@router.get("/emails", response_model=ProcessedEmailsResponse)
+def list_processed_emails(
+    status: str | None = Query(None, description="Filter by status: processed | skipped | failed"),
+    sender: str | None = Query(None, description="Filter by sender address"),
+    date_from: datetime.date | None = Query(None, description="Inclusive start date (received_at)"),
+    date_to: datetime.date | None = Query(None, description="Inclusive end date (received_at)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    *,
+    session: Session = Depends(get_session),
+):
+    """List emails the scraper has attempted to process.
+
+    Useful for debugging: shows which emails were parsed, which were skipped
+    (non-transaction emails), and which failed with an error.
+    """
+    from sqlmodel import func
+
+    query = select(ProcessedEmail)
+
+    if status:
+        query = query.where(ProcessedEmail.status == status)
+    if sender:
+        query = query.where(ProcessedEmail.sender == sender)
+    if date_from:
+        query = query.where(
+            col(ProcessedEmail.received_at) >= datetime.datetime.combine(
+                date_from, datetime.time.min
+            )
+        )
+    if date_to:
+        query = query.where(
+            col(ProcessedEmail.received_at) <= datetime.datetime.combine(
+                date_to, datetime.time.max
+            )
+        )
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = session.exec(count_query).one()
+
+    query = (
+        query
+        .order_by(col(ProcessedEmail.received_at).desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = session.exec(query).all()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    return ProcessedEmailsResponse(
+        items=[_email_to_out(r) for r in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
+
+
+# ─── POST /oauth/init ──────────────────────────────────────────────────────────
+
+@router.post("/oauth/init")
+def oauth_init():
+    """Start the Gmail OAuth2 flow.
+
+    This opens a browser window on the machine running the API server with
+    Google's consent screen.  After you click "Allow", the token is saved to
+    data/gmail_token.json and the scheduler is automatically activated.
+
+    Check GET /api/scraper/oauth/status to confirm authentication completed.
+
+    If Gmail is already authenticated, returns a message saying so (no-op).
+    """
+    if GMAIL_TOKEN_PATH.exists():
+        return {
+            "status": "already_authenticated",
+            "message": "Gmail is already authenticated. No action needed.",
+        }
+
+    def _run_oauth_flow() -> None:
+        """Execute the full OAuth flow in a background thread.
+
+        This must run in a thread because InstalledAppFlow.run_local_server()
+        starts a temporary HTTP server and blocks until the browser redirect
+        callback arrives — it can't run on the FastAPI event loop.
+        """
+        try:
+            from scraper.gmail_client import GmailClient
+            logger.info("Starting Gmail OAuth flow (browser will open)...")
+            client = GmailClient()
+            client.authenticate()
+            logger.info("Gmail OAuth completed — token saved, activating scheduler")
+            # Now that the token exists, activate the scheduler
+            resume_scheduler()
+        except Exception as exc:
+            logger.error("Gmail OAuth flow failed: %s", exc)
+
+    thread = threading.Thread(target=_run_oauth_flow, daemon=True, name="gmail-oauth")
+    thread.start()
+
+    return {
+        "status": "oauth_started",
+        "message": (
+            "A browser window will open shortly with the Google consent screen. "
+            "Click 'Allow' to grant access. "
+            "Check GET /api/scraper/oauth/status to confirm when done."
+        ),
+    }
+
+
+# ─── GET /oauth/status ─────────────────────────────────────────────────────────
+
+@router.get("/oauth/status")
+def oauth_status():
+    """Check whether Gmail has been authenticated.
+
+    Returns:
+      - is_authenticated: True if gmail_token.json exists (token was saved).
+      - token_path:       Path where the token is stored (for reference).
+      - message:          Human-readable explanation.
+
+    Note: this only checks whether the token *file* exists — it does not
+    attempt a live token validation.  If the token is corrupted or expired
+    beyond refresh, the next scrape cycle will surface the error.
+    """
+    authenticated = GMAIL_TOKEN_PATH.exists()
+    return {
+        "is_authenticated": authenticated,
+        "token_path": str(GMAIL_TOKEN_PATH),
+        "message": (
+            "Gmail is authenticated. The scheduler will start polling automatically."
+            if authenticated
+            else
+            "Gmail is not authenticated. Call POST /api/scraper/oauth/init to begin the OAuth flow."
+        ),
+    }
+
+
+# ─── GET /coverage ─────────────────────────────────────────────────────────────
+
+# Static coverage map — derived from Step 3a real-email discovery.
+# This captures what we confirmed actually works vs. what doesn't.
+_COVERAGE: list[dict] = [
+    # ── HDFC ──────────────────────────────────────────────────────────────────
+    {
+        "account_id": "HDFC_SAL_3703",
+        "bank": "HDFC",
+        "account_type": "Savings",
+        "has_email_coverage": True,
+        "email_sender": "alerts@hdfcbank.net",
+        "covered_transaction_types": [
+            "UPI outbound (all payments from savings account)",
+            "UPI inbound (peer-to-peer credits)",
+        ],
+        "not_covered": [
+            "Net banking transfers outbound — HDFC does not send email alerts for these (by design)",
+            "Inbound credits: salary, standing instructions, NEFT/RTGS credits",
+        ],
+        "notes": "~70-80% of daily transactions are UPI and are covered in real time.",
+    },
+    {
+        "account_id": "HDFC_CC_1905",
+        "bank": "HDFC",
+        "account_type": "Credit Card (ending 1905)",
+        "has_email_coverage": True,
+        "email_sender": "alerts@hdfcbank.net",
+        "covered_transaction_types": [
+            "Credit card swipes / online purchases (outbound spending)",
+        ],
+        "not_covered": [
+            "Refunds and cashback credits",
+            "EMI auto-debits (statement only)",
+            "E-mandate / auto-pay alerts contain no amount — cannot be parsed",
+        ],
+        "notes": "All card swipes appear in real time. Refunds surface via statement.",
+    },
+    {
+        "account_id": "HDFC_CC_5778",
+        "bank": "HDFC",
+        "account_type": "Credit Card (ending 5778)",
+        "has_email_coverage": True,
+        "email_sender": "alerts@hdfcbank.net",
+        "covered_transaction_types": [
+            "Credit card swipes / online purchases (outbound spending)",
+        ],
+        "not_covered": [
+            "Refunds and cashback credits",
+            "EMI auto-debits (statement only)",
+        ],
+        "notes": "Same coverage as card 1905.",
+    },
+    # ── ICICI ─────────────────────────────────────────────────────────────────
+    {
+        "account_id": "ICICI_SAV_6118",
+        "bank": "ICICI",
+        "account_type": "Savings",
+        "has_email_coverage": True,
+        "email_sender": "customernotification@icici.bank.in",
+        "covered_transaction_types": [
+            "IMPS outbound via iMobile (manually initiated transfers)",
+            "NEFT outbound via iMobile (manually initiated transfers)",
+        ],
+        "not_covered": [
+            "All inbound credits (salary, NEFT/RTGS credits, interest)",
+            "ICICI Direct / broker transactions (no transactional email; use statement PDFs)",
+            "Automatic payments and standing instructions",
+        ],
+        "notes": (
+            "Only manual transfers initiated via iMobile app get email alerts. "
+            "ICICI does not send alerts for inbound transactions."
+        ),
+    },
+]
+
+
+@router.get("/coverage")
+def email_coverage():
+    """Return the email alert coverage map.
+
+    Shows which accounts have real-time email coverage, which transaction types
+    are captured, and what remains statement-only.
+
+    This is based on confirmed real-email discovery (Step 3a) — not assumptions.
+    """
+    email_accounts = sum(1 for a in _COVERAGE if a["has_email_coverage"])
+    return {
+        "summary": {
+            "total_accounts": len(_COVERAGE),
+            "accounts_with_email_coverage": email_accounts,
+            "configured_senders": list(BANK_SENDERS.keys()),
+        },
+        "accounts": _COVERAGE,
+    }
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _email_to_out(row: ProcessedEmail) -> ProcessedEmailOut:
+    return ProcessedEmailOut(
+        id=row.id,
+        gmail_message_id=row.gmail_message_id,
+        sender=row.sender,
+        subject=row.subject,
+        received_at=row.received_at.isoformat() if row.received_at else "",
+        txn_count=row.txn_count,
+        status=row.status,
+        error_message=row.error_message,
+        processed_at=row.processed_at.isoformat() if row.processed_at else "",
+    )

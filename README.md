@@ -52,6 +52,8 @@ Adding a new bank = write one parser file. Everything else is bank-agnostic.
 - `GET /runs` — List past pipeline runs
 - `GET /runs/{id}` — Single run status (for polling)
 
+**Scraper** (`/api/scraper`) — see [`scraper/README.md`](scraper/README.md) for full reference
+
 **Health:** `GET /health`
 
 ## Environments
@@ -73,65 +75,6 @@ The pipeline uses a **multi-model fallback chain** so rate limits or outages on 
 4. `gpt-5-mini` (OpenAI — different provider)
 
 Full benchmark results and methodology in `docs/evaluations/llm-benchmark-2026-03/`.
-
-## Repository Structure
-
-```
-Arth-api/
-  api/                       # FastAPI backend
-    __init__.py
-    main.py                    App entry point, CORS, lifespan, /health
-    database.py                Engine, session factory, init_db()
-    models.py                  SQLModel table definitions (Transaction, PipelineRun)
-    dependencies.py            FastAPI dependency injection (get_session)
-    routes/
-      transactions.py          Transaction CRUD, filtering, bulk update
-      pipeline.py              Trigger runs, list runs, run status
-
-  pipeline/                  # Classification pipeline
-    config.py                  Configuration (models, pricing, paths, fallback chain)
-    models.py                  Pydantic models & enums (ParsedTransaction, CanonicalTransaction)
-    parsers/                   Source-specific parsers
-      base.py                    Abstract base class
-      hdfc_savings.py            HDFC savings .txt parser
-      hdfc_cc.py                 HDFC credit card .csv parser
-      icici_savings.py           ICICI savings .pdf parser
-    transformer.py             ParsedTransaction -> CanonicalTransaction
-    rules_classifier.py        Deterministic classification rules
-    llm_classifier.py          LLM abstraction (multi-model fallback, caching, token tracking)
-    db_writer.py               SQLite writer with content-hash dedup + backfill
-    prompts.py                 Prompt loader (reads from prompts/ YAML files)
-    writer.py                  Legacy CSV output (--csv flag)
-    validator.py               Compare pipeline output vs GSheet ground truth
-    run.py                     CLI entry point
-
-  prompts/                   # Prompt templates (YAML, safe to commit)
-    classify_single_pass.yaml
-    enums.yaml
-    few_shot_examples.yaml
-
-  data/
-    arth.db                  Production SQLite database (gitignored)
-    arth_test.db             Test SQLite database (gitignored)
-    output/                  Legacy CSV output (gitignored)
-    .llm_cache/              Cached LLM responses (gitignored)
-
-  tests/
-    test_db_and_api.py         DB operations + API endpoint tests (TestClient)
-    test_pipeline_e2e.py       Full pipeline accuracy regression test (slow, uses LLM)
-    test_prompt_snapshots.py   Golden snapshot tests for prompt rendering
-    test_prompt_yaml.py        Enum consistency checks across YAML and Python
-    test_prompt_loader.py      Prompt loader unit tests
-    fixtures/                  Golden prompt/response JSON fixtures
-
-  docs/
-    personal-data/           Raw bank statements + GSheet ground truth (gitignored symlink)
-    evaluations/             Archived benchmark results & evaluation tools
-    data-notes/              Design notes from earlier work
-
-  .env / .env.example        API keys and config (`.env` gitignored)
-  requirements.txt           Python dependencies
-```
 
 ## Current Accuracy (March 2026, HDFC savings dataset)
 
@@ -159,3 +102,62 @@ On the full HDFC savings dataset (~647 matched rows) with the latest rules + pro
 - **Dedup by content_hash:** SHA-256 of `(txn_date, raw_description, amount, account_id)`. Re-running the pipeline on the same statement is fully idempotent. Backfill logic fills NULLs without overwriting existing values, preserving manual corrections.
 - **Double-counting awareness:** `CARD_EXPENSE` (individual CC swipe) and `CARD_PAYMENT` (paying the CC bill) both exist in the DB. Naively summing all OUTFLOWs double-counts spending. Phase 3 metrics endpoints will filter correctly by `txn_type`.
 - **LLM caching:** All LLM responses are cached keyed by batch content hash. Re-running the pipeline after adding new statements only calls the LLM for genuinely new transactions.
+
+## Repository Structure
+
+```
+Arth-email-scraper/
+  api/                       # FastAPI backend
+    main.py                    App entry point, CORS, lifespan, scheduler start/stop
+    database.py                Engine, session factory, init_db()
+    models.py                  SQLModel table definitions (Transaction, PipelineRun, ProcessedEmail)
+    routes/
+      transactions.py          Transaction CRUD, filtering, bulk update
+      pipeline.py              Trigger runs, list runs, run status
+      scraper.py               Scraper control + OAuth endpoints
+
+  pipeline/                  # Classification pipeline (shared by both ingestion paths)
+    config.py                  Configuration (models, pricing, paths, fallback chain)
+    models.py                  Pydantic models & enums (ParsedTransaction, CanonicalTransaction)
+    parsers/                   Statement file parsers (HDFC savings/CC, ICICI)
+    transformer.py             ParsedTransaction -> CanonicalTransaction
+    rules_classifier.py        Deterministic classification rules
+    llm_classifier.py          LLM abstraction (multi-model fallback, caching, token tracking)
+    db_writer.py               SQLite writer: content-hash dedup + email reconciliation
+
+  scraper/                   # Gmail email scraper — see scraper/README.md
+    README.md                  Setup, coverage, reconciliation design, API reference
+
+  scripts/
+    discover_emails.py         One-time email discovery + OAuth consent (first-run helper)
+    migrate_db.py              Idempotent DB migration for pre-Phase-4 databases
+
+  prompts/                   # Prompt templates (YAML, safe to commit)
+
+  data/
+    arth.db                  Production SQLite database (gitignored)
+    gmail_credentials.json   GCP OAuth credentials (gitignored)
+    gmail_token.json         OAuth token, auto-created on first run (gitignored)
+
+  tests/
+    test_db_and_api.py         DB operations + API endpoint tests
+    test_email_parsers.py      Email parser unit tests against real HTML fixtures
+    test_reconciliation.py     Reconciliation logic tests
+    test_orchestrator.py       Orchestrator integration tests with mock Gmail
+    fixtures/email_samples/    Real HTML email fixtures captured during discovery
+
+  .env / .env.example        API keys + Gmail config (.env gitignored)
+  requirements.txt           Python dependencies
+```
+
+## Real-Time Email Scraper
+
+The server also scrapes HDFC and ICICI transaction alert emails every 15 minutes via the Gmail API, giving ~70-80% real-time visibility on daily spending. Monthly statement uploads reconcile the two sources automatically — no duplicates, no lost review work.
+
+| Bank / Account      | What email captures                       | What needs a statement           |
+| ------------------- | ----------------------------------------- | -------------------------------- |
+| HDFC CC (1905/5778) | All CC swipes (real-time)                 | Refunds, cashback, auto-pay      |
+| HDFC Savings 3703   | UPI outbound + inbound                    | Net banking transfers, salary    |
+| ICICI Savings 6118  | IMPS + NEFT via iMobile (manual triggers) | All inbound, ICICI Direct trades |
+
+Full setup instructions and design details: **[`scraper/README.md`](scraper/README.md)**
