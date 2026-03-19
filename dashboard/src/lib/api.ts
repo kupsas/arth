@@ -20,14 +20,21 @@ import type {
   CategoryBreakdown,
   DateRange,
   Direction,
+  Goal,
+  GoalCreate,
+  GoalUpdate,
   MetricsSummary,
   MonthlyTrend,
   NegativeSurplusResponse,
   PaginatedResponse,
+  RecurringPattern,
+  RecurringSummary,
+  SpendCategoryBreakdown,
   TopCounterparty,
   Transaction,
   TransactionFilters,
   TransactionUpdate,
+  UploadResponse,
 } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -129,6 +136,56 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
   }
 
   return res.json() as Promise<T>;
+}
+
+/**
+ * Performs a POST request with a JSON body and deserialises the response.
+ * Throws ApiError on non-2xx responses.
+ * Redirects to /login on 401.
+ */
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, detail);
+  }
+
+  // 204 No Content has no body — return undefined cast to T
+  if (res.status === 204) return undefined as unknown as T;
+
+  return res.json() as Promise<T>;
+}
+
+/**
+ * Performs a DELETE request.
+ * Throws ApiError on non-2xx responses.
+ */
+async function del(path: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return;
+  }
+
+  if (!res.ok && res.status !== 204) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, detail);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -298,4 +355,158 @@ export async function logout(): Promise<void> {
   });
   // Redirect to login page regardless of the response
   window.location.href = "/login";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spend category breakdown  →  /api/metrics/by-spend-category  (Phase 4.5c)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/metrics/by-spend-category
+ * Returns OUTFLOW spending broken down by NEED / WANT / SAVING / INVESTMENT.
+ * Powers the "Spending Breakdown" donut chart on the dashboard.
+ */
+export function fetchSpendCategoryBreakdown(
+  dateRange: DateRange = {},
+): Promise<SpendCategoryBreakdown[]> {
+  return get<SpendCategoryBreakdown[]>(
+    "/api/metrics/by-spend-category",
+    dateRange as QueryParams,
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recurring patterns  →  /api/recurring  (Phase 4.5c)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/recurring/summary
+ * Returns aggregate stats: total monthly fixed costs, recurring income, etc.
+ */
+export function fetchRecurringSummary(): Promise<RecurringSummary> {
+  return get<RecurringSummary>("/api/recurring/summary");
+}
+
+/**
+ * GET /api/recurring
+ * Returns a list of recurring patterns, optionally filtered.
+ */
+export function fetchRecurringPatterns(params?: {
+  direction?: "INFLOW" | "OUTFLOW";
+  frequency?: string;
+  is_active?: boolean;
+}): Promise<RecurringPattern[]> {
+  return get<RecurringPattern[]>("/api/recurring", params as QueryParams);
+}
+
+/**
+ * POST /api/recurring/detect
+ * Triggers the recurring detection algorithm on the full transaction history.
+ */
+export function runRecurringDetection(): Promise<{ message: string; created: number; updated: number }> {
+  return post<{ message: string; created: number; updated: number }>(
+    "/api/recurring/detect",
+    {},
+  );
+}
+
+/**
+ * PATCH /api/recurring/{id}
+ * Confirm, dismiss, or adjust a recurring pattern.
+ */
+export function updateRecurringPattern(
+  id: number,
+  update: { is_confirmed?: boolean; is_active?: boolean; expected_amount?: number },
+): Promise<RecurringPattern> {
+  return patch<RecurringPattern>(`/api/recurring/${id}`, update);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Goals  →  /api/goals  (Phase 4.5d)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/goals
+ * Returns all goals, optionally filtered.
+ */
+export function fetchGoals(params?: {
+  user_id?: string;
+  goal_type?: string;
+  status?: string;
+}): Promise<Goal[]> {
+  return get<Goal[]>("/api/goals", params as QueryParams);
+}
+
+/**
+ * GET /api/goals/{id}
+ * Returns a single goal with live-computed progress.
+ */
+export function fetchGoal(id: number): Promise<Goal> {
+  return get<Goal>(`/api/goals/${id}`);
+}
+
+/**
+ * POST /api/goals
+ * Create a new financial goal.
+ */
+export function createGoal(body: GoalCreate): Promise<Goal> {
+  return post<Goal>("/api/goals", body);
+}
+
+/**
+ * PATCH /api/goals/{id}
+ * Update mutable fields on a goal (name, target, current_value, status, etc.)
+ */
+export function updateGoal(id: number, update: GoalUpdate): Promise<Goal> {
+  return patch<Goal>(`/api/goals/${id}`, update);
+}
+
+/**
+ * DELETE /api/goals/{id}
+ * Permanently delete a goal.
+ */
+export function deleteGoal(id: number): Promise<void> {
+  return del(`/api/goals/${id}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Statement upload  →  /api/pipeline/upload  (Phase 4.5d)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/pipeline/upload
+ * Uploads a bank statement file and triggers the pipeline.
+ * Returns a run_id that can be polled via GET /api/pipeline/runs/{id}.
+ *
+ * @param file      The File object from an <input type="file"> or drag-and-drop
+ * @param sourceKey Optional parser key override (e.g. "hdfc_savings")
+ */
+export async function uploadStatement(
+  file: File,
+  sourceKey?: string,
+): Promise<UploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const url = new URL(`${BASE_URL}/api/pipeline/upload`);
+  if (sourceKey) url.searchParams.set("source_key", sourceKey);
+
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    credentials: "include",
+    body: formData,
+    // Don't set Content-Type — let the browser set multipart/form-data with the boundary
+  });
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, detail);
+  }
+
+  return res.json() as Promise<UploadResponse>;
 }

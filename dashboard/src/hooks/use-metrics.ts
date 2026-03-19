@@ -23,6 +23,7 @@ import {
   fetchMetricsSummary,
   fetchMonthlyTrend,
   fetchNegativeSurplusMonths,
+  fetchSpendCategoryBreakdown,
   fetchTopCounterparties,
 } from "@/lib/api";
 import type {
@@ -33,6 +34,7 @@ import type {
   MetricsSummary,
   MonthlyTrend,
   NegativeSurplusResponse,
+  SpendCategoryBreakdown,
   TopCounterparty,
 } from "@/lib/types";
 
@@ -67,6 +69,9 @@ export const metricsKeys = {
 
   negativeSurplus: (months: number) =>
     [...metricsKeys.all, "negative-surplus", months] as const,
+
+  spendCategory: (dateRange: DateRange) =>
+    [...metricsKeys.all, "spend-category", dateRange] as const,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,6 +230,28 @@ export function useNegativeSurplusMonths(
     queryKey: metricsKeys.negativeSurplus(months),
     queryFn: () => fetchNegativeSurplusMonths(months),
     staleTime: 5 * 60 * 1_000,
+    ...options,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// useSpendCategoryBreakdown — NEED / WANT / SAVING / INVESTMENT donut
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns OUTFLOW spending broken down by macro category.
+ * Feeds the "Spending Breakdown" donut chart.
+ *
+ * @param dateRange  optional date_from / date_to filter
+ */
+export function useSpendCategoryBreakdown(
+  dateRange: DateRange = {},
+  options?: Partial<UseQueryOptions<SpendCategoryBreakdown[]>>,
+) {
+  return useQuery<SpendCategoryBreakdown[]>({
+    queryKey: metricsKeys.spendCategory(dateRange),
+    queryFn: () => fetchSpendCategoryBreakdown(dateRange),
+    staleTime: 2 * 60 * 1_000,
     ...options,
   });
 }

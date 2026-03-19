@@ -31,6 +31,8 @@ from pipeline.models import (
     CanonicalTransaction,
     Channel,
     CounterpartyCategory,
+    Direction,
+    SpendCategory,
     TxnType,
     UPIType,
 )
@@ -180,6 +182,10 @@ def _fields_needed(txn: CanonicalTransaction) -> list[str]:
         needs.append("counterparty")
     if txn.counterparty_category is None:
         needs.append("counterparty_category")
+    # Only ask LLM to fill spend_category for OUTFLOW transactions where it's still None.
+    # INFLOW transactions don't need a spend_category (the rules classifier already skips them).
+    if txn.spend_category is None and txn.direction == Direction.OUTFLOW:
+        needs.append("spend_category")
     return needs
 
 
@@ -337,6 +343,12 @@ def _apply_results(
                     if member.value.lower() == cat_val.lower():
                         txn.counterparty_category = member
                         break
+
+        if "spend_category" in r and txn.spend_category is None:
+            try:
+                txn.spend_category = SpendCategory(r["spend_category"])
+            except ValueError:
+                pass  # LLM returned an invalid value — leave None, don't crash
 
         _enforce_consistency(txn)
 

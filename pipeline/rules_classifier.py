@@ -21,6 +21,7 @@ from pipeline.models import (
     Channel,
     CounterpartyCategory,
     Direction,
+    SpendCategory,
     TxnType,
     UPIType,
 )
@@ -283,12 +284,62 @@ _CC_MERCHANT_RULES: list[tuple[str, str, CounterpartyCategory]] = [
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Spend-category mapping constants
+# ---------------------------------------------------------------------------
+
+# CounterpartyCategory values that map deterministically to NEED.
+# These are essential living expenses that the user can't easily cut.
+_NEED_CATEGORIES: frozenset[CounterpartyCategory] = frozenset({
+    CounterpartyCategory.RENT_HOUSING,
+    CounterpartyCategory.UTILITIES_INTERNET,
+    CounterpartyCategory.HEALTHCARE_PHARMACY,
+    CounterpartyCategory.TRANSPORT_FUEL,
+    CounterpartyCategory.FINANCIAL_SERVICES,    # insurance, banking fees
+    CounterpartyCategory.FEES_CHARGES_INTEREST,
+})
+
+# CounterpartyCategory values that map deterministically to WANT.
+# Discretionary spending — lifestyle choices the user controls.
+# Note: CounterpartyCategory.SWIGGY is intentionally excluded here — it needs
+# sub-brand awareness (Instamart = NEED, Food/Dineout = WANT) handled separately.
+_WANT_CATEGORIES: frozenset[CounterpartyCategory] = frozenset({
+    CounterpartyCategory.FOOD_DINING,
+    CounterpartyCategory.ENTERTAINMENT_EVENTS,
+    CounterpartyCategory.SHOPPING_ECOMMERCE,
+    CounterpartyCategory.TRAVEL_STAY,
+    CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS,
+    CounterpartyCategory.PERSONAL_GROOMING,
+    CounterpartyCategory.GIFTS_PERSONAL_TRANSFERS,
+    # Note: FRIENDS_FAMILY is intentionally excluded — family/friend transfers
+    # are internal flows, not standard discretionary spending. Leave NULL so the
+    # user can manually tag them if desired.
+})
+
+# TxnType values that represent capital deployed into markets → INVESTMENT.
+_INVESTMENT_TXN_TYPES: frozenset[TxnType] = frozenset({
+    TxnType.EQUITY_PURCHASE,
+    TxnType.MF_PURCHASE,
+})
+
+# TxnType values that skip spend_category entirely (income or pass-through payments).
+_NO_SPEND_CATEGORY_TXN_TYPES: frozenset[TxnType] = frozenset({
+    TxnType.INCOME_SALARY,
+    TxnType.INCOME_OTHER,
+    TxnType.INCOME_DIVIDEND,
+    TxnType.CARD_PAYMENT,    # paying the CC bill — not a real spend, just a settlement
+    TxnType.EQUITY_SALE,     # proceeds from selling investments = inflow
+    TxnType.MF_SALE,
+})
+
+
 def classify_rules(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]:
     """Apply deterministic rules to a list of canonical transactions.
 
     Mutates the transactions in-place (sets channel, txn_type, upi_type,
-    and — for known persons / heuristic matches — counterparty and
-    counterparty_category) and returns the same list for chaining convenience.
+    and — for known persons / heuristic matches — counterparty,
+    counterparty_category, and spend_category) and returns the same list
+    for chaining convenience.
     """
     for txn in txns:
         _classify_channel(txn)
@@ -296,7 +347,93 @@ def classify_rules(txns: list[CanonicalTransaction]) -> list[CanonicalTransactio
         _classify_upi_type(txn)
         _classify_txn_type_from_upi(txn)   # P2M → UPI_EXPENSE (runs after upi_type is set)
         _classify_counterparty_category(txn)
+        _classify_spend_category(txn)       # NEED/WANT/INVESTMENT (runs last)
     return txns
+
+
+# ---------------------------------------------------------------------------
+# Spend-category classification
+# ---------------------------------------------------------------------------
+
+def _classify_spend_category(txn: CanonicalTransaction) -> None:
+    """Set spend_category deterministically where possible.
+
+    Priority chain:
+      1. INFLOW transactions → skip (income has no spend category)
+      2. txn_type passes → INVESTMENT (markets/self), skip (CARD_PAYMENT, income)
+      3. LOAN_INSURANCE_PAYMENT → NEED
+      4. counterparty_category map → NEED, WANT, or INVESTMENT
+      5. FRIENDS_FAMILY → leave None (user must manually tag)
+      6. Otherwise → leave None for the LLM to fill
+
+    Only runs after _classify_counterparty_category(), so counterparty_category
+    may already be set by rules.  For transactions where counterparty_category
+    is still None (to be filled by LLM), spend_category also stays None — the
+    LLM prompt includes spend_category as a field to fill when requested.
+    """
+    # Income transactions don't have a spend category
+    if txn.direction == Direction.INFLOW:
+        return
+
+    # txn_type-based shortcuts (highest confidence)
+    if txn.txn_type in _NO_SPEND_CATEGORY_TXN_TYPES:
+        return  # CARD_PAYMENT, income, investment sales — leave None
+
+    if txn.txn_type in _INVESTMENT_TXN_TYPES:
+        txn.spend_category = SpendCategory.INVESTMENT
+        return
+
+    if txn.txn_type == TxnType.SELF_TRANSFER:
+        # Moving money to own savings / FD / wallet = capital being parked = INVESTMENT
+        # (SAVING was removed — both "park money" and "deploy to markets" are INVESTMENT)
+        txn.spend_category = SpendCategory.INVESTMENT
+        return
+
+    if txn.txn_type == TxnType.LOAN_INSURANCE_PAYMENT:
+        # Loan repayments and insurance premiums are essential obligations
+        txn.spend_category = SpendCategory.NEED
+        return
+
+    # Asset Markets outflow (e.g. counterparty_category set by broker rules)
+    if txn.counterparty_category == CounterpartyCategory.ASSET_MARKETS:
+        txn.spend_category = SpendCategory.INVESTMENT
+        return
+
+    # Salary & Income category (occasionally OUTFLOW from rules, e.g. reverse salary)
+    if txn.counterparty_category == CounterpartyCategory.SALARY_INCOME:
+        return  # ambiguous — leave for LLM
+
+    # Self Transfer category set by counterparty rules → treat as INVESTMENT
+    # (same logic as SELF_TRANSFER txn_type above)
+    if txn.counterparty_category == CounterpartyCategory.SELF_TRANSFER:
+        txn.spend_category = SpendCategory.INVESTMENT
+        return
+
+    # Counterparty-category-based rules (only if category was already set by rules)
+    if txn.counterparty_category in _NEED_CATEGORIES:
+        txn.spend_category = SpendCategory.NEED
+        return
+
+    if txn.counterparty_category in _WANT_CATEGORIES:
+        txn.spend_category = SpendCategory.WANT
+        return
+
+    # Swiggy needs sub-brand awareness — the three sub-brands have different natures:
+    #   Swiggy Instamart → grocery delivery → NEED (essential household items)
+    #   Swiggy Food      → meal delivery    → WANT (discretionary)
+    #   Swiggy Dineout   → restaurant booking → WANT (discretionary)
+    #   Swiggy (ambiguous, rules couldn't pin down the sub-brand) → WANT (default)
+    # The counterparty field is set by _classify_swiggy_sub() before we get here,
+    # so we can trust it when it says "Swiggy Instamart".
+    if txn.counterparty_category == CounterpartyCategory.SWIGGY:
+        if txn.counterparty == "Swiggy Instamart":
+            txn.spend_category = SpendCategory.NEED
+        else:
+            # Food, Dineout, or ambiguous "Swiggy" — all discretionary
+            txn.spend_category = SpendCategory.WANT
+        return
+
+    # Miscellaneous and unknown categories → let LLM decide
 
 
 # ---------------------------------------------------------------------------

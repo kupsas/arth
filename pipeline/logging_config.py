@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import re
 from pathlib import Path
 
 # Single shared formatter so stdout and file look identical (makes copy-pasting
@@ -36,11 +37,45 @@ _NOISY_LIBS = [
     "httpcore",
     "urllib3",
     "google",
+    "google_auth_oauthlib",
+    "googleapiclient.discovery_cache",
+    "oauthlib",
+    "requests_oauthlib",
     "anthropic",
     "openai",
     "apscheduler",
     "multipart",
 ]
+
+
+class _SecretRedactionFilter(logging.Filter):
+    """Best-effort redaction of secret-like values in log messages.
+
+    We keep this lightweight and pattern-based so it can run on every log line.
+    It is not a substitute for avoiding secret logging at the source, but it
+    protects us against accidental leaks from third-party debug logs.
+    """
+
+    _REDACTIONS: list[tuple[re.Pattern[str], str]] = [
+        # JSON key/value style tokens in request/response logs
+        (re.compile(r'("access_token"\s*:\s*")[^"]+(")', re.IGNORECASE), r"\1***REDACTED***\2"),
+        (re.compile(r'("refresh_token"\s*:\s*")[^"]+(")', re.IGNORECASE), r"\1***REDACTED***\2"),
+        (re.compile(r'("client_secret"\s*:\s*")[^"]+(")', re.IGNORECASE), r"\1***REDACTED***\2"),
+        # Query/body style OAuth fields
+        (re.compile(r"(code=)[^&\s]+", re.IGNORECASE), r"\1***REDACTED***"),
+        (re.compile(r"(code_verifier=)[^&\s]+", re.IGNORECASE), r"\1***REDACTED***"),
+        # Authorization headers
+        (re.compile(r"(Authorization['\"]?\s*:\s*['\"]?Basic\s+)[A-Za-z0-9+/=]+", re.IGNORECASE), r"\1***REDACTED***"),
+        (re.compile(r"(Authorization['\"]?\s*:\s*['\"]?Bearer\s+)[A-Za-z0-9._\-]+", re.IGNORECASE), r"\1***REDACTED***"),
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        for pattern, replacement in self._REDACTIONS:
+            msg = pattern.sub(replacement, msg)
+        record.msg = msg
+        record.args = ()
+        return True
 
 
 def setup_logging(*, log_level: int = logging.INFO) -> None:
@@ -68,6 +103,7 @@ def setup_logging(*, log_level: int = logging.INFO) -> None:
     stream_handler = logging.StreamHandler()
     stream_handler.setLevel(log_level)
     stream_handler.setFormatter(_FORMATTER)
+    stream_handler.addFilter(_SecretRedactionFilter())
     root.addHandler(stream_handler)
 
     # ── Rotating file handler (DEBUG+) ────────────────────────────────────
@@ -81,6 +117,7 @@ def setup_logging(*, log_level: int = logging.INFO) -> None:
     )
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(_FORMATTER)
+    file_handler.addFilter(_SecretRedactionFilter())
     root.addHandler(file_handler)
 
     # ── Silence noisy third-party libs ───────────────────────────────────

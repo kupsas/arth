@@ -91,6 +91,7 @@ def _render_system(template: str, *, include_few_shot: bool = True) -> str:
     result = result.replace("{txn_types}", _enums["txn_types"])
     result = result.replace("{upi_types}", _enums["upi_types"])
     result = result.replace("{categories}", _enums["categories"])
+    result = result.replace("{spend_categories}", _enums["spend_categories"])
     if include_few_shot:
         result = result.replace("{few_shot}", _FEW_SHOT_TEXT)
     return result

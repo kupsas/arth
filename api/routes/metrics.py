@@ -13,6 +13,8 @@ GET /api/metrics/by-category         — spending (or income) ranked by counterp
 GET /api/metrics/top-counterparties  — top N merchants/payees by total spend
 GET /api/metrics/monthly-trend       — month-by-month income vs expense for last N months
 GET /api/metrics/accounts-summary    — per-account inflow/outflow totals (all time)
+GET /api/metrics/negative-surplus-months — months where spending exceeded income (Q11)
+GET /api/metrics/by-spend-category   — spending broken down by NEED/WANT/SAVING/INVESTMENT
 """
 
 from __future__ import annotations
@@ -571,6 +573,64 @@ def get_accounts_summary(
             ),
             total_inflow=round(float(r.total_inflow or 0), 2),
             total_outflow=round(float(r.total_outflow or 0), 2),
+        )
+        for r in rows
+    ]
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# GET /by-spend-category  — NEED / WANT / SAVING / INVESTMENT breakdown
+# ───────────────────────────────────────────────────────────────────────────
+
+class SpendCategoryRow(BaseModel):
+    spend_category: str     # "NEED" | "WANT" | "SAVING" | "INVESTMENT" | "UNCLASSIFIED"
+    amount: float
+    percentage: float       # 0–100 (share of total classified outflow)
+    txn_count: int
+
+
+@router.get("/by-spend-category", response_model=list[SpendCategoryRow])
+def metrics_by_spend_category(
+    date_from: datetime.date | None = Query(None),
+    date_to: datetime.date | None = Query(None),
+    *,
+    session: Session = Depends(get_session),
+) -> list[SpendCategoryRow]:
+    """Return OUTFLOW spending broken down by NEED / WANT / SAVING / INVESTMENT.
+
+    Excludes CARD_PAYMENT and SELF_TRANSFER from the "UNCLASSIFIED" bucket
+    because they aren't real spending.  Does not include INFLOW transactions.
+
+    This powers the "Spending Breakdown" donut chart on the dashboard.
+    """
+    q = (
+        select(
+            Transaction.spend_category,
+            func.sum(Transaction.amount).label("amount"),
+            func.count(Transaction.id).label("txn_count"),
+        )
+        .where(Transaction.direction == "OUTFLOW")
+        .where(Transaction.txn_type.not_in(["CARD_PAYMENT", "SELF_TRANSFER"]))  # type: ignore[union-attr]
+    )
+
+    if date_from:
+        q = q.where(Transaction.txn_date >= date_from)
+    if date_to:
+        q = q.where(Transaction.txn_date <= date_to)
+
+    q = q.group_by(Transaction.spend_category).order_by(
+        func.sum(Transaction.amount).desc()
+    )
+
+    rows = session.exec(q).all()
+    total = sum(float(r.amount or 0) for r in rows)
+
+    return [
+        SpendCategoryRow(
+            spend_category=r.spend_category or "UNCLASSIFIED",
+            amount=round(float(r.amount or 0), 2),
+            percentage=round(float(r.amount or 0) / total * 100, 1) if total > 0 else 0.0,
+            txn_count=r.txn_count,
         )
         for r in rows
     ]

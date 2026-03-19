@@ -2,10 +2,12 @@
  * types.ts — shared TypeScript types for the Arth dashboard.
  *
  * These mirror the Python models in:
- *   - api/models.py          (Transaction SQLModel)
+ *   - api/models.py          (Transaction, RecurringPattern, Goal SQLModels)
  *   - pipeline/models.py     (enums + CanonicalTransaction)
  *   - api/routes/transactions.py (PaginatedResponse, TransactionUpdate)
  *   - api/routes/metrics.py  (MetricsSummary, CategoryBreakdown, etc.)
+ *   - api/routes/recurring.py (RecurringPatternOut, RecurringSummary)
+ *   - api/routes/goals.py    (Goal with progress)
  *
  * Design note: enum values are string union types (not TypeScript enums).
  * Reason: TypeScript enums compile to runtime objects and cause issues with
@@ -19,6 +21,12 @@
 
 /** Whether money is coming in or going out of the account. */
 export type Direction = "INFLOW" | "OUTFLOW";
+
+/**
+ * Macro classification of what an OUTFLOW transaction is going towards.
+ * NULL for INFLOW (income) and Friends & Family transactions (user must tag manually).
+ */
+export type SpendCategory = "NEED" | "WANT" | "INVESTMENT";
 
 /**
  * The specific economic nature of a transaction.
@@ -100,6 +108,7 @@ export interface Transaction {
   upi_type: UPIType | null;
   counterparty: string | null;
   counterparty_category: CounterpartyCategory | null;
+  spend_category: SpendCategory | null;
 
   raw_description: string;
   ref_number: string | null;
@@ -121,6 +130,7 @@ export interface TransactionUpdate {
   counterparty?: string | null;
   counterparty_category?: CounterpartyCategory | null;
   txn_type?: TxnType | null;
+  spend_category?: SpendCategory | null;
   notes?: string | null;
   is_reviewed?: boolean;
 }
@@ -276,4 +286,124 @@ export interface NegativeSurplusResponse {
   total_months: number;
   deficit_months: DeficitMonthRow[];
   total_deficit: number;  // always positive — the cumulative shortfall
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spend category breakdown (Phase 4.5c)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One row from GET /api/metrics/by-spend-category
+ * spend_category is "NEED" | "WANT" | "SAVING" | "INVESTMENT" | "UNCLASSIFIED"
+ */
+export interface SpendCategoryBreakdown {
+  spend_category: SpendCategory | "UNCLASSIFIED";
+  amount: number;
+  percentage: number;   // 0–100
+  txn_count: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recurring patterns (Phase 4.5c)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type RecurringFrequency = "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY";
+
+/** Mirrors RecurringPatternOut from api/routes/recurring.py */
+export interface RecurringPattern {
+  id: number;
+  counterparty: string;
+  counterparty_category: CounterpartyCategory | string | null;
+  direction: Direction;
+  expected_amount: number;
+  amount_tolerance: number;
+  frequency: RecurringFrequency;
+  day_of_month: number | null;
+  last_seen_date: string;          // "YYYY-MM-DD"
+  next_expected_date: string | null;
+  is_active: boolean;
+  is_confirmed: boolean;
+  match_count: number;
+  total_amount: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Mirrors RecurringSummary from api/routes/recurring.py */
+export interface RecurringSummary {
+  total_monthly_fixed_cost: number;
+  total_monthly_recurring_income: number;
+  active_pattern_count: number;
+  patterns_due_this_week: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Goals (Phase 4.5d)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type GoalType =
+  | "SAVINGS"
+  | "EXPENSE_LIMIT"
+  | "EMERGENCY_FUND"
+  | "INVESTMENT"
+  | "DEBT_PAYOFF"
+  | "INSURANCE"
+  | "TAX";
+
+export type GoalStatus = "ON_TRACK" | "AT_RISK" | "BEHIND" | "ACHIEVED" | "PAUSED";
+
+/** Mirrors the goal dict returned by api/routes/goals.py */
+export interface Goal {
+  id: number;
+  name: string;
+  goal_type: GoalType;
+  target_amount: number | null;
+  target_date: string | null;      // "YYYY-MM-DD"
+  target_metric: string | null;
+  priority: number;                 // 1–5
+  linked_layer: number;
+  linked_category: string | null;
+  user_id: string;
+  current_value: number | null;    // manually entered
+  notes: string | null;
+  // Computed progress (live from DB)
+  computed_current_value: number;
+  computed_percentage: number;     // 0–100+
+  status: GoalStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GoalCreate {
+  name: string;
+  goal_type: GoalType;
+  target_amount?: number;
+  target_date?: string;
+  priority?: number;
+  linked_layer?: number;
+  linked_category?: string;
+  user_id?: string;
+  current_value?: number;
+  notes?: string;
+}
+
+export interface GoalUpdate {
+  name?: string;
+  target_amount?: number | null;
+  target_date?: string | null;
+  priority?: number;
+  linked_category?: string | null;
+  current_value?: number | null;
+  status?: GoalStatus;
+  notes?: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Statement upload (Phase 4.5d)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface UploadResponse {
+  run_id: number;
+  source_key: string;
+  message: string;
 }

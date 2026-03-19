@@ -31,6 +31,7 @@ class TransactionUpdate(BaseModel):
     counterparty: str | None = None
     counterparty_category: str | None = None
     txn_type: str | None = None
+    spend_category: str | None = None  # NEED | WANT | SAVING | INVESTMENT
     notes: str | None = None
     is_reviewed: bool | None = None
 
@@ -240,6 +241,7 @@ def _txn_to_dict(txn: Transaction) -> dict:
         "upi_type": txn.upi_type,
         "counterparty": txn.counterparty,
         "counterparty_category": txn.counterparty_category,
+        "spend_category": txn.spend_category,
         "raw_description": txn.raw_description,
         "ref_number": txn.ref_number,
         "closing_balance": txn.closing_balance,

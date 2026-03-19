@@ -85,6 +85,23 @@ class CounterpartyCategory(str, Enum):
     UTILITIES_INTERNET = "Utilities & Internet"
 
 
+class SpendCategory(str, Enum):
+    """Macro classification of what a spend is going towards.
+
+    NEED       — essential living expense (rent, utilities, healthcare, transport)
+    WANT       — discretionary spending (dining, entertainment, shopping, travel)
+    INVESTMENT — capital deployed into markets (equity, MF, SIP) or moved to
+                 own savings / FD (money parked for future use)
+
+    Only meaningful for OUTFLOW transactions. INFLOW rows remain NULL.
+    FRIENDS_FAMILY transfers are intentionally left NULL — they are internal
+    or family-support transactions, not a standard spend category.
+    """
+    NEED = "NEED"
+    WANT = "WANT"
+    INVESTMENT = "INVESTMENT"
+
+
 # ---------------------------------------------------------------------------
 # ParsedTransaction  (intermediate — what every parser produces)
 # ---------------------------------------------------------------------------
@@ -154,6 +171,7 @@ class CanonicalTransaction(BaseModel):
     upi_type: UPIType | None = None
     counterparty: str | None = None
     counterparty_category: CounterpartyCategory | None = None
+    spend_category: SpendCategory | None = None   # NEED / WANT / INVESTMENT  (NULL for INFLOW + Friends & Family)
 
     # --- Raw / audit ---
     raw_description: str

@@ -34,6 +34,10 @@ import { SummaryCards } from "@/components/dashboard/summary-cards"
 import { CategoryBreakdownChart } from "@/components/dashboard/category-breakdown-chart"
 import { MonthlyTrendChart } from "@/components/dashboard/monthly-trend-chart"
 import { TopCounterpartiesTable } from "@/components/dashboard/top-counterparties-table"
+import { SpendingBreakdownChart } from "@/components/dashboard/spending-breakdown-chart"
+import { RecurringCard } from "@/components/dashboard/recurring-card"
+import { GoalsSection } from "@/components/dashboard/goals-section"
+import { UploadButton } from "@/components/dashboard/upload-button"
 import { useTransactions } from "@/hooks/use-transactions"
 import { useNegativeSurplusMonths } from "@/hooks/use-metrics"
 import { formatCurrency } from "@/lib/utils"
@@ -141,19 +145,22 @@ export default function DashboardPage() {
       )}
 
       {/* ── Date Range Picker ─────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold">Overview</h1>
           <p className="text-sm text-muted-foreground">
             Your financial snapshot at a glance.
           </p>
         </div>
-        <DateRangePicker
-          preset={preset}
-          customRange={customRange}
-          onPresetChange={handlePresetChange}
-          onCustomChange={handleCustomChange}
-        />
+        <div className="flex items-center gap-2">
+          <UploadButton />
+          <DateRangePicker
+            preset={preset}
+            customRange={customRange}
+            onPresetChange={handlePresetChange}
+            onCustomChange={handleCustomChange}
+          />
+        </div>
       </div>
 
       {/* ── Summary Cards ─────────────────────────────────────────── */}
@@ -161,6 +168,12 @@ export default function DashboardPage() {
         currentRange={dateRange}
         previousRange={previousRange}
       />
+
+      {/* ── Spending Breakdown (N/W/S/I) + Recurring ─────────────── */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+        <SpendingBreakdownChart dateRange={dateRange} className="lg:col-span-3" />
+        <RecurringCard className="lg:col-span-2" />
+      </div>
 
       {/* ── Category Breakdown + Top Counterparties ───────────────── */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
@@ -178,6 +191,9 @@ export default function DashboardPage() {
 
       {/* ── Monthly Trend Chart ───────────────────────────────────── */}
       <MonthlyTrendChart />
+
+      {/* ── Goals ─────────────────────────────────────────────────── */}
+      <GoalsSection />
 
     </div>
   )

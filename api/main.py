@@ -20,6 +20,8 @@ from api.auth import get_current_user
 from api.database import init_db
 from api.routes import metrics, pipeline, transactions
 from api.routes.auth import router as auth_router
+from api.routes.goals import router as goals_router
+from api.routes.recurring import router as recurring_router
 from api.routes.scraper import router as scraper_router
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
@@ -54,7 +56,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Arth API",
     description="Personal finance transaction pipeline & query API",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -90,6 +92,8 @@ app.include_router(transactions.router, prefix="/api/transactions", tags=["Trans
 app.include_router(metrics.router,      prefix="/api/metrics",       tags=["Metrics"],       dependencies=_auth)
 app.include_router(pipeline.router,     prefix="/api/pipeline",      tags=["Pipeline"],      dependencies=_auth)
 app.include_router(scraper_router,      prefix="/api/scraper",       tags=["Scraper"],       dependencies=_auth)
+app.include_router(recurring_router,    prefix="/api/recurring",     tags=["Recurring"],     dependencies=_auth)
+app.include_router(goals_router,        prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
 
 
 # ---------------------------------------------------------------------------
