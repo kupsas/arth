@@ -72,6 +72,11 @@ jobs:
           ANTHROPIC_API_KEY: dummy
           GOOGLE_API_KEY: dummy
           APP_ENV: test
+          # api/auth.py reads these at import time; there is no .env in CI.
+          # Must match credentials asserted in tests/test_db_and_api.py::TestAuth.
+          AUTH_USERNAME: sashank
+          AUTH_PASSWORD: arth2026
+          AUTH_SECRET_KEY: ci-only-not-a-secret-fixed-for-deterministic-tests
 
       # ── 7. Upload coverage report ─────────────────────────────────────────
       # Stored as a build artifact so you can download and inspect it.
