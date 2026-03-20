@@ -4,6 +4,7 @@ openai>=2.0
 anthropic>=0.30
 google-genai>=1.0
 pyyaml>=6.0
+types-PyYAML>=6.0  # stub package so mypy can type-check `import yaml`
 pytest>=8.0
 pdfplumber>=0.11
 sqlmodel>=0.0.22
