@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
+from api.auth import get_current_user
 from api.main import app
 from api.database import get_session
 from api.models import PipelineRun, Transaction
@@ -73,6 +74,9 @@ def api_client(engine):
             yield session
 
     app.dependency_overrides[get_session] = _override_session
+    # Bypass auth for all existing API tests — they test DB/API logic, not auth.
+    # Auth-specific behaviour is tested in TestAuth below using a separate fixture.
+    app.dependency_overrides[get_current_user] = lambda: "test_user"
 
     # Temporarily neuter init_db() so the lifespan doesn't try to create
     # tables on the production engine (which would touch a real DB file).
@@ -448,3 +452,223 @@ class TestPipelineTrigger:
         data = resp.json()
         assert len(data["run_ids"]) == 1
         assert "Pipeline started" in data["message"]
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Q11: Negative surplus months endpoint tests
+# ───────────────────────────────────────────────────────────────────────────
+
+class TestNegativeSurplusMonths:
+    """Tests for GET /api/metrics/negative-surplus-months (Q11)."""
+
+    def test_empty_db_returns_zero_deficits(self, client: TestClient):
+        """When there are no transactions at all, deficit count must be 0."""
+        resp = client.get("/api/metrics/negative-surplus-months")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["months_with_deficit"] == 0
+        assert data["total_deficit"] == 0.0
+        assert data["deficit_months"] == []
+
+    def test_surplus_month_not_counted(self, client: TestClient, session: Session):
+        """A month where income > expense must NOT appear in deficit_months."""
+        today = datetime.date.today()
+        this_month = today.replace(day=15)
+
+        # ₹1000 income this month
+        _seed_db_transaction(
+            session, content_hash="q11_in",
+            direction="INFLOW", amount=1000.0,
+            txn_type="INCOME_SALARY", txn_date=this_month,
+        )
+        # ₹500 expense this month (income still wins)
+        _seed_db_transaction(
+            session, content_hash="q11_out",
+            direction="OUTFLOW", amount=500.0,
+            txn_type="UPI_EXPENSE", txn_date=this_month,
+        )
+
+        resp = client.get("/api/metrics/negative-surplus-months")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["months_with_deficit"] == 0
+
+    def test_deficit_month_detected(self, client: TestClient, session: Session):
+        """A month where expense > income must appear in deficit_months."""
+        today = datetime.date.today()
+        this_month = today.replace(day=15)
+
+        # ₹500 income, ₹1200 expense → net = -700 → deficit
+        _seed_db_transaction(
+            session, content_hash="q11_low_in",
+            direction="INFLOW", amount=500.0,
+            txn_type="INCOME_SALARY", txn_date=this_month,
+        )
+        _seed_db_transaction(
+            session, content_hash="q11_high_out",
+            direction="OUTFLOW", amount=1200.0,
+            txn_type="UPI_EXPENSE", txn_date=this_month,
+        )
+
+        resp = client.get("/api/metrics/negative-surplus-months")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["months_with_deficit"] == 1
+        assert data["total_deficit"] == pytest.approx(700.0, abs=0.01)
+        assert len(data["deficit_months"]) == 1
+        # The net must be negative (expense > income)
+        assert data["deficit_months"][0]["net"] < 0
+
+    def test_self_transfers_excluded(self, client: TestClient, session: Session):
+        """SELF_TRANSFER and CARD_PAYMENT rows must not affect the net calculation."""
+        today = datetime.date.today()
+        this_month = today.replace(day=15)
+
+        # Real income ₹1000
+        _seed_db_transaction(
+            session, content_hash="q11_real_in",
+            direction="INFLOW", amount=1000.0,
+            txn_type="INCOME_SALARY", txn_date=this_month,
+        )
+        # Real expense ₹400
+        _seed_db_transaction(
+            session, content_hash="q11_real_out",
+            direction="OUTFLOW", amount=400.0,
+            txn_type="UPI_EXPENSE", txn_date=this_month,
+        )
+        # SELF_TRANSFER should be excluded from both sides
+        _seed_db_transaction(
+            session, content_hash="q11_self",
+            direction="OUTFLOW", amount=5000.0,
+            txn_type="SELF_TRANSFER", txn_date=this_month,
+        )
+        # CARD_PAYMENT should also be excluded from expenses
+        _seed_db_transaction(
+            session, content_hash="q11_card_pay",
+            direction="OUTFLOW", amount=3000.0,
+            txn_type="CARD_PAYMENT", txn_date=this_month,
+        )
+
+        # Net = 1000 - 400 = +600 → no deficit
+        resp = client.get("/api/metrics/negative-surplus-months")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["months_with_deficit"] == 0
+
+    def test_months_param_respected(self, client: TestClient, session: Session):
+        """months=1 should only look at the current month."""
+        today = datetime.date.today()
+        this_month = today.replace(day=15)
+
+        # deficit THIS month
+        _seed_db_transaction(
+            session, content_hash="q11_cur_out",
+            direction="OUTFLOW", amount=999.0,
+            txn_type="UPI_EXPENSE", txn_date=this_month,
+        )
+
+        resp = client.get("/api/metrics/negative-surplus-months", params={"months": 1})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_months"] == 1
+        assert data["months_with_deficit"] == 1
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Auth tests — uses a raw TestClient with NO dependency overrides so we
+# exercise the real authentication code path.
+# ───────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture(name="unauthed_client")
+def unauthed_api_client(engine):
+    """TestClient with DB overridden but auth NOT bypassed.
+
+    Used to test the actual login/logout/401 behaviour.
+    """
+    def _override_session():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_session
+
+    import api.database as _db_mod
+    _original_init = _db_mod.init_db
+    _db_mod.init_db = lambda: None
+
+    with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
+
+    _db_mod.init_db = _original_init
+    app.dependency_overrides.clear()
+
+
+class TestAuth:
+    def test_protected_endpoint_rejects_without_cookie(self, unauthed_client: TestClient):
+        """Any protected endpoint must return 401 with no session cookie."""
+        resp = unauthed_client.get("/api/transactions")
+        assert resp.status_code == 401
+
+    def test_health_is_public(self, unauthed_client: TestClient):
+        """/health must be reachable without a session."""
+        resp = unauthed_client.get("/health")
+        assert resp.status_code == 200
+
+    def test_login_with_correct_credentials(self, unauthed_client: TestClient):
+        """POST /api/auth/login with correct credentials returns 200 + sets cookie."""
+        resp = unauthed_client.post(
+            "/api/auth/login",
+            json={"username": "sashank", "password": "arth2026"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["authenticated"] is True
+        assert "arth_session" in resp.cookies
+
+    def test_login_with_wrong_password(self, unauthed_client: TestClient):
+        """POST /api/auth/login with wrong password returns 401."""
+        resp = unauthed_client.post(
+            "/api/auth/login",
+            json={"username": "sashank", "password": "wrongpassword"},
+        )
+        assert resp.status_code == 401
+
+    def test_login_with_wrong_username(self, unauthed_client: TestClient):
+        """POST /api/auth/login with wrong username returns 401."""
+        resp = unauthed_client.post(
+            "/api/auth/login",
+            json={"username": "notauser", "password": "arth2026"},
+        )
+        assert resp.status_code == 401
+
+    def test_protected_endpoint_accessible_after_login(self, unauthed_client: TestClient):
+        """After logging in, protected endpoints return 200 (not 401)."""
+        unauthed_client.post(
+            "/api/auth/login",
+            json={"username": "sashank", "password": "arth2026"},
+        )
+        resp = unauthed_client.get("/api/transactions")
+        assert resp.status_code == 200
+
+    def test_me_returns_username_when_authenticated(self, unauthed_client: TestClient):
+        """GET /api/auth/me returns the username after login."""
+        unauthed_client.post(
+            "/api/auth/login",
+            json={"username": "sashank", "password": "arth2026"},
+        )
+        resp = unauthed_client.get("/api/auth/me")
+        assert resp.status_code == 200
+        assert resp.json()["username"] == "sashank"
+
+    def test_me_returns_401_when_not_authenticated(self, unauthed_client: TestClient):
+        """GET /api/auth/me returns 401 with no session."""
+        resp = unauthed_client.get("/api/auth/me")
+        assert resp.status_code == 401
+
+    def test_logout_clears_session(self, unauthed_client: TestClient):
+        """After logout, protected endpoints return 401 again."""
+        unauthed_client.post(
+            "/api/auth/login",
+            json={"username": "sashank", "password": "arth2026"},
+        )
+        unauthed_client.post("/api/auth/logout")
+        resp = unauthed_client.get("/api/transactions")
+        assert resp.status_code == 401

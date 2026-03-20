@@ -56,13 +56,28 @@ python3 -m uvicorn api.main:app --port 8000 --reload
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Base URL of the FastAPI backend |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Base URL of the FastAPI backend, or `same-origin` (see below) |
+| `INTERNAL_API_URL` | `http://127.0.0.1:8000` | Where the **server-side** proxy sends `/api-backend/*` (FastAPI on your machine) |
+| `NEXT_ALLOWED_DEV_ORIGINS` | _(unset)_ | Comma-separated hostnames only (no `https://`) so HMR works when using Cloudflare Tunnel in dev — optional |
 
-Create a `.env.local` file in `dashboard/` to override:
+Create a `.env.local` file in `dashboard/` to override.
+
+**Local dev (default):**
 
 ```bash
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
+
+**Cloudflare Tunnel (or any public URL for the UI only):**  
+If the browser loads the dashboard at `https://….trycloudflare.com` but you pointed `NEXT_PUBLIC_API_URL` at a *second* tunnel for port 8000, login sets `arth_session` on the API host — Next.js never sees that cookie and you bounce back to `/login`. Use **one tunnel to port 3000** and:
+
+```bash
+NEXT_PUBLIC_API_URL=same-origin
+```
+
+API calls go to `/api-backend/...` on the same hostname; `app/api-backend/[...path]/route.ts` forwards to FastAPI on loopback. You can stop the second tunnel to 8000.
+
+Optional: `INTERNAL_API_URL` if FastAPI is not on `127.0.0.1:8000`.
 
 ## Project Structure
 

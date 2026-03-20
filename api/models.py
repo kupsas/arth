@@ -1,13 +1,15 @@
 """
 SQLModel table definitions for Arth's SQLite database.
 
-Three tables:
-  - PipelineRun    — audit trail of each pipeline execution
-  - Transaction    — the core financial data, mirrors CanonicalTransaction
-                     with DB-specific additions (id, content_hash, timestamps,
-                     source_type, gmail_message_id)
-  - ProcessedEmail — dedup ledger for the Gmail scraper; one row per Gmail
-                     message ID so the same email is never processed twice
+Tables:
+  - PipelineRun       — audit trail of each pipeline execution
+  - Transaction       — the core financial data, mirrors CanonicalTransaction
+                        with DB-specific additions (id, content_hash, timestamps,
+                        source_type, gmail_message_id, spend_category)
+  - ProcessedEmail    — dedup ledger for the Gmail scraper; one row per Gmail
+                        message ID so the same email is never processed twice
+  - RecurringPattern  — auto-detected recurring transaction patterns (Phase 4.5c)
+  - Goal              — user-defined financial goals (Phase 4.5d)
 
 Design notes:
   - Enum fields are stored as VARCHAR (SQLite has no native enum type anyway).
@@ -120,6 +122,12 @@ class Transaction(SQLModel, table=True):
     # NULL for statement-sourced rows; set for email + reconciled rows.
     gmail_message_id: str | None = Field(default=None, index=True)
 
+    # ── Phase 4.5c: Needs / Wants / Savings tagging ──────────────────────
+    # Macro classification of what this OUTFLOW transaction is going towards.
+    # Values: "NEED" | "WANT" | "SAVING" | "INVESTMENT" | NULL
+    # NULL for INFLOW transactions (income) and any unclassified rows.
+    spend_category: str | None = Field(default=None, index=True)
+
 
 # ───────────────────────────────────────────────────────────────────────────
 # ProcessedEmail — dedup ledger for the Gmail scraper
@@ -156,5 +164,110 @@ class ProcessedEmail(SQLModel, table=True):
     error_message: str | None = None        # populated on status='failed'
 
     processed_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# RecurringPattern — auto-detected recurring transaction patterns (Phase 4.5c)
+# ───────────────────────────────────────────────────────────────────────────
+
+class RecurringPattern(SQLModel, table=True):
+    """A recurring transaction pattern detected by the detection algorithm.
+
+    One row per unique (counterparty, direction, frequency) combination.
+    The algorithm runs a statistical analysis on transaction history to find
+    groups with consistent intervals (std dev < 25% of median interval).
+
+    is_confirmed: False = auto-detected, True = user has confirmed the pattern.
+    is_active: True if the counterparty was seen within the last 2× expected intervals.
+    """
+
+    __tablename__ = "recurring_patterns"
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    counterparty: str = Field(index=True)
+    counterparty_category: str | None = None
+    direction: str = Field(index=True)          # "INFLOW" or "OUTFLOW"
+
+    # Statistical properties derived from matched transactions
+    expected_amount: float                       # median of matched transaction amounts
+    amount_tolerance: float = 0.0               # std dev of amounts (how much it varies)
+    frequency: str = Field(index=True)          # "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY"
+    day_of_month: int | None = None             # typical day (for monthly patterns)
+
+    # Temporal tracking
+    last_seen_date: datetime.date
+    next_expected_date: datetime.date | None = None  # last_seen + median_interval
+
+    # State
+    is_active: bool = Field(default=True, index=True)  # False if overdue by 2× interval
+    is_confirmed: bool = False                          # True when user confirms the pattern
+
+    # Aggregate stats
+    match_count: int = 0                        # how many transactions matched this pattern
+    total_amount: float = 0.0                   # sum of all matched amounts
+
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Goal — user-defined financial goals (Phase 4.5d)
+# ───────────────────────────────────────────────────────────────────────────
+
+class Goal(SQLModel, table=True):
+    """A financial goal tracked by the user.
+
+    goal_type values:
+      "EXPENSE_LIMIT" — keep category spending under target_amount/month (auto-computed)
+      "SAVINGS"       — accumulate target_amount by target_date (manual current_value)
+      "EMERGENCY_FUND"— maintain N months of expenses as liquid savings (manual)
+      "INVESTMENT"    — hit portfolio target or SIP consistency (manual)
+      "DEBT_PAYOFF"   — pay off loan ahead of schedule (manual)
+      "INSURANCE"     — maintain adequate insurance cover (manual)
+      "TAX"           — maximise 80C deductions / harvest losses (manual)
+
+    status values: "ON_TRACK" | "AT_RISK" | "BEHIND" | "ACHIEVED" | "PAUSED"
+
+    Progress for EXPENSE_LIMIT goals is auto-computed live from the transactions DB.
+    All other goals use current_value (manually updated by the user).
+    """
+
+    __tablename__ = "goals"
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    name: str
+    goal_type: str = Field(index=True)          # GoalType string
+
+    target_amount: float | None = None           # e.g. 10000 (spend limit, target balance)
+    target_date: datetime.date | None = None     # deadline for the goal
+
+    # JSON blob for goals with complex conditions (e.g. "savings_rate >= 40").
+    # NULL for most goals; used only when target_amount alone isn't enough.
+    target_metric: str | None = None
+
+    priority: int = 3                            # 1 (highest) to 5 (lowest)
+    linked_layer: int = 3                        # 1-5 financial layers from goals_framework
+    linked_category: str | None = None          # e.g. "Food & Dining" for EXPENSE_LIMIT goals
+
+    user_id: str = Field(default="sashank", index=True)  # "sashank" or "aditi"
+
+    # Manual override for non-auto-computable goals (updated by PATCH /api/goals/{id})
+    current_value: float | None = None
+
+    status: str = Field(default="ON_TRACK", index=True)
+    notes: str | None = None
+
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )

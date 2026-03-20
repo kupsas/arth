@@ -12,6 +12,7 @@ system_template: |-
   upi_type (if requested): {upi_types}
   counterparty: A short, clean, human-readable name (2-4 words max).
   counterparty_category (if requested): {categories}
+  spend_category (if requested): {spend_categories}
 
   Classification rules:
   - UPI_EXPENSE: UPI payment to a merchant/business/service.
@@ -55,6 +56,19 @@ system_template: |-
   Uber ride or a genuine P2P transfer.
 
   IMPORTANT for counterparty_category: First identify the txn_type and counterparty, then use their combination to pick the best category. For example, "UPI_EXPENSE Spotify" → "Mobile, OTT & Subscriptions", "UPI_EXPENSE Reliance Jio Infocom" → "Utilities & Internet".
+
+  spend_category rules (OUTFLOW transactions only — leave NULL for INFLOW/income):
+  - NEED: rent, utilities, electricity, water, internet/mobile bills, healthcare, medicine,
+    commuting (auto/cab/fuel/FASTag), insurance premiums, loan repayments, banking fees.
+    Also: Swiggy Instamart (grocery delivery = essential household items).
+  - WANT: food delivery, restaurant dining, entertainment (cinema/events), online shopping,
+    travel & hotels, OTT/streaming subscriptions, personal grooming, gifts.
+    Swiggy Food and Swiggy Dineout are WANT. Generic "Swiggy" (sub-brand unknown) is also WANT.
+  - INVESTMENT: equity purchases, mutual fund purchases, SIPs, any outflow to Asset Markets,
+    self-transfers to own savings account, FD purchases, moving money to own wallet.
+  - Transfers to friends or family members: leave spend_category NULL (do NOT classify these —
+    the user will tag them manually if needed).
+  When direction is INFLOW, always omit spend_category from the response (don't include the key).
 
   {few_shot}
 

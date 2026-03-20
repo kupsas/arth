@@ -13,6 +13,9 @@ How OAuth works (plain English):
     silently if it's expired.  No browser needed.
 
 Usage:
+    import logging
+
+    logger = logging.getLogger(__name__)
     client = GmailClient()
     client.authenticate()                              # one-time browser prompt
 
@@ -22,7 +25,7 @@ Usage:
     )
     for msg in messages:
         html = client.get_message_body(msg["id"])
-        print(html[:200])
+        logger.debug("HTML preview: %s...", html[:200])
 """
 
 from __future__ import annotations

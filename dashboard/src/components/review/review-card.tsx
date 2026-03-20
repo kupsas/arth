@@ -31,7 +31,14 @@ import {
   categoryColor,
   cn,
 } from "@/lib/utils"
-import type { Transaction } from "@/lib/types"
+import type { Transaction, SpendCategory } from "@/lib/types"
+
+// Colour tokens for each spend category badge
+const SPEND_CATEGORY_STYLES: Record<SpendCategory, string> = {
+  NEED:       "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+  WANT:       "bg-orange-500/15 text-orange-600 dark:text-orange-400",
+  INVESTMENT: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -113,6 +120,18 @@ export function ReviewCard({
           {txn.txn_type && (
             <Badge variant="outline" className="font-normal text-xs">
               {txnTypeLabel(txn.txn_type)}
+            </Badge>
+          )}
+          {/* Spend category — only relevant for outflow transactions */}
+          {!isInflow && txn.spend_category && (
+            <Badge
+              variant="secondary"
+              className={cn(
+                "font-normal text-xs",
+                SPEND_CATEGORY_STYLES[txn.spend_category as SpendCategory],
+              )}
+            >
+              {txn.spend_category}
             </Badge>
           )}
           {!txn.counterparty_category && !txn.txn_type && (

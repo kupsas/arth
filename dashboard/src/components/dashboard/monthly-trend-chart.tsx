@@ -1,12 +1,12 @@
 /**
- * MonthlyTrendChart — area chart showing income vs expense over trailing months.
+ * MonthlyTrendChart — area chart showing inflow vs outflow over trailing months.
  *
  * Design:
- *   - Two overlapping areas: income (emerald) on top, expense (rose) below
+ *   - Two overlapping areas: inflow (emerald) on top, outflow (rose) below
  *   - Gradient fills so the areas are visually distinct without being garish
  *   - X-axis: short month labels ("Mar '25")
  *   - Y-axis: compact currency (₹1.2L, ₹45K)
- *   - Hover tooltip shows income, expense, net, and savings rate
+ *   - Hover tooltip shows inflow, outflow, net, and savings rate
  *   - Month selector: 6 / 12 / 24 months (top-right of the card)
  *
  * Note: useMonthlyTrend() returns data for ALL trailing N months regardless
@@ -69,11 +69,11 @@ function TrendTooltip({
     <div className="rounded-lg border border-border/50 bg-background px-3 py-2.5 text-xs shadow-xl">
       <p className="mb-2 font-medium">{label}</p>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Income</span>
+        <span className="text-muted-foreground">Inflow</span>
         <span className="text-right font-medium text-emerald-500 tabular-nums">
           {formatCurrency(d.income)}
         </span>
-        <span className="text-muted-foreground">Expense</span>
+        <span className="text-muted-foreground">Outflow</span>
         <span className="text-right font-medium text-rose-500 tabular-nums">
           {formatCurrency(d.expense)}
         </span>
@@ -122,11 +122,11 @@ export function MonthlyTrendChart({ className }: MonthlyTrendChartProps) {
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <span className="inline-block h-2 w-3 rounded-sm bg-emerald-500" />
-                Income
+                Inflow
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="inline-block h-2 w-3 rounded-sm bg-rose-500" />
-                Expense
+                Outflow
               </span>
             </div>
           </div>
@@ -225,7 +225,7 @@ export function MonthlyTrendChart({ className }: MonthlyTrendChartProps) {
                 cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
               />
 
-              {/* Income area — drawn first so expense overlaps it if needed */}
+              {/* Inflow area — drawn first so outflow overlaps it if needed */}
               <Area
                 type="monotone"
                 dataKey="income"
@@ -236,7 +236,7 @@ export function MonthlyTrendChart({ className }: MonthlyTrendChartProps) {
                 activeDot={{ r: 4, fill: "#10b981", strokeWidth: 0 }}
               />
 
-              {/* Expense area */}
+              {/* Outflow area */}
               <Area
                 type="monotone"
                 dataKey="expense"

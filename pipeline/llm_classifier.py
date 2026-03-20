@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,10 +31,14 @@ from pipeline.models import (
     CanonicalTransaction,
     Channel,
     CounterpartyCategory,
+    Direction,
+    SpendCategory,
     TxnType,
     UPIType,
 )
 from pipeline.prompts import batch_classify_prompt
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -67,16 +72,16 @@ def classify_llm(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]
 
     work = _build_work_items(txns)
     if not work:
-        print("  [LLM] All fields already filled — nothing to do.")
+        logger.debug("LLM: all fields already filled — nothing to do")
         return txns
 
     num_batches = (len(work) + LLM_BATCH_SIZE - 1) // LLM_BATCH_SIZE
-    print(f"  [LLM] {len(work)} transactions need classification, "
-          f"batching into {num_batches} calls")
+    logger.info("LLM: %d transactions need classification, batching into %d calls",
+                len(work), num_batches)
 
     if llm_model == "auto":
         model_chain = LLM_FALLBACK_CHAIN
-        print(f"  [LLM] Auto mode — fallback chain: {' → '.join(model_chain)}")
+        logger.info("LLM: auto mode — fallback chain: %s", " → ".join(model_chain))
     else:
         if llm_model not in LLM_MODEL_MAP:
             raise ValueError(
@@ -104,7 +109,7 @@ def classify_llm(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]
             _save_cache_for_key(cache_key, results)
             _apply_results(txns, indices, items, results)
         else:
-            print(f"  [LLM WARN] All models failed for batch starting at {batch_start}")
+            logger.warning("LLM: all models failed for batch starting at index %d", batch_start)
 
     return txns
 
@@ -122,11 +127,12 @@ def _call_with_fallback(
             response = _call_llm(provider, model_id, system_msg, user_msg)
             results = _parse_response(response.text)
             if results:
-                print(f"  [LLM] ✓ {model_key} ({response.input_tokens}+{response.output_tokens} tokens)")
+                logger.info("LLM: ✓ %s (%d+%d tokens)",
+                            model_key, response.input_tokens, response.output_tokens)
                 return results
-            print(f"  [LLM] {model_key} returned empty/unparseable response, trying next...")
+            logger.warning("LLM: %s returned empty/unparseable response, trying next...", model_key)
         except Exception as e:
-            print(f"  [LLM] {model_key} failed: {e}, trying next...")
+            logger.warning("LLM: %s failed: %s, trying next...", model_key, e)
 
     return None
 
@@ -176,6 +182,10 @@ def _fields_needed(txn: CanonicalTransaction) -> list[str]:
         needs.append("counterparty")
     if txn.counterparty_category is None:
         needs.append("counterparty_category")
+    # Only ask LLM to fill spend_category for OUTFLOW transactions where it's still None.
+    # INFLOW transactions don't need a spend_category (the rules classifier already skips them).
+    if txn.spend_category is None and txn.direction == Direction.OUTFLOW:
+        needs.append("spend_category")
     return needs
 
 
@@ -228,10 +238,15 @@ def _call_anthropic(model: str, system: str, user: str) -> LLMResponse:
         messages=[{"role": "user", "content": user}],
         temperature=0.0,
     )
+    # Anthropic's content list is a union of many block types; we only expect
+    # TextBlock here. Guard defensively — if we ever get a different type,
+    # return empty text so the fallback chain can try the next model.
+    first_block = resp.content[0]
+    text = first_block.text if hasattr(first_block, "text") else ""  # type: ignore[union-attr]
     return LLMResponse(
-        text=resp.content[0].text,
-        input_tokens=resp.usage.input_tokens,
-        output_tokens=resp.usage.output_tokens,
+        text=text,
+        input_tokens=resp.usage.input_tokens or 0,
+        output_tokens=resp.usage.output_tokens or 0,
     )
 
 
@@ -258,8 +273,8 @@ def _call_google(model: str, system: str, user: str) -> LLMResponse:
     meta = resp.usage_metadata
     return LLMResponse(
         text=text,
-        input_tokens=meta.prompt_token_count if meta else 0,
-        output_tokens=meta.candidates_token_count if meta else 0,
+        input_tokens=(meta.prompt_token_count or 0) if meta else 0,
+        output_tokens=(meta.candidates_token_count or 0) if meta else 0,
     )
 
 
@@ -272,7 +287,7 @@ def _parse_response(raw: str) -> list[dict]:
     text = raw.strip()
     if text.startswith("```"):
         lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         text = "\n".join(lines)
     try:
         return json.loads(text)
@@ -284,7 +299,7 @@ def _parse_response(raw: str) -> list[dict]:
                 return json.loads(text[start : end + 1])
             except json.JSONDecodeError:
                 pass
-        print(f"  [LLM WARN] Could not parse response: {text[:200]}")
+        logger.warning("LLM: could not parse response: %s", text[:200])
         return []
 
 
@@ -328,6 +343,12 @@ def _apply_results(
                     if member.value.lower() == cat_val.lower():
                         txn.counterparty_category = member
                         break
+
+        if "spend_category" in r and txn.spend_category is None:
+            try:
+                txn.spend_category = SpendCategory(r["spend_category"])
+            except ValueError:
+                pass  # LLM returned an invalid value — leave None, don't crash
 
         _enforce_consistency(txn)
 

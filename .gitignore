@@ -46,8 +46,18 @@ data/test/benchmark_*.csv
 data/output/
 data/.llm_cache/
 
+# Log files — keep the directory itself (via .gitkeep) but ignore log contents
+data/logs/*.log
+data/logs/*.log.*
+
+# SQLite backup files — large, machine-specific, never commit
+data/backups/
+
 # SQLite database files (real data — never commit)
 data/*.db
+# WAL mode creates these alongside the main .db file — machine-local, do not commit
+data/*.db-wal
+data/*.db-shm
 
 # Gmail OAuth credentials and token (never commit — contains secrets)
 data/gmail_credentials.json

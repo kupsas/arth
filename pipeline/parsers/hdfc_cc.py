@@ -20,12 +20,15 @@ downstream code gets a clean, time-ordered stream regardless of file order.
 from __future__ import annotations
 
 import datetime
+import logging
 import warnings
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.base import BaseParser
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Column name constants  (normalised — stripped and lowercased for matching)
@@ -77,7 +80,7 @@ class HDFCCreditCardParser(BaseParser):
 
         # ── Step 1: detect delimiter ──────────────────────────────────────
         # Look at the first non-empty line to decide which format this is.
-        first_content = next((l for l in lines if l.strip()), "")
+        first_content = next((line for line in lines if line.strip()), "")
         is_new_format = "~|~" in first_content
         delimiter = "~|~" if is_new_format else "~"
 
@@ -271,7 +274,7 @@ class HDFCCreditCardParser(BaseParser):
                 return datetime.datetime.strptime(s, fmt).date()
             except ValueError:
                 continue
-        print(f"  [WARN] hdfc_cc: could not parse date '{s}' in {filename}")
+        logger.warning("hdfc_cc: could not parse date %r in %s", s, filename)
         return None
 
     @staticmethod

@@ -32,6 +32,13 @@ from scraper.orchestrator import scrape_new_emails
 
 FIXTURES = Path(__file__).parent / "fixtures" / "email_samples"
 
+# These tests require real bank email HTML samples which are gitignored (PII).
+# They run locally but are automatically skipped in CI where those files don't exist.
+pytestmark = pytest.mark.skipif(
+    not FIXTURES.exists(),
+    reason="email_samples fixtures not found (gitignored — local-only tests)",
+)
+
 # Sender addresses that appear in ALL_SENDERS (scraper/config.py)
 HDFC_SENDER  = "alerts@hdfcbank.net"
 ICICI_SENDER = "customernotification@icici.bank.in"
@@ -309,7 +316,7 @@ class TestFailedEmailHandling:
         client.get_message_body.side_effect = RuntimeError("Gmail API timeout")
 
         with patch("pipeline.config.LLM_MODEL", "none"):
-            result = scrape_new_emails(session=session, client=client)
+            scrape_new_emails(session=session, client=client)
 
         pe = session.exec(select(ProcessedEmail)).first()
         assert pe is not None

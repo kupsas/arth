@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.arth.backup.plist — launchd agent for daily Arth DB backups
+  ================================================================
+
+  INSTALL (run once):
+    cp /Users/saisashankkuppa/Documents/Arth/scripts/com.arth.backup.plist \
+       ~/Library/LaunchAgents/com.arth.backup.plist
+    launchctl load ~/Library/LaunchAgents/com.arth.backup.plist
+
+  VERIFY it loaded:
+    launchctl list | grep arth
+
+  RUN MANUALLY (useful for testing without waiting for 2am):
+    launchctl start com.arth.backup
+
+  CHECK LOGS:
+    tail -f /Users/saisashankkuppa/Documents/Arth/data/logs/backup.log
+
+  UNINSTALL:
+    launchctl unload ~/Library/LaunchAgents/com.arth.backup.plist
+    rm ~/Library/LaunchAgents/com.arth.backup.plist
+
+  HOW LAUNCHD WORKS (quick primer):
+    LaunchAgents in ~/Library/LaunchAgents/ run as YOUR user (not root).
+    They start automatically when you log in and persist across reboots.
+    If your laptop is asleep at 2am, launchd runs the job the next time
+    the machine is awake — it does NOT silently skip missed runs.
+-->
+<plist version="1.0">
+<dict>
+
+    <!-- Unique identifier — must match the filename (without .plist) -->
+    <key>Label</key>
+    <string>com.arth.backup</string>
+
+    <!-- The command to run: bash + the backup script -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/saisashankkuppa/Documents/Arth/scripts/backup_db.sh</string>
+    </array>
+
+    <!-- Run daily at 02:00 local time -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Redirect stdout + stderr to the backup log file -->
+    <key>StandardOutPath</key>
+    <string>/Users/saisashankkuppa/Documents/Arth/data/logs/backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/saisashankkuppa/Documents/Arth/data/logs/backup.log</string>
+
+    <!-- If the job exits non-zero, don't keep retrying — wait until next day -->
+    <key>ThrottleInterval</key>
+    <integer>3600</integer>
+
+</dict>
+</plist>

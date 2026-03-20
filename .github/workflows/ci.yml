@@ -1,0 +1,89 @@
+name: CI
+
+# Run on every push to main and on all pull requests.
+# Goal: catch regressions (lint, type errors, test failures) before they land.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Lint + Type-check + Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        # Single version matching our production runtime.
+        python-version: ["3.13"]
+
+    steps:
+      # ── 1. Get the code ───────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ──────────────────────────────────────────────────
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          # Cache pip downloads so subsequent runs are faster.
+          cache: pip
+
+      # ── 3. Install dependencies ───────────────────────────────────────────
+      - name: Install production dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install CI tools (ruff, mypy, pytest-cov)
+        run: pip install ruff mypy pytest-cov
+
+      # ── 4. Lint (ruff) ────────────────────────────────────────────────────
+      # ruff is fast (written in Rust) and catches unused imports, naming
+      # issues, and style problems.  Errors here fail the build immediately.
+      - name: Lint with ruff
+        run: ruff check pipeline/ api/ scraper/ tests/
+
+      # ── 5. Type-check (mypy) ──────────────────────────────────────────────
+      # mypy reads mypy.ini at the repo root for per-module settings.
+      # Third-party libraries without stubs are silenced via ignore_missing_imports.
+      - name: Type-check with mypy
+        run: mypy pipeline/ api/ scraper/
+
+      # ── 6. Tests (pytest + coverage) ──────────────────────────────────────
+      # -m "not slow" excludes any test marked @pytest.mark.slow (LLM API calls).
+      # Email parser / orchestrator tests that need gitignored fixture files are
+      # automatically skipped via pytestmark skipif (no fixture dir in CI).
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            -m "not slow" \
+            --cov=pipeline \
+            --cov=api \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=35 \
+            -q
+        env:
+          # Tests use in-memory SQLite; no real keys needed.
+          # Setting dummies prevents any code that reads os.getenv() from
+          # erroring out due to missing values.
+          OPENAI_API_KEY: dummy
+          ANTHROPIC_API_KEY: dummy
+          GOOGLE_API_KEY: dummy
+          APP_ENV: test
+          # api/auth.py reads these at import time; there is no .env in CI.
+          # Must match credentials asserted in tests/test_db_and_api.py::TestAuth.
+          AUTH_USERNAME: sashank
+          AUTH_PASSWORD: arth2026
+          AUTH_SECRET_KEY: ci-only-not-a-secret-fixed-for-deterministic-tests
+
+      # ── 7. Upload coverage report ─────────────────────────────────────────
+      # Stored as a build artifact so you can download and inspect it.
+      # Visit: Actions → this run → Artifacts → coverage-report
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7

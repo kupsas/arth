@@ -1,5 +1,5 @@
 /**
- * CategoryBreakdownChart — horizontal bar chart showing top expense (or income)
+ * CategoryBreakdownChart — horizontal bar chart showing top outflow (or inflow)
  * categories, ranked by total amount.
  *
  * Design choices:
@@ -9,7 +9,7 @@
  *     category is always the same colour regardless of its rank.
  *   - Capped at 8 categories to avoid a cramped chart.
  *   - Tooltip shows amount (formatted currency) + share of total (%).
- *   - Toggle between OUTFLOW (expenses) and INFLOW (income) via tab buttons.
+ *   - Toggle between OUTFLOW and INFLOW via tab buttons.
  *
  * Data source: useCategoryBreakdown(dateRange, direction)
  */
@@ -105,7 +105,7 @@ export function CategoryBreakdownChart({
     <Card className={cn("flex flex-col", className)}>
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-base">Spending by Category</CardTitle>
+          <CardTitle className="text-base">Outflow by Category</CardTitle>
           {/* Direction toggle */}
           <div className="flex items-center rounded-md border border-border p-0.5">
             {(["OUTFLOW", "INFLOW"] as Direction[]).map((dir) => (
@@ -119,7 +119,7 @@ export function CategoryBreakdownChart({
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                {dir === "OUTFLOW" ? "Expenses" : "Income"}
+                {dir === "OUTFLOW" ? "Outflow" : "Inflow"}
               </button>
             ))}
           </div>

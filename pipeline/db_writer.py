@@ -184,6 +184,7 @@ def write_to_db(
     )
     session.add(run)
     session.flush()  # assigns run.id without committing
+    assert run.id is not None  # flush guarantees this; tells mypy the id is set
 
     # Email-sourced transactions enter as unreviewed; statement-sourced are reviewed.
     is_reviewed_default = source_type != "email"

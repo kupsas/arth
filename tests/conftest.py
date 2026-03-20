@@ -8,12 +8,10 @@ loaded from the benchmark fixture file.
 from __future__ import annotations
 
 import json
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from pipeline.models import CanonicalTransaction, Direction
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BENCHMARK_FIXTURE = REPO_ROOT / "data" / "test" / "benchmark_20.json"

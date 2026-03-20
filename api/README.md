@@ -70,7 +70,7 @@ All metrics endpoints accept `date_from` and `date_to` query params (both defaul
 
 | Method | Path | Description | Key params |
 |---|---|---|---|
-| `GET` | `/summary` | Total income, expense, net, savings rate, txn count | `date_from`, `date_to` |
+| `GET` | `/summary` | Total income, expense, total_savings (Asset Markets outflows), net, savings rate, txn count | `date_from`, `date_to` |
 | `GET` | `/by-category` | Spending or income ranked by category with percentages | `date_from`, `date_to`, `direction` |
 | `GET` | `/top-counterparties` | Top N merchants by spend (OUTFLOW only) | `date_from`, `date_to`, `limit` |
 | `GET` | `/monthly-trend` | Month-by-month income vs expense, zero-filled for empty months | `months` (default 12, max 36) |
@@ -203,7 +203,7 @@ Dedup ledger for the Gmail scraper. One row per Gmail message the scraper has to
 
 ## Architecture Notes
 
-- **CORS:** Restricted to `localhost:3000` (Next.js dev) and `localhost:8000` (Swagger UI). Update `api/main.py` if serving from a different origin.
+- **CORS:** Defaults to `localhost:3000` and `localhost:8000`. For Cloudflare Tunnel or other origins, set `CORS_EXTRA_ORIGINS` in `.env` (comma-separated full origins, e.g. `https://abc.trycloudflare.com`).
 - **Auth:** No authentication in the current implementation. This is a known gap — see the gap analysis for the security roadmap.
 - **Scheduler lifecycle:** The APScheduler background thread starts with the FastAPI `lifespan` context and shuts down cleanly on exit. One `uvicorn` command manages the API and the email scraper.
 - **Database sessions:** Injected via FastAPI's `Depends(get_session)`. No global session state — each request gets its own session.

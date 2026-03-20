@@ -58,6 +58,7 @@ import {
 } from "@/lib/utils"
 import type {
   CounterpartyCategory,
+  SpendCategory,
   TransactionUpdate,
   TxnType,
 } from "@/lib/types"
@@ -86,6 +87,13 @@ const CATEGORIES: CounterpartyCategory[] = [
   "Transport & Fuel",
   "Travel & Stay",
   "Utilities & Internet",
+]
+
+// spend_category options — only OUTFLOW transactions have one
+const SPEND_CATEGORIES: { value: SpendCategory; label: string; color: string }[] = [
+  { value: "NEED",       label: "Need",       color: "bg-blue-500" },
+  { value: "WANT",       label: "Want",       color: "bg-orange-500" },
+  { value: "INVESTMENT", label: "Investment", color: "bg-purple-500" },
 ]
 
 const TXN_TYPES: { value: TxnType; label: string }[] = [
@@ -157,6 +165,7 @@ export function TransactionEditSheet({
   const [counterparty, setCounterparty] = React.useState("")
   const [category, setCategory] = React.useState<CounterpartyCategory | "">("")
   const [txnType, setTxnType] = React.useState<TxnType | "">("")
+  const [spendCategory, setSpendCategory] = React.useState<SpendCategory | "">("")
   const [notes, setNotes] = React.useState("")
   const [isReviewed, setIsReviewed] = React.useState(false)
 
@@ -169,6 +178,7 @@ export function TransactionEditSheet({
     setCounterparty(txn.counterparty ?? "")
     setCategory((txn.counterparty_category as CounterpartyCategory) ?? "")
     setTxnType((txn.txn_type as TxnType) ?? "")
+    setSpendCategory((txn.spend_category as SpendCategory) ?? "")
     setNotes(txn.notes ?? "")
     // forceReviewed means review queue wants to default this to true
     setIsReviewed(forceReviewed || txn.is_reviewed)
@@ -188,6 +198,8 @@ export function TransactionEditSheet({
         update.counterparty_category = (category as CounterpartyCategory) || null
       if (txnType !== ((txn.txn_type as TxnType) ?? ""))
         update.txn_type = (txnType as TxnType) || null
+      if (spendCategory !== ((txn.spend_category as SpendCategory) ?? ""))
+        update.spend_category = (spendCategory as SpendCategory) || null
       if (notes !== (txn.notes ?? ""))
         update.notes = notes || null
       if (isReviewed !== txn.is_reviewed)
@@ -331,6 +343,29 @@ export function TransactionEditSheet({
                   </SelectContent>
                 </Select>
               </FieldRow>
+
+              {/* Spend Category — only meaningful for outflow transactions */}
+              {txn.direction === "OUTFLOW" && (
+                <FieldRow label="Spend Category">
+                  <Select
+                    value={spendCategory}
+                    onValueChange={(v) => setSpendCategory(v as SpendCategory | "")}
+                  >
+                    <SelectTrigger className="h-8 w-full text-sm">
+                      <SelectValue placeholder="Select category…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">— None (let pipeline decide) —</SelectItem>
+                      {SPEND_CATEGORIES.map(({ value, label, color }) => (
+                        <SelectItem key={value} value={value}>
+                          <span className={cn("size-2 rounded-full mr-1 inline-block", color)} />
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FieldRow>
+              )}
 
               {/* Notes */}
               <FieldRow label="Notes">

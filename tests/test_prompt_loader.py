@@ -7,7 +7,6 @@ include expected content, and handle edge cases.
 
 from __future__ import annotations
 
-import pytest
 
 from pipeline.prompts import (
     batch_classify_prompt,

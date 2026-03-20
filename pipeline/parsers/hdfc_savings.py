@@ -12,11 +12,14 @@ Format quirks handled here (and ONLY here):
 from __future__ import annotations
 
 import datetime
+import logging
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.base import BaseParser
+
+logger = logging.getLogger(__name__)
 
 
 class HDFCSavingsParser(BaseParser):
@@ -122,7 +125,7 @@ class HDFCSavingsParser(BaseParser):
         try:
             return datetime.datetime.strptime(s, "%d/%m/%y").date()
         except ValueError:
-            print(f"  [WARN] Could not parse date '{s}' on line {line_num}")
+            logger.warning("hdfc_savings: could not parse date %r on line %d", s, line_num)
             return None
 
     @staticmethod

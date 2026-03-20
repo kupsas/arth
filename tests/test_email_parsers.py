@@ -35,6 +35,13 @@ from scraper.email_parsers.icici_bank import ICICINetBankingParser
 
 FIXTURES = Path(__file__).parent / "fixtures" / "email_samples"
 
+# These tests require real bank email HTML samples which are gitignored (PII).
+# They run locally but are automatically skipped in CI where those files don't exist.
+pytestmark = pytest.mark.skipif(
+    not FIXTURES.exists(),
+    reason="email_samples fixtures not found (gitignored — local-only tests)",
+)
+
 # Parser instances — one per bank sender, built with the live config so account
 # lookups (last-4 → account_id) use the same values as production.
 HDFC_ACCTS  = BANK_SENDERS["alerts@hdfcbank.net"]["accounts"]

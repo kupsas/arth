@@ -8,10 +8,13 @@ GSheet and our pipeline). Reports per-field accuracy and lists mismatches.
 from __future__ import annotations
 
 import csv
+import logging
 from collections import defaultdict
 from pathlib import Path
 
 from pipeline.models import CanonicalTransaction
+
+logger = logging.getLogger(__name__)
 
 
 def validate(

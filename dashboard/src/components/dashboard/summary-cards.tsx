@@ -2,10 +2,10 @@
  * SummaryCards — the four headline metric cards at the top of the dashboard.
  *
  * Cards:
- *   1. Total Income     (green arrow up = good)
- *   2. Total Expense    (green arrow down = spending less is good)
- *   3. Net Savings      (= income – expense; green arrow up = good)
- *   4. Savings Rate     (0–100 %; green arrow up = good)
+ *   1. Total Inflow     (green arrow up = good)
+ *   2. Total Outflow   (green arrow down = less outflow is good)
+ *   3. Savings          (total_savings = invested in Asset Markets; green arrow up = good)
+ *   4. Savings Rate     (invested % of income; green arrow up = good)
  *
  * Each card shows:
  *   - The metric value for the *current* period
@@ -152,17 +152,17 @@ export function SummaryCards({ currentRange, previousRange }: SummaryCardsProps)
 
   const prev = previous // may be undefined if still loading — DeltaBadge handles that
 
-  // Net can be negative; colour the number accordingly
-  const netColor = current.net >= 0 ? "text-emerald-500" : "text-rose-500"
+  // Savings (invested amount) is always non-negative; use emerald for consistency
+  const savingsColor = "text-emerald-500"
 
   return (
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
 
-      {/* ── Income ──────────────────────────────────────────────── */}
+      {/* ── Inflow ──────────────────────────────────────────────── */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-sm font-medium text-muted-foreground">
-            Total Income
+            Total Inflow
             <ArrowDownLeft className="size-4 text-emerald-500" />
           </CardTitle>
         </CardHeader>
@@ -181,11 +181,11 @@ export function SummaryCards({ currentRange, previousRange }: SummaryCardsProps)
         </CardContent>
       </Card>
 
-      {/* ── Expense ─────────────────────────────────────────────── */}
+      {/* ── Outflow ─────────────────────────────────────────────── */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-sm font-medium text-muted-foreground">
-            Total Expense
+            Total Outflow
             <ArrowUpRight className="size-4 text-rose-500" />
           </CardTitle>
         </CardHeader>
@@ -205,22 +205,25 @@ export function SummaryCards({ currentRange, previousRange }: SummaryCardsProps)
         </CardContent>
       </Card>
 
-      {/* ── Net Savings ──────────────────────────────────────────── */}
+      {/* ── Savings (invested in Asset Markets) ────────────────────── */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-sm font-medium text-muted-foreground">
-            Net Savings
+            Savings
             <Wallet className="size-4 text-muted-foreground" />
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-1.5">
-          <p className={cn("text-2xl font-bold tabular-nums", netColor)}>
-            {formatCurrency(current.net)}
+          <p className={cn("text-2xl font-bold tabular-nums", savingsColor)}>
+            {formatCurrency(current.total_savings)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            invested (Asset Markets)
           </p>
           {!loadingPrev && prev ? (
             <DeltaBadge
-              current={current.net}
-              previous={prev.net}
+              current={current.total_savings}
+              previous={prev.total_savings}
             />
           ) : (
             <Skeleton className="h-4 w-36" />
@@ -228,7 +231,7 @@ export function SummaryCards({ currentRange, previousRange }: SummaryCardsProps)
         </CardContent>
       </Card>
 
-      {/* ── Savings Rate ─────────────────────────────────────────── */}
+      {/* ── Savings Rate (invested % of income) ─────────────────────── */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-sm font-medium text-muted-foreground">
@@ -239,6 +242,9 @@ export function SummaryCards({ currentRange, previousRange }: SummaryCardsProps)
         <CardContent className="flex flex-col gap-1.5">
           <p className="text-2xl font-bold tabular-nums">
             {formatPercent(current.savings_rate)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            % of income invested
           </p>
           {!loadingPrev && prev ? (
             <DeltaBadge

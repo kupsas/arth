@@ -11,6 +11,7 @@ injection to point at an in-memory SQLite database instead.
 
 from __future__ import annotations
 
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from pipeline.config import DB_PATH
@@ -22,6 +23,17 @@ _engine = create_engine(
     echo=False,
     connect_args={"check_same_thread": False},
 )
+
+
+@event.listens_for(_engine, "connect")
+def _sqlite_enable_wal(dbapi_conn, connection_record) -> None:
+    """Use WAL journal so readers (API) and writers (scraper/pipeline) overlap better.
+
+    Default rollback mode can block concurrent access; WAL allows reads during writes.
+    """
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
 
 
 def get_engine():

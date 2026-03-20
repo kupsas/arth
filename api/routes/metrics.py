@@ -13,6 +13,8 @@ GET /api/metrics/by-category         — spending (or income) ranked by counterp
 GET /api/metrics/top-counterparties  — top N merchants/payees by total spend
 GET /api/metrics/monthly-trend       — month-by-month income vs expense for last N months
 GET /api/metrics/accounts-summary    — per-account inflow/outflow totals (all time)
+GET /api/metrics/negative-surplus-months — months where spending exceeded income (Q11)
+GET /api/metrics/by-spend-category   — spending broken down by NEED/WANT/SAVING/INVESTMENT
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import case, text
+from sqlalchemy import case
 from sqlmodel import Session, col, func, select
 
 from api.database import get_session
@@ -40,6 +42,11 @@ _INCOME_EXCLUSIONS: tuple[str, ...] = ("SELF_TRANSFER",)
 # txn_types excluded from expense totals (these outflows aren't real spending)
 _EXPENSE_EXCLUSIONS: tuple[str, ...] = ("CARD_PAYMENT", "SELF_TRANSFER")
 
+# counterparty_category values that count as "savings" (money invested).
+# Asset Markets = equities, MFs via ICICI Direct. Add others if needed
+# (e.g. "Financial Services, Insurance & Banking" for PPF, insurance with savings component).
+_SAVINGS_CATEGORIES: tuple[str, ...] = ("Asset Markets",)
+
 
 # ───────────────────────────────────────────────────────────────────────────
 # Response schemas (what each endpoint returns as JSON)
@@ -50,8 +57,9 @@ class MetricsSummary(BaseModel):
     date_to: str
     total_income: float
     total_expense: float
+    total_savings: float   # sum of OUTFLOW to Asset Markets (investments)
     net: float
-    savings_rate: float   # e.g. 42.5 means 42.5%
+    savings_rate: float   # total_savings / income * 100 (e.g. 42.5 = 42.5% invested)
     txn_count: int        # income + expense transaction count combined
 
 
@@ -85,6 +93,20 @@ class AccountRow(BaseModel):
     total_outflow: float
 
 
+class DeficitMonthRow(BaseModel):
+    month: str       # "YYYY-MM"
+    income: float
+    expense: float
+    net: float       # always negative for rows in this list
+
+
+class NegativeSurplusResponse(BaseModel):
+    months_with_deficit: int
+    total_months: int
+    deficit_months: list[DeficitMonthRow]
+    total_deficit: float  # sum of |net| across deficit months (positive number)
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ───────────────────────────────────────────────────────────────────────────
@@ -95,11 +117,26 @@ def _current_month_range() -> tuple[datetime.date, datetime.date]:
     return today.replace(day=1), today
 
 
-def _savings_rate(income: float, expense: float) -> float:
-    """Percentage of income kept after expenses. Returns 0.0 when income = 0."""
+def _savings_rate(income: float, total_savings: float) -> float:
+    """
+    Percentage of income that went into savings (investments).
+    savings = OUTFLOW to Asset Markets. Returns 0.0 when income = 0.
+    """
     if income <= 0:
         return 0.0
-    return round((income - expense) / income * 100, 2)
+    return round(total_savings / income * 100, 2)
+
+
+def _savings_where(q):
+    """
+    Narrow a query to savings transactions: OUTFLOW with counterparty_category
+    in _SAVINGS_CATEGORIES (e.g. Asset Markets = equities, MFs).
+    CARD_PAYMENT and SELF_TRANSFER are categorised as Self Transfer, not Asset Markets,
+    so the category filter is sufficient.
+    """
+    return q.where(Transaction.direction == "OUTFLOW").where(
+        col(Transaction.counterparty_category).in_(_SAVINGS_CATEGORIES)
+    )
 
 
 def _income_where(q):
@@ -203,6 +240,15 @@ def get_summary(
     )
     expense_sum, expense_count = session.exec(expense_q).one()
 
+    # ── Savings (OUTFLOW to Asset Markets) ───────────────────────────────
+    savings_q = _date_where(
+        _savings_where(
+            select(func.coalesce(func.sum(Transaction.amount), 0.0))
+        ),
+        date_from, date_to,
+    )
+    total_savings = round(float(session.exec(savings_q).one() or 0), 2)
+
     total_income = round(float(income_sum), 2)
     total_expense = round(float(expense_sum), 2)
 
@@ -211,8 +257,9 @@ def get_summary(
         date_to=date_to.isoformat(),
         total_income=total_income,
         total_expense=total_expense,
+        total_savings=total_savings,
         net=round(total_income - total_expense, 2),
-        savings_rate=_savings_rate(total_income, total_expense),
+        savings_rate=_savings_rate(total_income, total_savings),
         txn_count=income_count + expense_count,
     )
 
@@ -381,22 +428,99 @@ def get_monthly_trend(
         for row in session.exec(expense_q).all()
     }
 
+    # ── Savings by month (OUTFLOW to Asset Markets) ───────────────────────
+    savings_q = _savings_where(
+        select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+    ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+
+    savings_by_month: dict[str, float] = {
+        row.month: float(row.total or 0)
+        for row in session.exec(savings_q).all()
+    }
+
     # ── Merge into ordered list, zero-filling missing months ─────────────
     result = []
     for label in _generate_month_labels(months):
         income = round(income_by_month.get(label, 0.0), 2)
         expense = round(expense_by_month.get(label, 0.0), 2)
+        savings = round(savings_by_month.get(label, 0.0), 2)
         result.append(
             MonthlyTrendRow(
                 month=label,
                 income=income,
                 expense=expense,
                 net=round(income - expense, 2),
-                savings_rate=_savings_rate(income, expense),
+                savings_rate=_savings_rate(income, savings),
             )
         )
 
     return result
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# GET /negative-surplus-months  (Q11)
+# ───────────────────────────────────────────────────────────────────────────
+
+@router.get("/negative-surplus-months", response_model=NegativeSurplusResponse)
+def get_negative_surplus_months(
+    months: int = Query(
+        12, ge=1, le=36,
+        description="How many trailing months to scan (default 12, max 36)."
+    ),
+    *,
+    session: Session = Depends(get_session),
+):
+    """
+    Months where spending exceeded income (net < 0).
+
+    Answers Q11: "How many of my recent months had a budget deficit?"
+
+    Reuses the same monthly trend query — computes income and expense by month,
+    then filters for months where net < 0.  Returns the count, the list of
+    specific months, and the total deficit amount.
+    """
+    today = datetime.date.today()
+    base_total = today.year * 12 + (today.month - 1)
+    start_total = base_total - (months - 1)
+    start_year, start_mo = divmod(start_total, 12)
+    cutoff = datetime.date(start_year, start_mo + 1, 1)
+
+    month_col = func.strftime("%Y-%m", Transaction.txn_date)
+
+    income_by_month: dict[str, float] = {
+        row.month: float(row.total or 0)
+        for row in session.exec(
+            _income_where(
+                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+        ).all()
+    }
+
+    expense_by_month: dict[str, float] = {
+        row.month: float(row.total or 0)
+        for row in session.exec(
+            _expense_where(
+                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+        ).all()
+    }
+
+    deficit_months: list[DeficitMonthRow] = []
+    for label in _generate_month_labels(months):
+        income = round(income_by_month.get(label, 0.0), 2)
+        expense = round(expense_by_month.get(label, 0.0), 2)
+        net = round(income - expense, 2)
+        if net < 0:
+            deficit_months.append(
+                DeficitMonthRow(month=label, income=income, expense=expense, net=net)
+            )
+
+    return NegativeSurplusResponse(
+        months_with_deficit=len(deficit_months),
+        total_months=months,
+        deficit_months=deficit_months,
+        total_deficit=round(sum(abs(m.net) for m in deficit_months), 2),
+    )
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -449,6 +573,64 @@ def get_accounts_summary(
             ),
             total_inflow=round(float(r.total_inflow or 0), 2),
             total_outflow=round(float(r.total_outflow or 0), 2),
+        )
+        for r in rows
+    ]
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# GET /by-spend-category  — NEED / WANT / SAVING / INVESTMENT breakdown
+# ───────────────────────────────────────────────────────────────────────────
+
+class SpendCategoryRow(BaseModel):
+    spend_category: str     # "NEED" | "WANT" | "SAVING" | "INVESTMENT" | "UNCLASSIFIED"
+    amount: float
+    percentage: float       # 0–100 (share of total classified outflow)
+    txn_count: int
+
+
+@router.get("/by-spend-category", response_model=list[SpendCategoryRow])
+def metrics_by_spend_category(
+    date_from: datetime.date | None = Query(None),
+    date_to: datetime.date | None = Query(None),
+    *,
+    session: Session = Depends(get_session),
+) -> list[SpendCategoryRow]:
+    """Return OUTFLOW spending broken down by NEED / WANT / SAVING / INVESTMENT.
+
+    Excludes CARD_PAYMENT and SELF_TRANSFER from the "UNCLASSIFIED" bucket
+    because they aren't real spending.  Does not include INFLOW transactions.
+
+    This powers the "Spending Breakdown" donut chart on the dashboard.
+    """
+    q = (
+        select(
+            Transaction.spend_category,
+            func.sum(Transaction.amount).label("amount"),
+            func.count(Transaction.id).label("txn_count"),
+        )
+        .where(Transaction.direction == "OUTFLOW")
+        .where(Transaction.txn_type.not_in(["CARD_PAYMENT", "SELF_TRANSFER"]))  # type: ignore[union-attr]
+    )
+
+    if date_from:
+        q = q.where(Transaction.txn_date >= date_from)
+    if date_to:
+        q = q.where(Transaction.txn_date <= date_to)
+
+    q = q.group_by(Transaction.spend_category).order_by(
+        func.sum(Transaction.amount).desc()
+    )
+
+    rows = session.exec(q).all()
+    total = sum(float(r.amount or 0) for r in rows)
+
+    return [
+        SpendCategoryRow(
+            spend_category=r.spend_category or "UNCLASSIFIED",
+            amount=round(float(r.amount or 0), 2),
+            percentage=round(float(r.amount or 0) / total * 100, 1) if total > 0 else 0.0,
+            txn_count=r.txn_count,
         )
         for r in rows
     ]

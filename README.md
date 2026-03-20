@@ -212,6 +212,15 @@ Arth/
 pytest tests/
 ```
 
+CI (GitHub Actions) runs `ruff`, `mypy`, and `pytest` with coverage on `pipeline/` and `api/` and fails if combined coverage drops below **35%** (see `.github/workflows/ci.yml`). Scraper code is not part of that gate yet.
+
+**Optional — match CI lint locally before you push:**
+```bash
+python3 -m pip install pre-commit
+pre-commit install
+```
+Hooks run `ruff check` on `pipeline/`, `api/`, `scraper/`, and `tests/` (same paths as CI).
+
 **Environments:**
 
 | Environment | DB file | Start command |
