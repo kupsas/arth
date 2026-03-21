@@ -85,7 +85,7 @@ export default function DashboardPage() {
       )}
 
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Expense Tracker</h1>
         <p className="text-sm text-muted-foreground mt-1">
           This month&apos;s goals and multi-month trends. Upload statements in{" "}
           <Link href="/settings" className="underline underline-offset-2">

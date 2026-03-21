@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 /** Each entry defines one navigation item in the sidebar. */
 const NAV_ITEMS = [
   {
-    label: "Dashboard",
+    label: "Expense Tracker",
     href: "/",
     icon: LayoutDashboard,
   },
