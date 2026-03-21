@@ -46,6 +46,50 @@ def _column_exists(conn, table: str, column: str) -> bool:
     return any(row[1] == column for row in result)
 
 
+def _backfill_goal_chart_keys(conn) -> None:
+    """One-time style updates: map legacy goals to dashboard chart_key (idempotent)."""
+    if not _column_exists(conn, "goals", "chart_key"):
+        return
+    stmts = [
+        (
+            "UPDATE goals SET chart_key = 'expense_need_want_stack' "
+            "WHERE goal_type = 'EXPENSE_LIMIT' AND chart_key IS NULL "
+            "AND linked_category IS NULL"
+        ),
+        (
+            "UPDATE goals SET chart_key = 'investment_net' "
+            "WHERE goal_type = 'INVESTMENT' AND chart_key IS NULL"
+        ),
+        (
+            "UPDATE goals SET chart_key = 'category:food_and_dining' "
+            "WHERE goal_type = 'EXPENSE_LIMIT' AND chart_key IS NULL "
+            "AND linked_category = 'Food & Dining'"
+        ),
+        (
+            "UPDATE goals SET chart_key = 'category:shopping' "
+            "WHERE goal_type = 'EXPENSE_LIMIT' AND chart_key IS NULL "
+            "AND linked_category = 'Shopping & E-commerce'"
+        ),
+        (
+            "UPDATE goals SET chart_key = 'category:transport' "
+            "WHERE goal_type = 'EXPENSE_LIMIT' AND chart_key IS NULL "
+            "AND linked_category = 'Transport & Fuel'"
+        ),
+        (
+            "UPDATE goals SET chart_key = 'category:travel' "
+            "WHERE goal_type = 'EXPENSE_LIMIT' AND chart_key IS NULL "
+            "AND linked_category = 'Travel & Stay'"
+        ),
+        (
+            "UPDATE goals SET chart_key = 'category:gifts' "
+            "WHERE goal_type = 'EXPENSE_LIMIT' AND chart_key IS NULL "
+            "AND linked_category = 'Gifts & Personal Transfers'"
+        ),
+    ]
+    for sql in stmts:
+        conn.execute(text(sql))
+
+
 def _apply_sqlite_patches() -> None:
     """Add columns/tables introduced after the DB was first created (SQLite ALTER)."""
     with _engine.begin() as conn:
@@ -60,6 +104,22 @@ def _apply_sqlite_patches() -> None:
             conn.execute(
                 text("ALTER TABLE transactions ADD COLUMN exclusion_reason TEXT")
             )
+        if not _column_exists(conn, "goals", "chart_key"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN chart_key TEXT"))
+        if not _column_exists(conn, "goals", "progress_cadence"):
+            conn.execute(
+                text(
+                    "ALTER TABLE goals ADD COLUMN progress_cadence TEXT "
+                    "NOT NULL DEFAULT 'MONTHLY'"
+                )
+            )
+        conn.execute(
+            text(
+                "UPDATE goals SET progress_cadence = 'MONTHLY' "
+                "WHERE progress_cadence IS NULL OR TRIM(progress_cadence) = ''"
+            )
+        )
+        _backfill_goal_chart_keys(conn)
 
 
 def init_db() -> None:

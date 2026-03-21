@@ -48,23 +48,31 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 # The "last_4_digits" key is what appears in the email body (card/account number).
 # Parsers use this lookup to stamp the correct account_id on each ParsedTransaction.
 
+# HDFC InstaAlerts historically used @hdfcbank.net; many alerts now come from
+# @hdfcbank.bank.in ("HDFC Bank InstaAlerts <...>"). Same parsers/accounts.
+_HDFC_BANK_ACCOUNTS: dict[str, dict] = {
+    "3703": {
+        "account_id": "HDFC_SAL_3703",
+        "source_key": "hdfc_savings",
+    },
+    "1905": {
+        "account_id": "HDFC_CC_1905",
+        "source_key": "hdfc_cc_1905",
+    },
+    "5778": {
+        "account_id": "HDFC_CC_5778",
+        "source_key": "hdfc_cc_5778",
+    },
+}
+
 BANK_SENDERS: dict[str, dict] = {
     "alerts@hdfcbank.net": {
         "parser_key": "hdfc_bank",
-        "accounts": {
-            "3703": {
-                "account_id": "HDFC_SAL_3703",
-                "source_key": "hdfc_savings",
-            },
-            "1905": {
-                "account_id": "HDFC_CC_1905",
-                "source_key": "hdfc_cc_1905",
-            },
-            "5778": {
-                "account_id": "HDFC_CC_5778",
-                "source_key": "hdfc_cc_5778",
-            },
-        },
+        "accounts": _HDFC_BANK_ACCOUNTS,
+    },
+    "alerts@hdfcbank.bank.in": {
+        "parser_key": "hdfc_bank",
+        "accounts": _HDFC_BANK_ACCOUNTS,
     },
     # Note: ICICI transaction alerts come from the .bank.in domain (NOT .com).
     # customercare@icicibank.com sends MAB reminders and marketing — not transaction alerts.

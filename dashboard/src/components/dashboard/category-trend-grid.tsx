@@ -1,9 +1,11 @@
 "use client"
 
+import Link from "next/link"
 import {
   Bar,
   BarChart,
   CartesianGrid,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -14,9 +16,14 @@ import { RechartsTooltipCard } from "@/components/dashboard/recharts-tooltip"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useCategoryTrend } from "@/hooks/use-metrics"
-import { CATEGORY_SERIES_COLOR } from "@/lib/chart-colors"
+import { CATEGORY_SERIES_COLOR, CHART_GOAL_LINE } from "@/lib/chart-colors"
+import { categoryChartKey } from "@/lib/chart-keys"
 import { formatCurrency, formatInrChartAxis } from "@/lib/utils"
-import type { BarDrilldownChart, DashboardCategorySeries } from "@/lib/types"
+import type {
+  BarDrilldownChart,
+  DashboardCategorySeries,
+  Goal,
+} from "@/lib/types"
 
 const miniAxisX = { fontSize: 9, fill: "var(--muted-foreground)" }
 const miniAxisY = { fontSize: 9, fill: "var(--muted-foreground)" }
@@ -37,11 +44,15 @@ function MiniCategoryChart({
   title,
   series,
   months,
+  goalLine,
+  setGoalHref,
   onBarClick,
 }: {
   title: string
   series: DashboardCategorySeries
   months: number
+  goalLine?: number | null
+  setGoalHref?: string
   onBarClick: (month: string) => void
 }) {
   const { data, isLoading } = useCategoryTrend(series, months)
@@ -62,7 +73,17 @@ function MiniCategoryChart({
   return (
     <Card className="overflow-hidden">
       <CardHeader className="py-3 px-3">
-        <CardTitle className="text-xs font-medium leading-tight">{title}</CardTitle>
+        <div className="flex items-start justify-between gap-1">
+          <CardTitle className="text-xs font-medium leading-tight">{title}</CardTitle>
+          {setGoalHref && (
+            <Link
+              href={setGoalHref}
+              className="shrink-0 text-[10px] font-medium text-primary underline-offset-2 hover:underline"
+            >
+              Goal
+            </Link>
+          )}
+        </div>
       </CardHeader>
       {/* px-2 + positive left margin: room for Y ticks (negative margin was clipping "12k" etc.) */}
       <CardContent className="h-[148px] w-full px-2 pb-2">
@@ -91,6 +112,13 @@ function MiniCategoryChart({
                 />
               )}
             />
+            {goalLine != null && goalLine > 0 && (
+              <ReferenceLine
+                y={goalLine}
+                stroke={CHART_GOAL_LINE}
+                strokeDasharray="3 3"
+              />
+            )}
             <Bar
               dataKey="amount"
               fill={CATEGORY_SERIES_COLOR[series]}
@@ -111,9 +139,11 @@ function MiniCategoryChart({
 
 export function CategoryTrendGrid({
   months,
+  goals,
   onBarClick,
 }: {
   months: number
+  goals?: Goal[] | undefined
   onBarClick: (payload: {
     chart: BarDrilldownChart
     month: string
@@ -131,17 +161,27 @@ export function CategoryTrendGrid({
       </p>
       {/* 6 tiles → 2×3 on md+ (gifts chart removed so the grid stays even) */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {SERIES.map((s) => (
-          <MiniCategoryChart
-            key={s.id}
-            title={s.title}
-            series={s.id}
-            months={months}
-            onBarClick={(month) =>
-              onBarClick({ chart: "category", month, series: s.id })
-            }
-          />
-        ))}
+        {SERIES.map((s) => {
+          const ck = categoryChartKey(s.id)
+          const g = goals?.find((x) => x.chart_key === ck)
+          const monthlyGoal =
+            g && (g.progress_cadence ?? "MONTHLY") === "MONTHLY"
+              ? g
+              : undefined
+          return (
+            <MiniCategoryChart
+              key={s.id}
+              title={s.title}
+              series={s.id}
+              months={months}
+              goalLine={monthlyGoal?.target_amount ?? null}
+              setGoalHref={`/goals?chart_key=${encodeURIComponent(ck)}`}
+              onBarClick={(month) =>
+                onBarClick({ chart: "category", month, series: s.id })
+              }
+            />
+          )
+        })}
       </div>
     </div>
   )

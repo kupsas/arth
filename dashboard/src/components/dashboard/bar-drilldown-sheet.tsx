@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useBarDrilldown } from "@/hooks/use-metrics"
-import { formatCurrency, formatDate } from "@/lib/utils"
+import { cn, formatCurrency, formatDate } from "@/lib/utils"
 import type { BarDrilldownChart, DashboardCategorySeries, Transaction } from "@/lib/types"
 
 export type DrilldownParams = {
@@ -20,6 +20,25 @@ export type DrilldownParams = {
   month: string
   series?: DashboardCategorySeries
 } | null
+
+function isInvestmentDrilldown(chart: BarDrilldownChart | undefined): boolean {
+  return (
+    chart === "investment_month" ||
+    chart === "investment_purchase" ||
+    chart === "investment_sale"
+  )
+}
+
+/** Investment sheet: outflow = purchases (green, matches net chart). Inflow = sales (red). Else: default text. */
+function drilldownAmountTextClass(
+  direction: Transaction["direction"],
+  investmentSheet: boolean,
+): string {
+  if (!investmentSheet) return "text-foreground"
+  if (direction === "OUTFLOW") return "text-emerald-600 dark:text-emerald-400"
+  if (direction === "INFLOW") return "text-rose-600 dark:text-rose-400"
+  return "text-foreground"
+}
 
 interface BarDrilldownSheetProps {
   open: boolean
@@ -40,6 +59,8 @@ export function BarDrilldownSheet({
   React.useEffect(() => {
     if (!open) setEditId(null)
   }, [open])
+
+  const investmentSheet = isInvestmentDrilldown(params?.chart ?? undefined)
 
   return (
     <>
@@ -75,11 +96,21 @@ export function BarDrilldownSheet({
                         <span className="text-muted-foreground text-xs">
                           {formatDate(txn.txn_date)}
                         </span>{" "}
-                        <span className="font-medium">
+                        <span
+                          className={cn(
+                            "font-medium",
+                            drilldownAmountTextClass(txn.direction, investmentSheet),
+                          )}
+                        >
                           {txn.counterparty || txn.raw_description}
                         </span>
                       </span>
-                      <span className="shrink-0 font-mono tabular-nums">
+                      <span
+                        className={cn(
+                          "shrink-0 font-mono tabular-nums",
+                          drilldownAmountTextClass(txn.direction, investmentSheet),
+                        )}
+                      >
                         {formatCurrency(txn.amount)}
                       </span>
                     </button>
@@ -116,6 +147,8 @@ export function drilldownTitle(p: NonNullable<DrilldownParams>): string {
       return `Need spend · ${m}`
     case "expense_want":
       return `Want spend · ${m}`
+    case "investment_month":
+      return `Investment activity · ${m}`
     case "category":
       return `Category · ${p.series ?? "?"} · ${m}`
     default:

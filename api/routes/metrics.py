@@ -29,6 +29,8 @@ from sqlmodel import Session, col, func, select
 from api.database import get_session
 from api.models import Goal, Transaction
 from api.routes.transactions import _txn_to_dict
+from api.services.chart_metrics import category_trend_condition
+from api.services.goal_evaluator import expense_limit_spent_for_goal
 
 router = APIRouter()
 
@@ -748,6 +750,8 @@ def _investment_flows_month(
 class AdherenceMonth(BaseModel):
     month: str
     hit: bool | None  # None when target_amount is unset
+    # Net investment (INVESTMENT) or spend in scope (EXPENSE_LIMIT) for that month — for UI tooltips.
+    amount: float | None = None
 
 
 class GoalProgressResponse(BaseModel):
@@ -759,6 +763,7 @@ class GoalProgressResponse(BaseModel):
     sales: float | None = None
     net_investment: float | None = None
     adherence: list[AdherenceMonth]
+    progress_cadence: str = "MONTHLY"
 
 
 @router.get("/goal-progress", response_model=GoalProgressResponse)
@@ -783,9 +788,11 @@ def get_goal_progress(
             ms, me = _month_start_end(ym)
             _, _, mnet = _investment_flows_month(session, ms, me)
             if target is None or target <= 0:
-                adherence.append(AdherenceMonth(month=ym, hit=None))
+                adherence.append(AdherenceMonth(month=ym, hit=None, amount=mnet))
             else:
-                adherence.append(AdherenceMonth(month=ym, hit=mnet >= target))
+                adherence.append(
+                    AdherenceMonth(month=ym, hit=mnet >= target, amount=mnet)
+                )
         return GoalProgressResponse(
             goal_id=goal.id,
             goal_type=goal.goal_type,
@@ -795,33 +802,33 @@ def get_goal_progress(
             sales=round(sal, 2),
             net_investment=net,
             adherence=adherence,
+            progress_cadence="MONTHLY",
         )
 
     if goal.goal_type == "EXPENSE_LIMIT":
-
-        def _expense_limit_sum(r_start: datetime.date, r_end: datetime.date) -> float:
-            base = _expense_where(
-                select(func.coalesce(func.sum(Transaction.amount), 0.0))
-            )
-            if goal.linked_category:
-                base = base.where(Transaction.counterparty_category == goal.linked_category)
-            q = _date_where(_analytics_only(base), r_start, r_end)
-            return float(session.exec(q).one() or 0)
-
-        current = _expense_limit_sum(cur_start, today)
-        for ym in _adherence_month_labels(4):
-            ms, me = _month_start_end(ym)
-            spent = _expense_limit_sum(ms, me)
-            if target is None or target <= 0:
-                adherence.append(AdherenceMonth(month=ym, hit=None))
-            else:
-                adherence.append(AdherenceMonth(month=ym, hit=spent <= target))
+        cadence = (getattr(goal, "progress_cadence", None) or "MONTHLY").upper()
+        if cadence == "ANNUAL":
+            year_start = today.replace(month=1, day=1)
+            current = expense_limit_spent_for_goal(goal, session, year_start, today)
+            adherence = []
+        else:
+            current = expense_limit_spent_for_goal(goal, session, cur_start, today)
+            for ym in _adherence_month_labels(4):
+                ms, me = _month_start_end(ym)
+                spent = expense_limit_spent_for_goal(goal, session, ms, me)
+                if target is None or target <= 0:
+                    adherence.append(AdherenceMonth(month=ym, hit=None, amount=spent))
+                else:
+                    adherence.append(
+                        AdherenceMonth(month=ym, hit=spent <= target, amount=spent)
+                    )
         return GoalProgressResponse(
             goal_id=goal.id,
             goal_type=goal.goal_type,
             target_amount=target,
             current_value=round(current, 2),
             adherence=adherence,
+            progress_cadence=cadence,
         )
 
     raise HTTPException(
@@ -910,43 +917,12 @@ class CategoryTrendRow(BaseModel):
     amount: float
 
 
-def _category_trend_where(series: str):
-    """Build WHERE clause fragments for predefined dashboard series (as SQLAlchemy boolean).
-
-    Swiggy sub-brands (see pipeline ``rules_classifier`` — ``_classify_swiggy_sub`` /
-    spend rules): only **Swiggy Instamart** is NEED; **Swiggy Food**, **Swiggy Dineout**,
-    and generic **Swiggy** are WANT. Category charts here split by **counterparty** name:
-
-    - ``swiggy_instamart`` → counterparty == "Swiggy Instamart"
-    - ``swiggy_food`` → counterparty == "Swiggy Food"
-    - ``food_and_dining`` → Food & Dining category **or** counterparty == "Swiggy Dineout"
-    """
-    fd = "Food & Dining"
-    if series == "swiggy_instamart":
-        return Transaction.counterparty == "Swiggy Instamart"
-    if series == "swiggy_food":
-        return Transaction.counterparty == "Swiggy Food"
-    if series == "food_and_dining":
-        return (Transaction.counterparty_category == fd) | (
-            Transaction.counterparty == "Swiggy Dineout"
-        )
-    if series == "gifts":
-        return Transaction.counterparty_category == "Gifts & Personal Transfers"
-    if series == "shopping":
-        return Transaction.counterparty_category == "Shopping & E-commerce"
-    if series == "transport":
-        return Transaction.counterparty_category == "Transport & Fuel"
-    if series == "travel":
-        return Transaction.counterparty_category == "Travel & Stay"
-    raise ValueError(f"unknown series: {series}")
-
-
 @router.get("/category-trend", response_model=list[CategoryTrendRow])
 def get_category_trend(
     series: str = Query(
         ...,
         description=(
-            "swiggy_instamart | swiggy_food | food_and_dining | "
+            "swiggy_instamart | swiggy_food | food_and_dining | gifts | "
             "shopping | transport | travel"
         ),
     ),
@@ -955,7 +931,7 @@ def get_category_trend(
     session: Session = Depends(get_session),
 ):
     try:
-        cond = _category_trend_where(series)
+        cond = category_trend_condition(series)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -1019,7 +995,8 @@ def get_bar_drilldown(
     chart: str = Query(
         ...,
         description=(
-            "investment_purchase | investment_sale | expense_need | expense_want | category"
+            "investment_purchase | investment_sale | investment_month | "
+            "expense_need | expense_want | category"
         ),
     ),
     month: str = Query(..., pattern=r"^\d{4}-\d{2}$"),
@@ -1041,6 +1018,15 @@ def get_bar_drilldown(
         q = q.where(Transaction.direction == "INFLOW").where(
             col(Transaction.txn_type).in_(_SALE_TXN_TYPES)
         )
+    elif chart == "investment_month":
+        q = q.where(
+            or_(
+                (Transaction.direction == "OUTFLOW")
+                & col(Transaction.txn_type).in_(_PURCHASE_TXN_TYPES),
+                (Transaction.direction == "INFLOW")
+                & col(Transaction.txn_type).in_(_SALE_TXN_TYPES),
+            )
+        )
     elif chart == "expense_need":
         q = _expense_where(q).where(Transaction.spend_category == "NEED")
     elif chart == "expense_want":
@@ -1049,7 +1035,7 @@ def get_bar_drilldown(
         if not series:
             raise HTTPException(status_code=400, detail="series is required when chart=category")
         try:
-            cond = _category_trend_where(series)
+            cond = category_trend_condition(series)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         q = _expense_where(q).where(cond)

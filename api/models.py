@@ -242,6 +242,9 @@ class Goal(SQLModel, table=True):
 
     Progress for EXPENSE_LIMIT goals is auto-computed live from the transactions DB.
     All other goals use current_value (manually updated by the user).
+
+    ``chart_key`` binds a goal to a dashboard chart metric (e.g. expense_need_want_stack,
+    investment_net, category:swiggy_food) so limits match chart filters.
     """
 
     __tablename__ = "goals"
@@ -260,7 +263,12 @@ class Goal(SQLModel, table=True):
 
     priority: int = 3                            # 1 (highest) to 5 (lowest)
     linked_layer: int = 3                        # 1-5 financial layers from goals_framework
-    linked_category: str | None = None          # e.g. "Food & Dining" for EXPENSE_LIMIT goals
+    linked_category: str | None = None          # e.g. "Food & Dining" for EXPENSE_LIMIT goals (legacy)
+    # Dashboard chart binding: expense_need_want_stack, investment_net, category:<series>
+    chart_key: str | None = Field(default=None, index=True)
+
+    # MONTHLY: cap / progress per calendar month (default). ANNUAL: EXPENSE_LIMIT only — YTD vs target.
+    progress_cadence: str = Field(default="MONTHLY", index=True)
 
     user_id: str = Field(default="sashank", index=True)  # "sashank" or "aditi"
 

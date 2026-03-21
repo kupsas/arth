@@ -23,6 +23,7 @@ export const CATEGORY_SERIES_COLOR: Record<DashboardCategorySeries, string> = {
   swiggy_instamart: "var(--chart-cat-1)",
   swiggy_food: "var(--chart-cat-2)",
   food_and_dining: "var(--chart-cat-3)",
+  gifts: "var(--chart-cat-4)",
   shopping: "var(--chart-cat-5)",
   transport: "var(--chart-cat-6)",
   travel: "var(--chart-cat-7)",

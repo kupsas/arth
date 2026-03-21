@@ -48,8 +48,21 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { useCreateGoal, useDeleteGoal, useGoals, useUpdateGoal } from "@/hooks/use-goals"
+import {
+  CHART_KEY_EXPENSE_NEED_WANT_STACK,
+  CHART_KEY_INVESTMENT_NET,
+  categoryChartKey,
+} from "@/lib/chart-keys"
 import { formatCurrency, cn } from "@/lib/utils"
-import type { Goal, GoalCreate, GoalStatus, GoalType, GoalUpdate } from "@/lib/types"
+import type {
+  DashboardCategorySeries,
+  Goal,
+  GoalCreate,
+  GoalStatus,
+  GoalType,
+  GoalUpdate,
+  ProgressCadence,
+} from "@/lib/types"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Status helpers
@@ -81,6 +94,17 @@ const GOAL_TYPE_LABELS: Record<GoalType, string> = {
   TAX:            "Tax",
 }
 
+/** Category mini-charts on the dashboard — labels match CategoryTrendGrid. */
+const DASHBOARD_CATEGORY_SERIES: { id: DashboardCategorySeries; label: string }[] = [
+  { id: "swiggy_instamart", label: "Swiggy Instamart" },
+  { id: "swiggy_food", label: "Swiggy Food" },
+  { id: "food_and_dining", label: "Food & dining + Swiggy Dineout" },
+  { id: "shopping", label: "Shopping & e‑commerce" },
+  { id: "transport", label: "Transport & fuel" },
+  { id: "travel", label: "Travel & stay" },
+  { id: "gifts", label: "Gifts & personal transfers" },
+]
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EditGoalSheet — change name, targets, notes (goal type is fixed after create)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,6 +120,11 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
   )
   const [targetDate, setTargetDate] = React.useState(goal.target_date ?? "")
   const [linkedCategory, setLinkedCategory] = React.useState(goal.linked_category ?? "")
+  /** Non-empty = bind to dashboard chart_key; empty = use linked category name (legacy). */
+  const [expenseChartBind, setExpenseChartBind] = React.useState(goal.chart_key ?? "")
+  const [progressCadence, setProgressCadence] = React.useState<ProgressCadence>(
+    goal.progress_cadence ?? "MONTHLY",
+  )
   const [notes, setNotes] = React.useState(goal.notes ?? "")
 
   React.useEffect(() => {
@@ -104,6 +133,8 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
     setTargetAmount(goal.target_amount != null ? String(goal.target_amount) : "")
     setTargetDate(goal.target_date ?? "")
     setLinkedCategory(goal.linked_category ?? "")
+    setExpenseChartBind(goal.chart_key ?? "")
+    setProgressCadence(goal.progress_cadence ?? "MONTHLY")
     setNotes(goal.notes ?? "")
   }, [open, goal])
 
@@ -128,7 +159,14 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
     }
 
     if (isExpenseLimit) {
-      update.linked_category = linkedCategory.trim() ? linkedCategory.trim() : null
+      if (expenseChartBind.trim()) {
+        update.chart_key = expenseChartBind.trim()
+        update.linked_category = null
+      } else {
+        update.chart_key = null
+        update.linked_category = linkedCategory.trim() ? linkedCategory.trim() : null
+      }
+      update.progress_cadence = progressCadence
     }
 
     patchGoal(
@@ -180,7 +218,11 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-2">
               <Label htmlFor={`edit-goal-target-${goal.id}`}>
-                {isExpenseLimit ? "Monthly limit (₹)" : "Target amount (₹)"}
+                {isExpenseLimit
+                  ? progressCadence === "ANNUAL"
+                    ? "Annual cap (₹)"
+                    : "Monthly cap (₹)"
+                  : "Target amount (₹)"}
               </Label>
               <Input
                 id={`edit-goal-target-${goal.id}`}
@@ -202,20 +244,74 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
           </div>
 
           {isExpenseLimit && (
-            <div className="flex flex-col gap-2">
-              <Label htmlFor={`edit-goal-category-${goal.id}`}>
-                Linked category (optional)
-              </Label>
-              <Input
-                id={`edit-goal-category-${goal.id}`}
-                placeholder="e.g. Food & Dining"
-                value={linkedCategory}
-                onChange={(e) => setLinkedCategory(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Leave empty to track all spending across categories.
-              </p>
-            </div>
+            <>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-goal-chart-${goal.id}`}>Dashboard chart (recommended)</Label>
+                <Select
+                  value={expenseChartBind || "__legacy__"}
+                  onValueChange={(v) =>
+                    setExpenseChartBind(!v || v === "__legacy__" ? "" : v)
+                  }
+                >
+                  <SelectTrigger id={`edit-goal-chart-${goal.id}`}>
+                    <SelectValue placeholder="Choose chart…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={CHART_KEY_EXPENSE_NEED_WANT_STACK}>
+                      Expense chart — total NEED+WANT
+                    </SelectItem>
+                    {DASHBOARD_CATEGORY_SERIES.map((s) => (
+                      <SelectItem key={s.id} value={categoryChartKey(s.id)}>
+                        Chart — {s.label}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="__legacy__">Custom — category name only (legacy)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-goal-cadence-${goal.id}`}>Progress period</Label>
+                <Select
+                  value={progressCadence}
+                  onValueChange={(v) => setProgressCadence(v as ProgressCadence)}
+                >
+                  <SelectTrigger id={`edit-goal-cadence-${goal.id}`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MONTHLY">
+                      Monthly (shows on dashboard &quot;This month so far&quot;)
+                    </SelectItem>
+                    <SelectItem value="ANNUAL">
+                      Annual (Jan 1 — today vs cap; dashboard headline only lists monthly goals)
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {!expenseChartBind && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`edit-goal-category-${goal.id}`}>
+                    Counterparty category (legacy)
+                  </Label>
+                  <Input
+                    id={`edit-goal-category-${goal.id}`}
+                    placeholder="e.g. Food & Dining"
+                    value={linkedCategory}
+                    onChange={(e) => setLinkedCategory(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Matches ``counterparty_category`` only — not the same as combined dashboard
+                    charts (e.g. Food + Dineout).
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+          {goal.goal_type === "INVESTMENT" && (
+            <p className="text-xs text-muted-foreground">
+              Linked to dashboard chart <span className="font-mono text-foreground">{CHART_KEY_INVESTMENT_NET}</span>{" "}
+              (monthly net investment).
+            </p>
           )}
 
           <div className="flex flex-col gap-2">
@@ -275,11 +371,18 @@ function GoalCard({ goal }: { goal: Goal }) {
             <p className="truncate text-sm font-medium">{goal.name}</p>
             <p className="text-xs text-muted-foreground">
               {GOAL_TYPE_LABELS[goal.goal_type as GoalType] ?? goal.goal_type}
-              {goal.linked_category && ` · ${goal.linked_category}`}
+              {goal.chart_key && ` · ${goal.chart_key}`}
+              {!goal.chart_key && goal.linked_category && ` · ${goal.linked_category}`}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {goal.goal_type === "EXPENSE_LIMIT" &&
+            (goal.progress_cadence ?? "MONTHLY") === "ANNUAL" && (
+              <Badge variant="secondary" className="text-[10px] px-1 py-0">
+                Annual
+              </Badge>
+            )}
           <Badge
             variant="outline"
             className={cn("text-[11px] px-1.5 py-0", STATUS_STYLES[goal.status as GoalStatus])}
@@ -315,7 +418,17 @@ function GoalCard({ goal }: { goal: Goal }) {
             {isExpenseLimit ? (
               <>
                 {formatCurrency(goal.computed_current_value)} spent
-                {goal.target_amount ? ` of ${formatCurrency(goal.target_amount)} limit` : ""}
+                {goal.target_amount ? (
+                  <>
+                    {" "}
+                    of {formatCurrency(goal.target_amount)}
+                    {(goal.progress_cadence ?? "MONTHLY") === "ANNUAL"
+                      ? " annual cap (YTD)"
+                      : " monthly limit"}
+                  </>
+                ) : (
+                  ""
+                )}
               </>
             ) : (
               <>
@@ -374,30 +487,81 @@ function GoalCard({ goal }: { goal: Goal }) {
 // AddGoalSheet — slide-in form for creating a new goal
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AddGoalSheet() {
+const defaultAddForm = (): Partial<GoalCreate> => ({
+  goal_type: "EXPENSE_LIMIT",
+  priority: 3,
+  linked_layer: 3,
+  user_id: "sashank",
+})
+
+function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) {
   const [open, setOpen] = React.useState(false)
   const { mutate: create, isPending } = useCreateGoal()
 
-  const [form, setForm] = React.useState<Partial<GoalCreate>>({
-    goal_type: "EXPENSE_LIMIT",
-    priority: 3,
-    linked_layer: 3,
-    user_id: "sashank",
-  })
+  const [form, setForm] = React.useState<Partial<GoalCreate>>(defaultAddForm())
+  /** When set, create/update EXPENSE_LIMIT with this chart_key (else use linked_category). */
+  const [expenseChartBind, setExpenseChartBind] = React.useState("")
+  const [expenseCadence, setExpenseCadence] = React.useState<ProgressCadence>("MONTHLY")
+
+  function resetAddForm() {
+    setForm(defaultAddForm())
+    setExpenseChartBind("")
+    setExpenseCadence("MONTHLY")
+  }
+
+  function handleOpenChange(next: boolean) {
+    setOpen(next)
+    if (next && prefillChartKey) {
+      if (prefillChartKey === CHART_KEY_INVESTMENT_NET) {
+        setForm({ ...defaultAddForm(), goal_type: "INVESTMENT" })
+        setExpenseChartBind("")
+      } else {
+        setForm({ ...defaultAddForm(), goal_type: "EXPENSE_LIMIT" })
+        setExpenseChartBind(prefillChartKey)
+      }
+    }
+    if (!next) resetAddForm()
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!form.name || !form.goal_type) return
-    create(form as GoalCreate, {
+
+    const base: GoalCreate = {
+      name: form.name.trim(),
+      goal_type: form.goal_type,
+      target_amount: form.target_amount,
+      target_date: form.target_date,
+      priority: form.priority ?? 3,
+      linked_layer: form.linked_layer ?? 3,
+      user_id: form.user_id ?? "sashank",
+      notes: form.notes,
+    }
+
+    if (form.goal_type === "EXPENSE_LIMIT") {
+      base.progress_cadence = expenseCadence
+      if (expenseChartBind.trim()) {
+        base.chart_key = expenseChartBind.trim()
+      } else {
+        base.linked_category = form.linked_category?.trim()
+          ? form.linked_category.trim()
+          : undefined
+      }
+    }
+    if (form.goal_type === "INVESTMENT") {
+      base.chart_key = CHART_KEY_INVESTMENT_NET
+    }
+
+    create(base, {
       onSuccess: () => {
         setOpen(false)
-        setForm({ goal_type: "EXPENSE_LIMIT", priority: 3, linked_layer: 3, user_id: "sashank" })
+        resetAddForm()
       },
     })
   }
 
   return (
-    <Sheet open={open} onOpenChange={setOpen}>
+    <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetTrigger
         render={
           <Button size="sm" className="h-7 gap-1 text-xs">
@@ -448,7 +612,11 @@ function AddGoalSheet() {
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-2">
               <Label htmlFor="goal-target">
-                {form.goal_type === "EXPENSE_LIMIT" ? "Monthly limit (₹)" : "Target amount (₹)"}
+                {form.goal_type === "EXPENSE_LIMIT"
+                  ? expenseCadence === "ANNUAL"
+                    ? "Annual cap (₹)"
+                    : "Monthly cap (₹)"
+                  : "Target amount (₹)"}
               </Label>
               <Input
                 id="goal-target"
@@ -475,18 +643,71 @@ function AddGoalSheet() {
           </div>
 
           {form.goal_type === "EXPENSE_LIMIT" && (
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="goal-category">Linked category (optional)</Label>
-              <Input
-                id="goal-category"
-                placeholder="e.g. Food & Dining"
-                value={form.linked_category ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, linked_category: e.target.value || undefined }))}
-              />
-              <p className="text-xs text-muted-foreground">
-                Leave empty to track all spending across categories.
-              </p>
-            </div>
+            <>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="goal-chart-bind">Cap matches dashboard chart</Label>
+                <Select
+                  value={expenseChartBind || "__legacy__"}
+                  onValueChange={(v) =>
+                    setExpenseChartBind(!v || v === "__legacy__" ? "" : v)
+                  }
+                >
+                  <SelectTrigger id="goal-chart-bind">
+                    <SelectValue placeholder="Choose…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={CHART_KEY_EXPENSE_NEED_WANT_STACK}>
+                      Expense chart — total NEED+WANT per month
+                    </SelectItem>
+                    {DASHBOARD_CATEGORY_SERIES.map((s) => (
+                      <SelectItem key={s.id} value={categoryChartKey(s.id)}>
+                        Category chart — {s.label}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="__legacy__">
+                      Custom — single counterparty category (legacy)
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="goal-cadence-add">Progress period</Label>
+                <Select
+                  value={expenseCadence}
+                  onValueChange={(v) => setExpenseCadence(v as ProgressCadence)}
+                >
+                  <SelectTrigger id="goal-cadence-add">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MONTHLY">Monthly (dashboard headline + charts)</SelectItem>
+                    <SelectItem value="ANNUAL">Annual (YTD vs cap; not on dashboard headline)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {!expenseChartBind && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="goal-category">Counterparty category name</Label>
+                  <Input
+                    id="goal-category"
+                    placeholder="e.g. Food & Dining"
+                    value={form.linked_category ?? ""}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, linked_category: e.target.value || undefined }))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Empty + legacy mode defaults to the same total as the expense chart (NEED+WANT).
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+          {form.goal_type === "INVESTMENT" && (
+            <p className="text-xs text-muted-foreground">
+              Progress uses monthly <strong>net</strong> investment (purchases − sales), same as the
+              Investments chart.
+            </p>
           )}
 
           <div className="flex flex-col gap-2">
@@ -516,9 +737,11 @@ function AddGoalSheet() {
 
 interface Props {
   className?: string
+  /** From <code>?chart_key=</code> when opening Goals from a dashboard chart. */
+  initialChartKey?: string | null
 }
 
-export function GoalsSection({ className }: Props) {
+export function GoalsSection({ className, initialChartKey = null }: Props) {
   const { data: goals, isLoading } = useGoals()
 
   const activeGoals = (goals ?? []).filter((g) => g.status !== "ACHIEVED" && g.status !== "PAUSED")
@@ -534,7 +757,7 @@ export function GoalsSection({ className }: Props) {
               {goals ? `${goals.length} goal${goals.length !== 1 ? "s" : ""}` : "Track your financial targets"}
             </p>
           </div>
-          <AddGoalSheet />
+          <AddGoalSheet prefillChartKey={initialChartKey} />
         </div>
       </CardHeader>
 

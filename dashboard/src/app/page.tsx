@@ -23,6 +23,10 @@ import { TopExpensesCard } from "@/components/dashboard/top-expenses-card"
 import { TransactionEditSheet } from "@/components/transactions/transaction-edit-sheet"
 import { useGoals } from "@/hooks/use-goals"
 import { useTransactions } from "@/hooks/use-transactions"
+import {
+  CHART_KEY_EXPENSE_NEED_WANT_STACK,
+  CHART_KEY_INVESTMENT_NET,
+} from "@/lib/chart-keys"
 import type { BarDrilldownChart, DashboardCategorySeries } from "@/lib/types"
 
 export default function DashboardPage() {
@@ -31,13 +35,21 @@ export default function DashboardPage() {
   const [topTxnId, setTopTxnId] = React.useState<number | null>(null)
 
   const { data: goals } = useGoals()
-  const investmentGoalId =
-    goals?.find((g) => g.goal_type === "INVESTMENT")?.id ?? null
-  const expenseGoalId =
-    goals?.find((g) => g.goal_type === "EXPENSE_LIMIT" && !g.linked_category)?.id ??
-    null
-  const investmentTarget =
-    goals?.find((g) => g.goal_type === "INVESTMENT")?.target_amount ?? null
+
+  const investmentGoal =
+    goals?.find((g) => g.chart_key === CHART_KEY_INVESTMENT_NET) ??
+    goals?.find((g) => g.goal_type === "INVESTMENT")
+  const expenseStackGoal =
+    goals?.find((g) => g.chart_key === CHART_KEY_EXPENSE_NEED_WANT_STACK) ??
+    goals?.find((g) => g.goal_type === "EXPENSE_LIMIT" && !g.linked_category)
+
+  const investmentTarget = investmentGoal?.target_amount ?? null
+  /** Monthly charts: hide line for ANNUAL caps (bars are per-month; annual target is misleading). */
+  const expenseCapTarget =
+    expenseStackGoal &&
+    (expenseStackGoal.progress_cadence ?? "MONTHLY") === "MONTHLY"
+      ? expenseStackGoal.target_amount ?? null
+      : null
 
   const { data: unreviewedData } = useTransactions({
     is_reviewed: false,
@@ -86,10 +98,7 @@ export default function DashboardPage() {
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">This month so far</h2>
         <div className="grid gap-4 lg:grid-cols-2">
-          <GoalProgressSection
-            investmentGoalId={investmentGoalId}
-            expenseGoalId={expenseGoalId}
-          />
+          <GoalProgressSection goals={goals} />
           <div className="flex flex-col gap-4">
             <TopExpensesCard onSelectTransaction={(t) => setTopTxnId(t.id)} />
             <RemindersCard />
@@ -105,10 +114,20 @@ export default function DashboardPage() {
         <InvestmentTrendChart
           months={trendMonths}
           goalLine={investmentTarget}
+          setGoalHref={`/goals?chart_key=${encodeURIComponent(CHART_KEY_INVESTMENT_NET)}`}
           onBarClick={openDrilldown}
         />
-        <ExpenseStackedBar months={trendMonths} onBarClick={openDrilldown} />
-        <CategoryTrendGrid months={trendMonths} onBarClick={openDrilldown} />
+        <ExpenseStackedBar
+          months={trendMonths}
+          goalLine={expenseCapTarget}
+          setGoalHref={`/goals?chart_key=${encodeURIComponent(CHART_KEY_EXPENSE_NEED_WANT_STACK)}`}
+          onBarClick={openDrilldown}
+        />
+        <CategoryTrendGrid
+          months={trendMonths}
+          goals={goals}
+          onBarClick={openDrilldown}
+        />
       </section>
 
       <BarDrilldownSheet

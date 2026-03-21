@@ -19,12 +19,43 @@ from __future__ import annotations
 import datetime
 import logging
 
-from sqlalchemy import or_
-from sqlmodel import Session, col, func, select
+from sqlmodel import Session, func, select
 
 from api.models import Goal, Transaction
+from api.services.chart_metrics import (
+    CHART_KEY_EXPENSE_NEED_WANT_STACK,
+    expense_limit_sum_for_chart_key,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def expense_limit_spent_for_goal(
+    goal: Goal,
+    session: Session,
+    date_from: datetime.date,
+    date_to: datetime.date,
+) -> float:
+    """Sum spend for an EXPENSE_LIMIT goal over [date_from, date_to] (inclusive).
+
+    Prefer ``chart_key``; else legacy ``linked_category``; if neither, use NEED+WANT
+    total (same as the dashboard expense stack chart).
+    """
+    if goal.chart_key:
+        return expense_limit_sum_for_chart_key(
+            session, goal.chart_key, date_from, date_to
+        )
+    if goal.linked_category:
+        from api.routes.metrics import _analytics_only, _date_where, _expense_where
+
+        base = _expense_where(
+            select(func.coalesce(func.sum(Transaction.amount), 0.0))
+        ).where(Transaction.counterparty_category == goal.linked_category)
+        q = _date_where(_analytics_only(base), date_from, date_to)
+        return float(session.exec(q).one() or 0)
+    return expense_limit_sum_for_chart_key(
+        session, CHART_KEY_EXPENSE_NEED_WANT_STACK, date_from, date_to
+    )
 
 
 def compute_progress(goal: Goal, session: Session) -> dict:
@@ -69,36 +100,14 @@ def compute_progress(goal: Goal, session: Session) -> dict:
 
 
 def _compute_expense_limit(goal: Goal, session: Session) -> float:
-    """Sum OUTFLOW transactions in goal's linked_category for the current month.
-
-    The limit resets every calendar month, so we always compare against
-    the current month's total spend.
-    """
+    """Spend in the goal's evaluation window (month or calendar year for ANNUAL)."""
     today = datetime.date.today()
+    cadence = (getattr(goal, "progress_cadence", None) or "MONTHLY").upper()
+    if cadence == "ANNUAL":
+        year_start = today.replace(month=1, day=1)
+        return expense_limit_spent_for_goal(goal, session, year_start, today)
     month_start = today.replace(day=1)
-
-    query = (
-        select(func.sum(Transaction.amount))
-        .where(Transaction.direction == "OUTFLOW")
-        .where(Transaction.txn_date >= month_start)
-        .where(Transaction.txn_date <= today)
-        # Exclude pass-through payments that don't represent real spending
-        .where(Transaction.txn_type.not_in(["SELF_TRANSFER", "CARD_PAYMENT"]))  # type: ignore[union-attr]
-        .where(
-            or_(
-                col(Transaction.exclude_from_analytics).is_(None),
-                col(Transaction.exclude_from_analytics).is_(False),
-            )
-        )
-    )
-
-    if goal.linked_category:
-        query = query.where(
-            Transaction.counterparty_category == goal.linked_category
-        )
-
-    result = session.exec(query).first()
-    return float(result or 0.0)
+    return expense_limit_spent_for_goal(goal, session, month_start, today)
 
 
 def _derive_status(goal: Goal, current_value: float, target_amount: float) -> str:

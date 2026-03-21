@@ -19,14 +19,24 @@ from scraper.email_parsers.hdfc_bank import (
 )
 from scraper.email_parsers.icici_bank import ICICINetBankingParser
 
+
+def _hdfc_parser_list(accounts: dict) -> list[BaseEmailParser]:
+    """Fresh parser instances per sender address (shared `accounts` dict is OK)."""
+    return [
+        HDFCCreditCardAlertParser(accounts),
+        HDFCUPIAlertParser(accounts),
+        HDFCAccountUpdateParser(accounts),
+    ]
+
+
 # Each sender maps to a list of parsers tried in order.
 # Only the FIRST matching parser is used per email.
+_hdfc_accounts = BANK_SENDERS["alerts@hdfcbank.net"]["accounts"]
+
 EMAIL_PARSER_REGISTRY: dict[str, list[BaseEmailParser]] = {
-    "alerts@hdfcbank.net": [
-        HDFCCreditCardAlertParser(BANK_SENDERS["alerts@hdfcbank.net"]["accounts"]),
-        HDFCUPIAlertParser(BANK_SENDERS["alerts@hdfcbank.net"]["accounts"]),
-        HDFCAccountUpdateParser(BANK_SENDERS["alerts@hdfcbank.net"]["accounts"]),
-    ],
+    "alerts@hdfcbank.net": _hdfc_parser_list(_hdfc_accounts),
+    # Same InstaAlerts as .net — Gmail often shows From: HDFC Bank InstaAlerts <...@hdfcbank.bank.in>
+    "alerts@hdfcbank.bank.in": _hdfc_parser_list(_hdfc_accounts),
     "customernotification@icici.bank.in": [
         ICICINetBankingParser(
             BANK_SENDERS["customernotification@icici.bank.in"]["accounts"]

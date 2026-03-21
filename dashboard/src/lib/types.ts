@@ -357,6 +357,9 @@ export type GoalType =
 
 export type GoalStatus = "ON_TRACK" | "AT_RISK" | "BEHIND" | "ACHIEVED" | "PAUSED";
 
+/** How automatic progress is evaluated (EXPENSE_LIMIT + INVESTMENT on dashboard). */
+export type ProgressCadence = "MONTHLY" | "ANNUAL";
+
 /** Mirrors the goal dict returned by api/routes/goals.py */
 export interface Goal {
   id: number;
@@ -368,6 +371,9 @@ export interface Goal {
   priority: number;                 // 1–5
   linked_layer: number;
   linked_category: string | null;
+  chart_key: string | null;
+  /** Defaults to MONTHLY when omitted (older API responses). */
+  progress_cadence?: ProgressCadence;
   user_id: string;
   current_value: number | null;    // manually entered
   notes: string | null;
@@ -387,6 +393,8 @@ export interface GoalCreate {
   priority?: number;
   linked_layer?: number;
   linked_category?: string;
+  chart_key?: string | null;
+  progress_cadence?: ProgressCadence | null;
   user_id?: string;
   current_value?: number;
   notes?: string;
@@ -398,6 +406,8 @@ export interface GoalUpdate {
   target_date?: string | null;
   priority?: number;
   linked_category?: string | null;
+  chart_key?: string | null;
+  progress_cadence?: ProgressCadence | null;
   current_value?: number | null;
   status?: GoalStatus;
   notes?: string | null;
@@ -410,6 +420,8 @@ export interface GoalUpdate {
 export interface GoalProgressAdherenceMonth {
   month: string;
   hit: boolean | null;
+  /** Net investment (INVESTMENT) or spend in scope (EXPENSE_LIMIT) for that month. */
+  amount?: number | null;
 }
 
 export interface GoalProgressResponse {
@@ -421,6 +433,7 @@ export interface GoalProgressResponse {
   sales?: number | null;
   net_investment?: number | null;
   adherence: GoalProgressAdherenceMonth[];
+  progress_cadence?: ProgressCadence;
 }
 
 export interface InvestmentTrendRow {
@@ -446,6 +459,7 @@ export type DashboardCategorySeries =
   | "swiggy_instamart"
   | "swiggy_food"
   | "food_and_dining"
+  | "gifts"
   | "shopping"
   | "transport"
   | "travel";
@@ -453,6 +467,7 @@ export type DashboardCategorySeries =
 export type BarDrilldownChart =
   | "investment_purchase"
   | "investment_sale"
+  | "investment_month"
   | "expense_need"
   | "expense_want"
   | "category";
