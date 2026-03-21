@@ -33,20 +33,28 @@ export function formatCurrency(amount: number, decimals = 0): string {
 }
 
 /**
- * Compact currency formatter for tight spaces (e.g. chart axis labels).
- * e.g. 125000 → "₹1.25L"   (lakh)
- *      2000000 → "₹20L"
- *      500     → "₹500"
+ * Compact INR for tight spaces (chart axes, badges).
+ * Indian convention: **lakhs (L)** from 1,00,000 upward — not "100k".
+ * Below 1 lakh: thousands as **₹12k** (lowercase k, no Western "100k" for a lakh).
  */
 export function formatCurrencyCompact(amount: number): string {
-  if (Math.abs(amount) >= 1_00_000) {
-    // Format as lakhs
-    return `₹${(amount / 1_00_000).toFixed(1).replace(/\.0$/, "")}L`
+  const n = Number(amount)
+  const av = Math.abs(n)
+  if (av >= 1_00_000) {
+    const lakhs = n / 1_00_000
+    return `₹${lakhs.toFixed(1).replace(/\.0$/, "")}L`
   }
-  if (Math.abs(amount) >= 1_000) {
-    return `₹${(amount / 1_000).toFixed(1).replace(/\.0$/, "")}K`
+  if (av >= 1_000) {
+    return `₹${Math.round(n / 1_000)}k`
   }
-  return `₹${amount}`
+  return `₹${Math.round(n)}`
+}
+
+/**
+ * Same as formatCurrencyCompact — use in Recharts `tickFormatter` so axis rules stay consistent.
+ */
+export function formatInrChartAxis(value: number): string {
+  return formatCurrencyCompact(value)
 }
 
 /**

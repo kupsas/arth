@@ -128,6 +128,11 @@ class Transaction(SQLModel, table=True):
     # NULL for INFLOW transactions (income) and any unclassified rows.
     spend_category: str | None = Field(default=None, index=True)
 
+    # When True, transaction is hidden from all dashboard metrics (still listed in table).
+    exclude_from_analytics: bool = Field(default=False, index=True)
+    # Stored reason: "refund" | "test_transaction" | "duplicate" | "other" or free text for "other".
+    exclusion_reason: str | None = Field(default=None)
+
 
 # ───────────────────────────────────────────────────────────────────────────
 # ProcessedEmail — dedup ledger for the Gmail scraper
@@ -265,6 +270,31 @@ class Goal(SQLModel, table=True):
     status: str = Field(default="ON_TRACK", index=True)
     notes: str | None = None
 
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Reminder — manual recurring obligations (rent, credit card due, etc.)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class Reminder(SQLModel, table=True):
+    """User-configured payment reminders (e.g. rent by 5th, CC by 15th)."""
+
+    __tablename__ = "reminders"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(default="sashank", index=True)
+    name: str
+    due_day_of_month: int = Field(ge=1, le=31)
+    amount: float | None = None
+    counterparty_category: str | None = None
+    is_active: bool = Field(default=True)
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )

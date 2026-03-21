@@ -85,22 +85,31 @@ Optional: `INTERNAL_API_URL` if FastAPI is not on `127.0.0.1:8000`.
 dashboard/src/
   app/
     layout.tsx                # Root shell: Providers + Sidebar + Header
-    page.tsx                  # Dashboard page (charts + summary cards)
+    page.tsx                  # Dashboard V2 (this month + trends + drill-down)
     globals.css               # Tailwind v4 + shadcn oklch theme vars
     transactions/page.tsx     # Transactions table page
+    goals/page.tsx            # Goals (full page)
+    settings/page.tsx         # Reminders + statement upload
     review/page.tsx           # Review queue page
   components/
     layout/
       sidebar.tsx             # Fixed left nav
       header.tsx              # Page title + theme toggle
+      mobile-blocker.tsx      # Viewport < 1024px → desktop-only message
       theme-toggle.tsx        # Dark/light mode button
     providers.tsx             # QueryClient + ThemeProvider + TooltipProvider
-    dashboard/                # Dashboard-specific components
-      date-range-picker.tsx
-      summary-cards.tsx
-      category-breakdown-chart.tsx
-      monthly-trend-chart.tsx
-      top-counterparties-table.tsx
+    dashboard/                # Dashboard V2 components
+      date-range-picker.tsx   # Still used on Transactions page
+      goal-progress-section.tsx
+      top-expenses-card.tsx
+      reminders-card.tsx
+      time-range-toggle.tsx
+      investment-trend-chart.tsx
+      expense-stacked-bar.tsx
+      category-trend-grid.tsx
+      bar-drilldown-sheet.tsx
+      goals-section.tsx
+      upload-button.tsx
     transactions/             # Transaction table components
       transaction-table.tsx   # TanStack Table data table
       transaction-filters.tsx # Filter bar (search, dropdowns, date range)
@@ -111,9 +120,12 @@ dashboard/src/
   hooks/
     use-transactions.ts       # React Query hooks for transaction endpoints
     use-metrics.ts            # React Query hooks for metrics endpoints
+    use-goals.ts
+    use-settings.ts           # Reminders API
   lib/
     types.ts                  # Shared TypeScript types (mirrors Python models)
     api.ts                    # Typed HTTP client
+    counterparty-categories.ts
     utils.ts                  # cn(), formatCurrency, formatDate, categoryColor, etc.
 ```
 

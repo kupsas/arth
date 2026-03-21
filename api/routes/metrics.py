@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import case
+from sqlalchemy import case, or_
 from sqlmodel import Session, col, func, select
 
 from api.database import get_session
-from api.models import Transaction
+from api.models import Goal, Transaction
+from api.routes.transactions import _txn_to_dict
 
 router = APIRouter()
 
@@ -170,6 +171,21 @@ def _date_where(q, date_from: datetime.date, date_to: datetime.date):
     )
 
 
+def _analytics_only(q):
+    """Exclude rows the user marked as ignored for analytics."""
+    return q.where(
+        or_(
+            col(Transaction.exclude_from_analytics).is_(None),
+            col(Transaction.exclude_from_analytics).is_(False),
+        )
+    )
+
+
+# Investment flow types (purchases = OUTFLOW, sales = INFLOW proceeds)
+_PURCHASE_TXN_TYPES: tuple[str, ...] = ("EQUITY_PURCHASE", "MF_PURCHASE")
+_SALE_TXN_TYPES: tuple[str, ...] = ("EQUITY_SALE", "MF_SALE")
+
+
 def _generate_month_labels(n: int) -> list[str]:
     """
     Generate a list of 'YYYY-MM' strings for the last n months (oldest first).
@@ -218,10 +234,12 @@ def get_summary(
 
     # ── Income ──────────────────────────────────────────────────────────
     income_q = _date_where(
-        _income_where(
-            select(
-                func.coalesce(func.sum(Transaction.amount), 0.0),
-                func.count(Transaction.id),
+        _analytics_only(
+            _income_where(
+                select(
+                    func.coalesce(func.sum(Transaction.amount), 0.0),
+                    func.count(Transaction.id),
+                )
             )
         ),
         date_from, date_to,
@@ -230,10 +248,12 @@ def get_summary(
 
     # ── Expense ─────────────────────────────────────────────────────────
     expense_q = _date_where(
-        _expense_where(
-            select(
-                func.coalesce(func.sum(Transaction.amount), 0.0),
-                func.count(Transaction.id),
+        _analytics_only(
+            _expense_where(
+                select(
+                    func.coalesce(func.sum(Transaction.amount), 0.0),
+                    func.count(Transaction.id),
+                )
             )
         ),
         date_from, date_to,
@@ -242,8 +262,10 @@ def get_summary(
 
     # ── Savings (OUTFLOW to Asset Markets) ───────────────────────────────
     savings_q = _date_where(
-        _savings_where(
-            select(func.coalesce(func.sum(Transaction.amount), 0.0))
+        _analytics_only(
+            _savings_where(
+                select(func.coalesce(func.sum(Transaction.amount), 0.0))
+            )
         ),
         date_from, date_to,
     )
@@ -303,6 +325,8 @@ def get_by_category(
     else:
         base = _income_where(base)
 
+    base = _analytics_only(base)
+
     base = (
         base.group_by(Transaction.counterparty_category)
         .order_by(func.sum(Transaction.amount).desc())
@@ -346,12 +370,14 @@ def get_top_counterparties(
     date_to = date_to or dt
 
     q = _date_where(
-        _expense_where(
-            select(
-                Transaction.counterparty,
-                func.max(Transaction.counterparty_category).label("category"),
-                func.sum(Transaction.amount).label("total"),
-                func.count(Transaction.id).label("count"),
+        _analytics_only(
+            _expense_where(
+                select(
+                    Transaction.counterparty,
+                    func.max(Transaction.counterparty_category).label("category"),
+                    func.sum(Transaction.amount).label("total"),
+                    func.count(Transaction.id).label("count"),
+                )
             )
         ),
         date_from, date_to,
@@ -409,8 +435,10 @@ def get_monthly_trend(
     month_col = func.strftime("%Y-%m", Transaction.txn_date)
 
     # ── Income by month ──────────────────────────────────────────────────
-    income_q = _income_where(
-        select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+    income_q = _analytics_only(
+        _income_where(
+            select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+        )
     ).where(Transaction.txn_date >= cutoff).group_by(month_col)
 
     income_by_month: dict[str, float] = {
@@ -419,8 +447,10 @@ def get_monthly_trend(
     }
 
     # ── Expense by month ─────────────────────────────────────────────────
-    expense_q = _expense_where(
-        select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+    expense_q = _analytics_only(
+        _expense_where(
+            select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+        )
     ).where(Transaction.txn_date >= cutoff).group_by(month_col)
 
     expense_by_month: dict[str, float] = {
@@ -429,8 +459,10 @@ def get_monthly_trend(
     }
 
     # ── Savings by month (OUTFLOW to Asset Markets) ───────────────────────
-    savings_q = _savings_where(
-        select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+    savings_q = _analytics_only(
+        _savings_where(
+            select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+        )
     ).where(Transaction.txn_date >= cutoff).group_by(month_col)
 
     savings_by_month: dict[str, float] = {
@@ -490,8 +522,10 @@ def get_negative_surplus_months(
     income_by_month: dict[str, float] = {
         row.month: float(row.total or 0)
         for row in session.exec(
-            _income_where(
-                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            _analytics_only(
+                _income_where(
+                    select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+                )
             ).where(Transaction.txn_date >= cutoff).group_by(month_col)
         ).all()
     }
@@ -499,8 +533,10 @@ def get_negative_surplus_months(
     expense_by_month: dict[str, float] = {
         row.month: float(row.total or 0)
         for row in session.exec(
-            _expense_where(
-                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            _analytics_only(
+                _expense_where(
+                    select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+                )
             ).where(Transaction.txn_date >= cutoff).group_by(month_col)
         ).all()
     }
@@ -549,12 +585,14 @@ def get_accounts_summary(
     ).label("total_outflow")
 
     q = (
-        select(
-            Transaction.account_id,
-            func.count(Transaction.id).label("txn_count"),
-            func.max(Transaction.txn_date).label("last_txn_date"),
-            inflow_col,
-            outflow_col,
+        _analytics_only(
+            select(
+                Transaction.account_id,
+                func.count(Transaction.id).label("txn_count"),
+                func.max(Transaction.txn_date).label("last_txn_date"),
+                inflow_col,
+                outflow_col,
+            )
         )
         .group_by(Transaction.account_id)
         .order_by(Transaction.account_id)
@@ -603,7 +641,7 @@ def metrics_by_spend_category(
 
     This powers the "Spending Breakdown" donut chart on the dashboard.
     """
-    q = (
+    q = _analytics_only(
         select(
             Transaction.spend_category,
             func.sum(Transaction.amount).label("amount"),
@@ -634,3 +672,392 @@ def metrics_by_spend_category(
         )
         for r in rows
     ]
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Dashboard V2 — goal progress, trends, drill-down
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def _last_day_of_calendar_month(year: int, month: int) -> datetime.date:
+    if month == 12:
+        return datetime.date(year, 12, 31)
+    return datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
+
+
+def _month_start_end(ym: str) -> tuple[datetime.date, datetime.date]:
+    y, m = map(int, ym.split("-"))
+    start = datetime.date(y, m, 1)
+    end = _last_day_of_calendar_month(y, m)
+    today = datetime.date.today()
+    if end > today:
+        end = today
+    return start, end
+
+
+def _adherence_month_labels(n: int = 4) -> list[str]:
+    """Oldest-first list of YYYY-MM for the last n calendar months (incl. current)."""
+    today = datetime.date.today()
+    y, m = today.year, today.month
+    out: list[str] = []
+    for _ in range(n):
+        out.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    return list(reversed(out))
+
+
+def _total_expenses_month(session: Session, start: datetime.date, end: datetime.date) -> float:
+    q = _date_where(
+        _analytics_only(
+            _expense_where(select(func.coalesce(func.sum(Transaction.amount), 0.0)))
+        ),
+        start,
+        end,
+    )
+    return float(session.exec(q).one() or 0)
+
+
+def _investment_flows_month(
+    session: Session, start: datetime.date, end: datetime.date
+) -> tuple[float, float, float]:
+    """Returns (purchases, sales, net) for the month window."""
+    pur_q = _analytics_only(
+        select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
+            Transaction.direction == "OUTFLOW",
+            col(Transaction.txn_type).in_(_PURCHASE_TXN_TYPES),
+        )
+    )
+    pur_q = _date_where(pur_q, start, end)
+    purchases = float(session.exec(pur_q).one() or 0)
+
+    sale_q = _analytics_only(
+        select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
+            Transaction.direction == "INFLOW",
+            col(Transaction.txn_type).in_(_SALE_TXN_TYPES),
+        )
+    )
+    sale_q = _date_where(sale_q, start, end)
+    sales = float(session.exec(sale_q).one() or 0)
+
+    return purchases, sales, round(purchases - sales, 2)
+
+
+class AdherenceMonth(BaseModel):
+    month: str
+    hit: bool | None  # None when target_amount is unset
+
+
+class GoalProgressResponse(BaseModel):
+    goal_id: int
+    goal_type: str
+    target_amount: float | None
+    current_value: float
+    purchases: float | None = None
+    sales: float | None = None
+    net_investment: float | None = None
+    adherence: list[AdherenceMonth]
+
+
+@router.get("/goal-progress", response_model=GoalProgressResponse)
+def get_goal_progress(
+    goal_id: int = Query(..., description="Goal id to evaluate"),
+    *,
+    session: Session = Depends(get_session),
+):
+    goal = session.get(Goal, goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
+
+    today = datetime.date.today()
+    cur_start = today.replace(day=1)
+    adherence: list[AdherenceMonth] = []
+    target = goal.target_amount
+
+    if goal.goal_type == "INVESTMENT":
+        pur, sal, net = _investment_flows_month(session, cur_start, today)
+        current = net
+        for ym in _adherence_month_labels(4):
+            ms, me = _month_start_end(ym)
+            _, _, mnet = _investment_flows_month(session, ms, me)
+            if target is None or target <= 0:
+                adherence.append(AdherenceMonth(month=ym, hit=None))
+            else:
+                adherence.append(AdherenceMonth(month=ym, hit=mnet >= target))
+        return GoalProgressResponse(
+            goal_id=goal.id,
+            goal_type=goal.goal_type,
+            target_amount=target,
+            current_value=current,
+            purchases=round(pur, 2),
+            sales=round(sal, 2),
+            net_investment=net,
+            adherence=adherence,
+        )
+
+    if goal.goal_type == "EXPENSE_LIMIT":
+
+        def _expense_limit_sum(r_start: datetime.date, r_end: datetime.date) -> float:
+            base = _expense_where(
+                select(func.coalesce(func.sum(Transaction.amount), 0.0))
+            )
+            if goal.linked_category:
+                base = base.where(Transaction.counterparty_category == goal.linked_category)
+            q = _date_where(_analytics_only(base), r_start, r_end)
+            return float(session.exec(q).one() or 0)
+
+        current = _expense_limit_sum(cur_start, today)
+        for ym in _adherence_month_labels(4):
+            ms, me = _month_start_end(ym)
+            spent = _expense_limit_sum(ms, me)
+            if target is None or target <= 0:
+                adherence.append(AdherenceMonth(month=ym, hit=None))
+            else:
+                adherence.append(AdherenceMonth(month=ym, hit=spent <= target))
+        return GoalProgressResponse(
+            goal_id=goal.id,
+            goal_type=goal.goal_type,
+            target_amount=target,
+            current_value=round(current, 2),
+            adherence=adherence,
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail="goal-progress supports goal_type INVESTMENT or EXPENSE_LIMIT only",
+    )
+
+
+class InvestmentTrendRow(BaseModel):
+    month: str
+    purchases: float
+    sales: float
+    net: float
+
+
+@router.get("/investment-trend", response_model=list[InvestmentTrendRow])
+def get_investment_trend(
+    months: int = Query(6, ge=1, le=36),
+    *,
+    session: Session = Depends(get_session),
+):
+    out: list[InvestmentTrendRow] = []
+    for ym in _generate_month_labels(months):
+        ms, me = _month_start_end(ym)
+        pur, sal, net = _investment_flows_month(session, ms, me)
+        out.append(
+            InvestmentTrendRow(
+                month=ym,
+                purchases=round(pur, 2),
+                sales=round(sal, 2),
+                net=net,
+            )
+        )
+    return out
+
+
+class ExpenseStackedRow(BaseModel):
+    month: str
+    need: float
+    want: float
+
+
+@router.get("/expense-trend-stacked", response_model=list[ExpenseStackedRow])
+def get_expense_trend_stacked(
+    months: int = Query(6, ge=1, le=36),
+    *,
+    session: Session = Depends(get_session),
+):
+    today = datetime.date.today()
+    base_total = today.year * 12 + (today.month - 1)
+    start_total = base_total - (months - 1)
+    start_year, start_mo = divmod(start_total, 12)
+    cutoff = datetime.date(start_year, start_mo + 1, 1)
+    month_col = func.strftime("%Y-%m", Transaction.txn_date)
+
+    q = (
+        _analytics_only(
+            _expense_where(
+                select(
+                    month_col.label("month"),
+                    Transaction.spend_category,
+                    func.sum(Transaction.amount).label("total"),
+                ).where(col(Transaction.spend_category).in_(["NEED", "WANT"]))
+            )
+        )
+        .where(Transaction.txn_date >= cutoff)
+        .group_by(month_col, Transaction.spend_category)
+    )
+
+    buckets: dict[str, dict[str, float]] = {}
+    for row in session.exec(q).all():
+        buckets.setdefault(row.month, {})[row.spend_category or ""] = float(row.total or 0)
+
+    return [
+        ExpenseStackedRow(
+            month=label,
+            need=round(buckets.get(label, {}).get("NEED", 0.0), 2),
+            want=round(buckets.get(label, {}).get("WANT", 0.0), 2),
+        )
+        for label in _generate_month_labels(months)
+    ]
+
+
+class CategoryTrendRow(BaseModel):
+    month: str
+    amount: float
+
+
+def _category_trend_where(series: str):
+    """Build WHERE clause fragments for predefined dashboard series (as SQLAlchemy boolean).
+
+    Swiggy sub-brands (see pipeline ``rules_classifier`` — ``_classify_swiggy_sub`` /
+    spend rules): only **Swiggy Instamart** is NEED; **Swiggy Food**, **Swiggy Dineout**,
+    and generic **Swiggy** are WANT. Category charts here split by **counterparty** name:
+
+    - ``swiggy_instamart`` → counterparty == "Swiggy Instamart"
+    - ``swiggy_food`` → counterparty == "Swiggy Food"
+    - ``food_and_dining`` → Food & Dining category **or** counterparty == "Swiggy Dineout"
+    """
+    fd = "Food & Dining"
+    if series == "swiggy_instamart":
+        return Transaction.counterparty == "Swiggy Instamart"
+    if series == "swiggy_food":
+        return Transaction.counterparty == "Swiggy Food"
+    if series == "food_and_dining":
+        return (Transaction.counterparty_category == fd) | (
+            Transaction.counterparty == "Swiggy Dineout"
+        )
+    if series == "gifts":
+        return Transaction.counterparty_category == "Gifts & Personal Transfers"
+    if series == "shopping":
+        return Transaction.counterparty_category == "Shopping & E-commerce"
+    if series == "transport":
+        return Transaction.counterparty_category == "Transport & Fuel"
+    if series == "travel":
+        return Transaction.counterparty_category == "Travel & Stay"
+    raise ValueError(f"unknown series: {series}")
+
+
+@router.get("/category-trend", response_model=list[CategoryTrendRow])
+def get_category_trend(
+    series: str = Query(
+        ...,
+        description=(
+            "swiggy_instamart | swiggy_food | food_and_dining | "
+            "shopping | transport | travel"
+        ),
+    ),
+    months: int = Query(6, ge=1, le=36),
+    *,
+    session: Session = Depends(get_session),
+):
+    try:
+        cond = _category_trend_where(series)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    today = datetime.date.today()
+    base_total = today.year * 12 + (today.month - 1)
+    start_total = base_total - (months - 1)
+    start_year, start_mo = divmod(start_total, 12)
+    cutoff = datetime.date(start_year, start_mo + 1, 1)
+    month_col = func.strftime("%Y-%m", Transaction.txn_date)
+
+    q = (
+        _analytics_only(
+            _expense_where(
+                select(month_col.label("month"), func.sum(Transaction.amount).label("total")).where(
+                    cond
+                )
+            )
+        )
+        .where(Transaction.txn_date >= cutoff)
+        .group_by(month_col)
+    )
+    by_m = {row.month: float(row.total or 0) for row in session.exec(q).all()}
+    return [
+        CategoryTrendRow(month=label, amount=round(by_m.get(label, 0.0), 2))
+        for label in _generate_month_labels(months)
+    ]
+
+
+@router.get("/top-expenses", response_model=list[dict])
+def get_top_expenses(
+    threshold: float = Query(5000, ge=0),
+    year_month: str | None = Query(
+        None,
+        description="YYYY-MM (default: current calendar month)",
+        pattern=r"^\d{4}-\d{2}$",
+    ),
+    *,
+    session: Session = Depends(get_session),
+):
+    today = datetime.date.today()
+    if year_month:
+        start, end = _month_start_end(year_month)
+    else:
+        start = today.replace(day=1)
+        end = today
+
+    q = (
+        _analytics_only(
+            _expense_where(select(Transaction).where(Transaction.amount >= threshold))
+        )
+        .where(Transaction.txn_date >= start)
+        .where(Transaction.txn_date <= end)
+        .order_by(col(Transaction.amount).desc())
+    )
+    rows = session.exec(q).all()
+    return [_txn_to_dict(t) for t in rows]
+
+
+@router.get("/bar-drilldown", response_model=list[dict])
+def get_bar_drilldown(
+    chart: str = Query(
+        ...,
+        description=(
+            "investment_purchase | investment_sale | expense_need | expense_want | category"
+        ),
+    ),
+    month: str = Query(..., pattern=r"^\d{4}-\d{2}$"),
+    series: str | None = Query(
+        None,
+        description="Required when chart=category — same values as /category-trend",
+    ),
+    *,
+    session: Session = Depends(get_session),
+):
+    start, end = _month_start_end(month)
+    q = select(Transaction)
+
+    if chart == "investment_purchase":
+        q = q.where(Transaction.direction == "OUTFLOW").where(
+            col(Transaction.txn_type).in_(_PURCHASE_TXN_TYPES)
+        )
+    elif chart == "investment_sale":
+        q = q.where(Transaction.direction == "INFLOW").where(
+            col(Transaction.txn_type).in_(_SALE_TXN_TYPES)
+        )
+    elif chart == "expense_need":
+        q = _expense_where(q).where(Transaction.spend_category == "NEED")
+    elif chart == "expense_want":
+        q = _expense_where(q).where(Transaction.spend_category == "WANT")
+    elif chart == "category":
+        if not series:
+            raise HTTPException(status_code=400, detail="series is required when chart=category")
+        try:
+            cond = _category_trend_where(series)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        q = _expense_where(q).where(cond)
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown chart: {chart}")
+
+    q = _analytics_only(q)
+    q = q.where(Transaction.txn_date >= start).where(Transaction.txn_date <= end)
+    q = q.order_by(col(Transaction.txn_date).desc(), col(Transaction.amount).desc())
+    rows = session.exec(q).all()
+    return [_txn_to_dict(t) for t in rows]

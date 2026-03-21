@@ -34,6 +34,8 @@ class TransactionUpdate(BaseModel):
     spend_category: str | None = None  # NEED | WANT | SAVING | INVESTMENT
     notes: str | None = None
     is_reviewed: bool | None = None
+    exclude_from_analytics: bool | None = None
+    exclusion_reason: str | None = None
 
 
 class BulkUpdateRequest(BaseModel):
@@ -215,6 +217,9 @@ def _apply_update(txn: Transaction, update: TransactionUpdate) -> None:
     import datetime as _dt
 
     update_data = update.model_dump(exclude_unset=True)
+    # Turning off analytics exclusion clears the reason (keeps DB tidy).
+    if update_data.get("exclude_from_analytics") is False:
+        update_data["exclusion_reason"] = None
     for field, value in update_data.items():
         setattr(txn, field, value)
     if update_data:
@@ -249,6 +254,8 @@ def _txn_to_dict(txn: Transaction) -> dict:
         "notes": txn.notes,
         "is_reviewed": txn.is_reviewed,
         "pipeline_run_id": txn.pipeline_run_id,
+        "exclude_from_analytics": bool(getattr(txn, "exclude_from_analytics", False)),
+        "exclusion_reason": getattr(txn, "exclusion_reason", None),
         "created_at": txn.created_at.isoformat() if txn.created_at else None,
         "updated_at": txn.updated_at.isoformat() if txn.updated_at else None,
     }

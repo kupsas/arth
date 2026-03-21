@@ -26,6 +26,8 @@ import {
   LayoutDashboard,
   ArrowLeftRight,
   Wallet,
+  Target,
+  Settings,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -43,9 +45,19 @@ const NAV_ITEMS = [
     icon: ArrowLeftRight,
   },
   {
+    label: "Goals",
+    href: "/goals",
+    icon: Target,
+  },
+  {
     label: "Review Queue",
     href: "/review",
     icon: ClipboardList,
+  },
+  {
+    label: "Settings",
+    href: "/settings",
+    icon: Settings,
   },
 ] as const;
 
@@ -98,7 +110,7 @@ export function Sidebar() {
 
       {/* ── Footer (version) ──────────────────────────────────────── */}
       <div className="border-t border-sidebar-border px-4 py-3">
-        <p className="text-xs text-muted-foreground">Arth v0.3 · Phase 3</p>
+        <p className="text-xs text-muted-foreground">Arth v0.5 · Dashboard V2</p>
       </div>
     </aside>
   );

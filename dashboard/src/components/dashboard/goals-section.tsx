@@ -9,21 +9,19 @@
  *   - Status badge (ON_TRACK / AT_RISK / BEHIND / ACHIEVED / PAUSED)
  *   - Days until deadline (if set)
  *
- * Also includes a "+ Add Goal" sheet form for creating new goals.
+ * Also includes a "+ Add Goal" sheet for creating goals and a pencil "Edit" sheet per row.
  */
 
 "use client"
 
 import * as React from "react"
-import { format } from "date-fns"
 import {
   CheckCircle2,
   Clock,
+  Pencil,
   Plus,
   Target,
   Trash2,
-  TrendingDown,
-  TrendingUp,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -51,7 +49,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { useCreateGoal, useDeleteGoal, useGoals, useUpdateGoal } from "@/hooks/use-goals"
 import { formatCurrency, cn } from "@/lib/utils"
-import type { Goal, GoalCreate, GoalStatus, GoalType } from "@/lib/types"
+import type { Goal, GoalCreate, GoalStatus, GoalType, GoalUpdate } from "@/lib/types"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Status helpers
@@ -81,6 +79,164 @@ const GOAL_TYPE_LABELS: Record<GoalType, string> = {
   DEBT_PAYOFF:    "Debt Payoff",
   INSURANCE:      "Insurance",
   TAX:            "Tax",
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EditGoalSheet — change name, targets, notes (goal type is fixed after create)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function EditGoalSheet({ goal }: { goal: Goal }) {
+  const [open, setOpen] = React.useState(false)
+  const { mutate: patchGoal, isPending } = useUpdateGoal()
+
+  // Form state — re-seed whenever the sheet opens so you always edit fresh server data.
+  const [name, setName] = React.useState(goal.name)
+  const [targetAmount, setTargetAmount] = React.useState(
+    goal.target_amount != null ? String(goal.target_amount) : "",
+  )
+  const [targetDate, setTargetDate] = React.useState(goal.target_date ?? "")
+  const [linkedCategory, setLinkedCategory] = React.useState(goal.linked_category ?? "")
+  const [notes, setNotes] = React.useState(goal.notes ?? "")
+
+  React.useEffect(() => {
+    if (!open) return
+    setName(goal.name)
+    setTargetAmount(goal.target_amount != null ? String(goal.target_amount) : "")
+    setTargetDate(goal.target_date ?? "")
+    setLinkedCategory(goal.linked_category ?? "")
+    setNotes(goal.notes ?? "")
+  }, [open, goal])
+
+  const isExpenseLimit = goal.goal_type === "EXPENSE_LIMIT"
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!name.trim()) return
+
+    const update: GoalUpdate = {
+      name: name.trim(),
+      target_date: targetDate.trim() ? targetDate.trim() : null,
+      notes: notes.trim() ? notes.trim() : null,
+    }
+
+    // Empty target field → clear limit/target on the server
+    if (targetAmount.trim() === "") {
+      update.target_amount = null
+    } else {
+      const n = parseFloat(targetAmount)
+      if (!Number.isNaN(n)) update.target_amount = n
+    }
+
+    if (isExpenseLimit) {
+      update.linked_category = linkedCategory.trim() ? linkedCategory.trim() : null
+    }
+
+    patchGoal(
+      { id: goal.id, update },
+      { onSuccess: () => setOpen(false) },
+    )
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 text-muted-foreground hover:text-foreground"
+            aria-label={`Edit goal: ${goal.name}`}
+            type="button"
+          >
+            <Pencil className="size-3" />
+          </Button>
+        }
+      />
+      <SheetContent className="flex h-full w-[360px] flex-col sm:w-[400px]">
+        {/* Padded scroll body: SheetHeader + form were edge-to-edge; inputs need inset from sheet chrome */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-10 pt-5">
+          <SheetHeader className="shrink-0 space-y-2 p-0 pr-12 pb-4">
+            <SheetTitle>Edit goal</SheetTitle>
+            <SheetDescription>
+              Update this goal&apos;s details. Type is{" "}
+              <span className="font-medium text-foreground">
+                {GOAL_TYPE_LABELS[goal.goal_type as GoalType] ?? goal.goal_type}
+              </span>{" "}
+              (create a new goal if you need a different type).
+            </SheetDescription>
+          </SheetHeader>
+
+          <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`edit-goal-name-${goal.id}`}>Goal name</Label>
+            <Input
+              id={`edit-goal-name-${goal.id}`}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`edit-goal-target-${goal.id}`}>
+                {isExpenseLimit ? "Monthly limit (₹)" : "Target amount (₹)"}
+              </Label>
+              <Input
+                id={`edit-goal-target-${goal.id}`}
+                type="number"
+                placeholder="e.g. 10000"
+                value={targetAmount}
+                onChange={(e) => setTargetAmount(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`edit-goal-date-${goal.id}`}>Deadline (optional)</Label>
+              <Input
+                id={`edit-goal-date-${goal.id}`}
+                type="date"
+                value={targetDate}
+                onChange={(e) => setTargetDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {isExpenseLimit && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`edit-goal-category-${goal.id}`}>
+                Linked category (optional)
+              </Label>
+              <Input
+                id={`edit-goal-category-${goal.id}`}
+                placeholder="e.g. Food & Dining"
+                value={linkedCategory}
+                onChange={(e) => setLinkedCategory(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Leave empty to track all spending across categories.
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`edit-goal-notes-${goal.id}`}>Notes (optional)</Label>
+            <Textarea
+              id={`edit-goal-notes-${goal.id}`}
+              rows={2}
+              placeholder="Why this goal matters…"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          </div>
+
+          <Button type="submit" className="mt-1 w-full" disabled={isPending}>
+            {isPending ? "Saving…" : "Save changes"}
+          </Button>
+        </form>
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,17 +279,19 @@ function GoalCard({ goal }: { goal: Goal }) {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
           <Badge
             variant="outline"
             className={cn("text-[11px] px-1.5 py-0", STATUS_STYLES[goal.status as GoalStatus])}
           >
             {STATUS_LABELS[goal.status as GoalStatus] ?? goal.status}
           </Badge>
+          <EditGoalSheet goal={goal} />
           <Button
             variant="ghost"
             size="icon"
             className="size-6 text-muted-foreground hover:text-destructive"
+            aria-label={`Delete goal: ${goal.name}`}
             onClick={() => deleteGoal(goal.id)}
           >
             <Trash2 className="size-3" />
@@ -248,17 +406,18 @@ function AddGoalSheet() {
           </Button>
         }
       />
-      <SheetContent className="w-[360px] sm:w-[400px]">
-        <SheetHeader>
-          <SheetTitle>New Goal</SheetTitle>
-          <SheetDescription>
-            Set a financial target to track. Progress is computed automatically
-            for Expense Limit goals; enter it manually for everything else.
-          </SheetDescription>
-        </SheetHeader>
+      <SheetContent className="flex h-full w-[360px] flex-col sm:w-[400px]">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-10 pt-5">
+          <SheetHeader className="shrink-0 space-y-2 p-0 pr-12 pb-4">
+            <SheetTitle>New Goal</SheetTitle>
+            <SheetDescription>
+              Set a financial target to track. Progress is computed automatically
+              for Expense Limit goals; enter it manually for everything else.
+            </SheetDescription>
+          </SheetHeader>
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <div className="space-y-1.5">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="goal-name">Goal name</Label>
             <Input
               id="goal-name"
@@ -269,7 +428,7 @@ function AddGoalSheet() {
             />
           </div>
 
-          <div className="space-y-1.5">
+          <div className="flex flex-col gap-2">
             <Label>Goal type</Label>
             <Select
               value={form.goal_type}
@@ -286,8 +445,8 @@ function AddGoalSheet() {
             </Select>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="goal-target">
                 {form.goal_type === "EXPENSE_LIMIT" ? "Monthly limit (₹)" : "Target amount (₹)"}
               </Label>
@@ -304,7 +463,7 @@ function AddGoalSheet() {
                 }
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="goal-date">Deadline (optional)</Label>
               <Input
                 id="goal-date"
@@ -316,7 +475,7 @@ function AddGoalSheet() {
           </div>
 
           {form.goal_type === "EXPENSE_LIMIT" && (
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="goal-category">Linked category (optional)</Label>
               <Input
                 id="goal-category"
@@ -330,7 +489,7 @@ function AddGoalSheet() {
             </div>
           )}
 
-          <div className="space-y-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="goal-notes">Notes (optional)</Label>
             <Textarea
               id="goal-notes"
@@ -341,10 +500,11 @@ function AddGoalSheet() {
             />
           </div>
 
-          <Button type="submit" className="w-full" disabled={isPending}>
+          <Button type="submit" className="mt-1 w-full" disabled={isPending}>
             {isPending ? "Creating…" : "Create goal"}
           </Button>
         </form>
+        </div>
       </SheetContent>
     </Sheet>
   )

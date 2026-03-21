@@ -98,6 +98,7 @@ export function useCreateGoal() {
     mutationFn: (body: GoalCreate) => createGoal(body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: goalKeys.all });
+      void queryClient.invalidateQueries({ queryKey: ["metrics"] });
     },
   });
 }
@@ -121,6 +122,7 @@ export function useUpdateGoal() {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: goalKeys.all });
       queryClient.invalidateQueries({ queryKey: goalKeys.detail(id) });
+      void queryClient.invalidateQueries({ queryKey: ["metrics"] });
     },
   });
 }
@@ -135,6 +137,7 @@ export function useDeleteGoal() {
     mutationFn: (id: number) => deleteGoal(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: goalKeys.all });
+      void queryClient.invalidateQueries({ queryKey: ["metrics"] });
     },
   });
 }
