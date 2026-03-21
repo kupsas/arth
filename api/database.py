@@ -11,7 +11,7 @@ injection to point at an in-memory SQLite database instead.
 
 from __future__ import annotations
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine
 
 from pipeline.config import DB_PATH
@@ -41,6 +41,27 @@ def get_engine():
     return _engine
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    result = conn.execute(text(f"PRAGMA table_info({table})"))
+    return any(row[1] == column for row in result)
+
+
+def _apply_sqlite_patches() -> None:
+    """Add columns/tables introduced after the DB was first created (SQLite ALTER)."""
+    with _engine.begin() as conn:
+        if not _column_exists(conn, "transactions", "exclude_from_analytics"):
+            conn.execute(
+                text(
+                    "ALTER TABLE transactions ADD COLUMN exclude_from_analytics "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+        if not _column_exists(conn, "transactions", "exclusion_reason"):
+            conn.execute(
+                text("ALTER TABLE transactions ADD COLUMN exclusion_reason TEXT")
+            )
+
+
 def init_db() -> None:
     """Create all tables that don't already exist.
 
@@ -52,6 +73,7 @@ def init_db() -> None:
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(_engine)
+    _apply_sqlite_patches()
 
 
 def get_session():

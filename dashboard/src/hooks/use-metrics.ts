@@ -19,23 +19,36 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 
 import {
   fetchAccountsSummary,
+  fetchBarDrilldown,
   fetchCategoryBreakdown,
+  fetchCategoryTrend,
+  fetchExpenseTrendStacked,
+  fetchGoalProgress,
+  fetchInvestmentTrend,
   fetchMetricsSummary,
   fetchMonthlyTrend,
   fetchNegativeSurplusMonths,
   fetchSpendCategoryBreakdown,
   fetchTopCounterparties,
+  fetchTopExpenses,
 } from "@/lib/api";
 import type {
   AccountSummary,
+  BarDrilldownChart,
   CategoryBreakdown,
+  CategoryTrendRow,
+  DashboardCategorySeries,
   DateRange,
   Direction,
+  ExpenseStackedRow,
+  GoalProgressResponse,
+  InvestmentTrendRow,
   MetricsSummary,
   MonthlyTrend,
   NegativeSurplusResponse,
   SpendCategoryBreakdown,
   TopCounterparty,
+  Transaction,
 } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,6 +85,24 @@ export const metricsKeys = {
 
   spendCategory: (dateRange: DateRange) =>
     [...metricsKeys.all, "spend-category", dateRange] as const,
+
+  goalProgress: (goalId: number) =>
+    [...metricsKeys.all, "goal-progress", goalId] as const,
+
+  investmentTrend: (months: number) =>
+    [...metricsKeys.all, "investment-trend", months] as const,
+
+  expenseStacked: (months: number) =>
+    [...metricsKeys.all, "expense-stacked", months] as const,
+
+  categoryTrend: (series: string, months: number) =>
+    [...metricsKeys.all, "category-trend", series, months] as const,
+
+  topExpenses: (threshold: number, yearMonth?: string) =>
+    [...metricsKeys.all, "top-expenses", threshold, yearMonth ?? "current"] as const,
+
+  barDrilldown: (chart: string, month: string, series?: string) =>
+    [...metricsKeys.all, "bar-drilldown", chart, month, series ?? ""] as const,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,6 +283,88 @@ export function useSpendCategoryBreakdown(
     queryKey: metricsKeys.spendCategory(dateRange),
     queryFn: () => fetchSpendCategoryBreakdown(dateRange),
     staleTime: 2 * 60 * 1_000,
+    ...options,
+  });
+}
+
+export function useGoalProgress(
+  goalId: number | null,
+  options?: Partial<UseQueryOptions<GoalProgressResponse>>,
+) {
+  return useQuery<GoalProgressResponse>({
+    queryKey: metricsKeys.goalProgress(goalId ?? 0),
+    queryFn: () => fetchGoalProgress(goalId!),
+    enabled: goalId != null,
+    staleTime: 60 * 1_000,
+    ...options,
+  });
+}
+
+export function useInvestmentTrend(
+  months: number,
+  options?: Partial<UseQueryOptions<InvestmentTrendRow[]>>,
+) {
+  return useQuery<InvestmentTrendRow[]>({
+    queryKey: metricsKeys.investmentTrend(months),
+    queryFn: () => fetchInvestmentTrend(months),
+    staleTime: 60 * 1_000,
+    ...options,
+  });
+}
+
+export function useExpenseTrendStacked(
+  months: number,
+  options?: Partial<UseQueryOptions<ExpenseStackedRow[]>>,
+) {
+  return useQuery<ExpenseStackedRow[]>({
+    queryKey: metricsKeys.expenseStacked(months),
+    queryFn: () => fetchExpenseTrendStacked(months),
+    staleTime: 60 * 1_000,
+    ...options,
+  });
+}
+
+export function useCategoryTrend(
+  series: DashboardCategorySeries,
+  months: number,
+  options?: Partial<UseQueryOptions<CategoryTrendRow[]>>,
+) {
+  return useQuery<CategoryTrendRow[]>({
+    queryKey: metricsKeys.categoryTrend(series, months),
+    queryFn: () => fetchCategoryTrend(series, months),
+    staleTime: 60 * 1_000,
+    ...options,
+  });
+}
+
+export function useTopExpenses(
+  threshold = 5000,
+  yearMonth?: string,
+  options?: Partial<UseQueryOptions<Transaction[]>>,
+) {
+  return useQuery<Transaction[]>({
+    queryKey: metricsKeys.topExpenses(threshold, yearMonth),
+    queryFn: () => fetchTopExpenses(threshold, yearMonth),
+    staleTime: 60 * 1_000,
+    ...options,
+  });
+}
+
+export function useBarDrilldown(
+  params: {
+    chart: BarDrilldownChart;
+    month: string;
+    series?: DashboardCategorySeries;
+  } | null,
+  options?: Partial<UseQueryOptions<Transaction[]>>,
+) {
+  return useQuery<Transaction[]>({
+    queryKey: params
+      ? metricsKeys.barDrilldown(params.chart, params.month, params.series)
+      : ["metrics", "bar-drilldown", "idle"],
+    queryFn: () => fetchBarDrilldown(params!),
+    enabled: params != null,
+    staleTime: 30 * 1_000,
     ...options,
   });
 }

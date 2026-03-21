@@ -158,6 +158,9 @@ export function useUpdateTransaction() {
 
       // Invalidate all list queries — they'll refetch in the background
       void queryClient.invalidateQueries({ queryKey: txnKeys.lists() });
+      // Dashboard metrics (charts, goal progress, top expenses, drill-down)
+      void queryClient.invalidateQueries({ queryKey: ["metrics"] });
+      void queryClient.invalidateQueries({ queryKey: ["goals"] });
     },
   });
 }

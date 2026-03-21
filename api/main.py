@@ -22,6 +22,7 @@ from api.database import init_db
 from api.routes import metrics, pipeline, transactions
 from api.routes.auth import router as auth_router
 from api.routes.goals import router as goals_router
+from api.routes.settings import router as settings_router
 from api.routes.recurring import router as recurring_router
 from api.routes.scraper import router as scraper_router
 from pipeline.logging_config import setup_logging
@@ -102,6 +103,7 @@ app.include_router(pipeline.router,     prefix="/api/pipeline",      tags=["Pipe
 app.include_router(scraper_router,      prefix="/api/scraper",       tags=["Scraper"],       dependencies=_auth)
 app.include_router(recurring_router,    prefix="/api/recurring",     tags=["Recurring"],     dependencies=_auth)
 app.include_router(goals_router,        prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
+app.include_router(settings_router,    prefix="/api/settings",      tags=["Settings"],      dependencies=_auth)
 
 
 # ---------------------------------------------------------------------------

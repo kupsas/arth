@@ -118,6 +118,9 @@ export interface Transaction {
 
   is_reviewed: boolean;
   pipeline_run_id: number | null;
+  /** When true, row still appears in the table but is omitted from all metrics. */
+  exclude_from_analytics?: boolean;
+  exclusion_reason?: string | null;
   created_at: string;         // ISO datetime string
   updated_at: string;         // ISO datetime string
 }
@@ -133,6 +136,8 @@ export interface TransactionUpdate {
   spend_category?: SpendCategory | null;
   notes?: string | null;
   is_reviewed?: boolean;
+  exclude_from_analytics?: boolean;
+  exclusion_reason?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -396,6 +401,92 @@ export interface GoalUpdate {
   current_value?: number | null;
   status?: GoalStatus;
   notes?: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard V2 — metrics helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface GoalProgressAdherenceMonth {
+  month: string;
+  hit: boolean | null;
+}
+
+export interface GoalProgressResponse {
+  goal_id: number;
+  goal_type: string;
+  target_amount: number | null;
+  current_value: number;
+  purchases?: number | null;
+  sales?: number | null;
+  net_investment?: number | null;
+  adherence: GoalProgressAdherenceMonth[];
+}
+
+export interface InvestmentTrendRow {
+  month: string;
+  purchases: number;
+  sales: number;
+  net: number;
+}
+
+export interface ExpenseStackedRow {
+  month: string;
+  need: number;
+  want: number;
+}
+
+export interface CategoryTrendRow {
+  month: string;
+  amount: number;
+}
+
+/** Query param for GET /api/metrics/category-trend */
+export type DashboardCategorySeries =
+  | "swiggy_instamart"
+  | "swiggy_food"
+  | "food_and_dining"
+  | "shopping"
+  | "transport"
+  | "travel";
+
+export type BarDrilldownChart =
+  | "investment_purchase"
+  | "investment_sale"
+  | "expense_need"
+  | "expense_want"
+  | "category";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reminders (Settings)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface Reminder {
+  id: number;
+  user_id: string;
+  name: string;
+  due_day_of_month: number;
+  amount: number | null;
+  counterparty_category: string | null;
+  is_active: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ReminderCreate {
+  name: string;
+  due_day_of_month: number;
+  amount?: number | null;
+  counterparty_category?: string | null;
+  is_active?: boolean;
+}
+
+export interface ReminderUpdate {
+  name?: string;
+  due_day_of_month?: number;
+  amount?: number | null;
+  counterparty_category?: string | null;
+  is_active?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

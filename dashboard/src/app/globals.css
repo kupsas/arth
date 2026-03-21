@@ -7,7 +7,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  /* Outfit from next/font (see layout.tsx --font-outfit) */
+  --font-sans: var(--font-outfit), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -71,6 +72,19 @@
   --chart-3: oklch(0.546 0.245 262.881);
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
+  /* Recharts semantic fills (oklch — use as var(--x), never hsl(var(--x))) */
+  --chart-purchase: oklch(0.52 0.14 155);
+  --chart-sale: oklch(0.52 0.19 27);
+  --chart-need: oklch(0.5 0.12 252);
+  --chart-want: oklch(0.58 0.16 75);
+  --chart-goal-line: oklch(0.65 0.15 85);
+  --chart-cat-1: oklch(0.52 0.12 200);
+  --chart-cat-2: oklch(0.55 0.16 310);
+  --chart-cat-3: oklch(0.5 0.14 145);
+  --chart-cat-4: oklch(0.55 0.14 25);
+  --chart-cat-5: oklch(0.5 0.18 275);
+  --chart-cat-6: oklch(0.52 0.12 60);
+  --chart-cat-7: oklch(0.48 0.14 330);
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -106,6 +120,19 @@
   --chart-3: oklch(0.546 0.245 262.881);
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
+  /* Brighter fills on dark backgrounds so bars stay visible */
+  --chart-purchase: oklch(0.72 0.17 155);
+  --chart-sale: oklch(0.72 0.18 27);
+  --chart-need: oklch(0.7 0.14 252);
+  --chart-want: oklch(0.76 0.16 75);
+  --chart-goal-line: oklch(0.78 0.14 85);
+  --chart-cat-1: oklch(0.72 0.14 200);
+  --chart-cat-2: oklch(0.74 0.16 310);
+  --chart-cat-3: oklch(0.7 0.15 145);
+  --chart-cat-4: oklch(0.74 0.15 25);
+  --chart-cat-5: oklch(0.7 0.18 275);
+  --chart-cat-6: oklch(0.72 0.14 60);
+  --chart-cat-7: oklch(0.68 0.15 330);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);

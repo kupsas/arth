@@ -1,19 +1,10 @@
 /**
- * DateRangePicker — controls the time window for all dashboard widgets.
+ * DateRangePicker — preset pills + custom calendar range.
  *
- * Design:
- *   - Four preset buttons (This Month / Last Month / Last 3M / Last 6M) for the
- *     common cases — no popover needed, just click.
- *   - A "Custom" button opens a Popover with a two-month Calendar for arbitrary
- *     start/end selection.
- *
- * The parent page holds the active preset + derived DateRange in state.
- * This component just renders the UI and calls onPresetChange / onCustomChange.
- *
- * Why separate presets from the DateRange?
- *   We need to know the *previous* period for the MoM delta on summary cards.
- *   Deriving the previous period from a preset is easy; from an arbitrary
- *   DateRange it requires date arithmetic that's easy to get wrong.
+ * Custom range UX:
+ *   - Popover stays open while you pick start and end (no auto-close on click).
+ *   - First day click sets "from", second sets "to" (react-day-picker range mode).
+ *   - Press **Apply** to commit and close; **Cancel** closes without changing.
  */
 
 "use client"
@@ -32,15 +23,6 @@ import {
 import { cn } from "@/lib/utils"
 import type { DateRange } from "@/lib/types"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Preset helpers (exported so page.tsx can use them for previous-period calcs)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * "all" = no date filter (all-time view).
- * Used by the Transactions page when the user deselects a preset pill.
- * The dashboard never uses "all" — it always has a date range.
- */
 export type Preset = "all" | "this-month" | "last-month" | "last-3m" | "last-6m" | "custom"
 
 export const PRESETS: { id: Preset; label: string }[] = [
@@ -50,85 +32,77 @@ export const PRESETS: { id: Preset; label: string }[] = [
   { id: "last-6m",     label: "Last 6 Months" },
 ]
 
-/** ISO "YYYY-MM-DD" string from a Date object */
-function toISO(d: Date): string {
-  return d.toISOString().split("T")[0]
+/**
+ * Calendar "YYYY-MM-DD" for the date the user sees — **local** timezone, not UTC.
+ *
+ * Why not `d.toISOString().split("T")[0]`?
+ * `toISOString()` is always UTC. Local midnight on 10 Feb (e.g. India) is still
+ * 9 Feb evening in UTC, so you'd get `2025-02-09` and filters would be off by one.
+ */
+function dateToLocalYYYYMMDD(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
 }
 
-/** The date range for a given preset (always re-computed from today). */
 export function getPresetRange(preset: Preset): DateRange {
   const now = new Date()
   switch (preset) {
     case "all":
-      // No date filter — returns empty DateRange so the API returns all records
       return {}
     case "this-month":
       return {
-        date_from: toISO(new Date(now.getFullYear(), now.getMonth(), 1)),
-        date_to:   toISO(now),
+        date_from: dateToLocalYYYYMMDD(new Date(now.getFullYear(), now.getMonth(), 1)),
+        date_to:   dateToLocalYYYYMMDD(now),
       }
     case "last-month": {
       const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-      const end   = new Date(now.getFullYear(), now.getMonth(), 0)      // last day of prev month
-      return { date_from: toISO(start), date_to: toISO(end) }
+      const end   = new Date(now.getFullYear(), now.getMonth(), 0)
+      return { date_from: dateToLocalYYYYMMDD(start), date_to: dateToLocalYYYYMMDD(end) }
     }
     case "last-3m": {
       const start = new Date(now.getFullYear(), now.getMonth() - 3, 1)
-      return { date_from: toISO(start), date_to: toISO(now) }
+      return { date_from: dateToLocalYYYYMMDD(start), date_to: dateToLocalYYYYMMDD(now) }
     }
     case "last-6m": {
       const start = new Date(now.getFullYear(), now.getMonth() - 6, 1)
-      return { date_from: toISO(start), date_to: toISO(now) }
+      return { date_from: dateToLocalYYYYMMDD(start), date_to: dateToLocalYYYYMMDD(now) }
     }
     default:
       return {}
   }
 }
 
-/**
- * The period *before* the one described by the preset.
- * Used by SummaryCards to compute the month-over-month delta.
- *
- * Examples:
- *   this-month  → same calendar month, one month back
- *   last-month  → the month before last month
- *   last-3m     → the three months before the current last-3m window
- *   last-6m     → the six months before the current last-6m window
- */
 export function getPreviousRange(preset: Preset): DateRange {
-  if (preset === "all") return {}   // no concept of "previous" when all-time
+  if (preset === "all") return {}
   const now = new Date()
   switch (preset) {
     case "this-month": {
-      // previous period = last full month
       const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
       const end   = new Date(now.getFullYear(), now.getMonth(), 0)
-      return { date_from: toISO(start), date_to: toISO(end) }
+      return { date_from: dateToLocalYYYYMMDD(start), date_to: dateToLocalYYYYMMDD(end) }
     }
     case "last-month": {
-      // previous period = two months ago (full month)
       const start = new Date(now.getFullYear(), now.getMonth() - 2, 1)
       const end   = new Date(now.getFullYear(), now.getMonth() - 1, 0)
-      return { date_from: toISO(start), date_to: toISO(end) }
+      return { date_from: dateToLocalYYYYMMDD(start), date_to: dateToLocalYYYYMMDD(end) }
     }
     case "last-3m": {
-      // previous period = the 3 months before the current window
       const start = new Date(now.getFullYear(), now.getMonth() - 6, 1)
       const end   = new Date(now.getFullYear(), now.getMonth() - 3, 0)
-      return { date_from: toISO(start), date_to: toISO(end) }
+      return { date_from: dateToLocalYYYYMMDD(start), date_to: dateToLocalYYYYMMDD(end) }
     }
     case "last-6m": {
-      // previous period = the 6 months before the current window
       const start = new Date(now.getFullYear(), now.getMonth() - 12, 1)
       const end   = new Date(now.getFullYear(), now.getMonth() - 6, 0)
-      return { date_from: toISO(start), date_to: toISO(end) }
+      return { date_from: dateToLocalYYYYMMDD(start), date_to: dateToLocalYYYYMMDD(end) }
     }
     default:
       return {}
   }
 }
 
-/** Human-readable label for a DateRange (shown on the custom button). */
 function formatRange(range: DateRange): string {
   if (!range.date_from || !range.date_to) return "Custom"
   const fmt = (iso: string) =>
@@ -139,20 +113,11 @@ function formatRange(range: DateRange): string {
   return `${fmt(range.date_from)} – ${fmt(range.date_to)}`
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Component
-// ─────────────────────────────────────────────────────────────────────────────
-
 interface DateRangePickerProps {
   preset: Preset
-  customRange: DateRange     // only relevant when preset === "custom"
+  customRange: DateRange
   onPresetChange: (preset: Preset, range: DateRange) => void
   onCustomChange: (range: DateRange) => void
-  /**
-   * When true, clicking an already-active preset button deselects it,
-   * setting the preset to "all" (no date filter). Used on the Transactions
-   * page so the user can clear the date filter by clicking the active pill.
-   */
   clearable?: boolean
   className?: string
 }
@@ -165,33 +130,40 @@ export function DateRangePicker({
   clearable = false,
   className,
 }: DateRangePickerProps) {
-  // Internal DayPicker range state for the custom calendar
-  const [calRange, setCalRange] = React.useState<DayPickerRange | undefined>(
-    customRange.date_from && customRange.date_to
-      ? {
-          from: new Date(customRange.date_from + "T00:00:00"),
-          to:   new Date(customRange.date_to   + "T00:00:00"),
-        }
-      : undefined
-  )
   const [open, setOpen] = React.useState(false)
+  const [calRange, setCalRange] = React.useState<DayPickerRange | undefined>(undefined)
+
+  // When the popover opens, copy the last applied custom range into the calendar (or start empty).
+  React.useEffect(() => {
+    if (!open) return
+    if (customRange.date_from && customRange.date_to) {
+      setCalRange({
+        from: new Date(customRange.date_from + "T00:00:00"),
+        to:   new Date(customRange.date_to + "T00:00:00"),
+      })
+    } else {
+      setCalRange(undefined)
+    }
+  }, [open])
 
   function handleCalendarSelect(range: DayPickerRange | undefined) {
     setCalRange(range)
-    if (range?.from && range?.to) {
-      const newRange: DateRange = {
-        date_from: toISO(range.from),
-        date_to:   toISO(range.to),
-      }
-      onCustomChange(newRange)
+  }
+
+  function handleApply() {
+    if (calRange?.from && calRange?.to) {
+      onCustomChange({
+        date_from: dateToLocalYYYYMMDD(calRange.from),
+        date_to:   dateToLocalYYYYMMDD(calRange.to),
+      })
       setOpen(false)
     }
   }
 
+  const canApply = Boolean(calRange?.from && calRange?.to)
+
   return (
     <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
-      {/* Preset quick-select buttons.
-          When clearable, clicking an active button deselects it (→ "all"). */}
       {PRESETS.map((p) => (
         <Button
           key={p.id}
@@ -199,7 +171,6 @@ export function DateRangePicker({
           size="sm"
           onClick={() => {
             if (clearable && preset === p.id) {
-              // Deselect: clear the date filter
               onPresetChange("all", {})
             } else {
               onPresetChange(p.id, getPresetRange(p.id))
@@ -211,7 +182,6 @@ export function DateRangePicker({
         </Button>
       ))}
 
-      {/* Custom date range via calendar */}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           render={
@@ -225,7 +195,7 @@ export function DateRangePicker({
           <CalendarIcon className="size-3.5" />
           {preset === "custom" ? formatRange(customRange) : "Custom"}
         </PopoverTrigger>
-        <PopoverContent className="w-auto p-0" align="end">
+        <PopoverContent className="w-auto p-0 flex flex-col" align="end">
           <Calendar
             mode="range"
             selected={calRange}
@@ -233,6 +203,35 @@ export function DateRangePicker({
             numberOfMonths={2}
             disabled={{ after: new Date() }}
           />
+          <div className="flex items-center justify-between gap-2 border-t border-border p-2">
+            <p className="text-[11px] text-muted-foreground px-1">
+              {calRange?.from && !calRange?.to
+                ? "Pick end date"
+                : !calRange?.from
+                  ? "Pick start date"
+                  : "Adjust or Apply"}
+            </p>
+            <div className="flex gap-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => setOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 text-xs"
+                disabled={!canApply}
+                onClick={handleApply}
+              >
+                Apply
+              </Button>
+            </div>
+          </div>
         </PopoverContent>
       </Popover>
     </div>

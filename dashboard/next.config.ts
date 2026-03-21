@@ -1,4 +1,11 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
+
+// next.config.ts lives in dashboard/ — force Turbopack’s project root here so a stray
+// package-lock.json in the parent repo (Arth/) does not steal resolution and break
+// imports like tailwindcss (they live in dashboard/node_modules only).
+const dashboardDir = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * When you open the dev server through Cloudflare Tunnel, Next blocks HMR
@@ -15,6 +22,9 @@ const allowedDevOrigins = (process.env.NEXT_ALLOWED_DEV_ORIGINS ?? "")
   .filter(Boolean);
 
 const nextConfig: NextConfig = {
+  turbopack: {
+    root: dashboardDir,
+  },
   ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
 };
 

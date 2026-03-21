@@ -19,7 +19,8 @@ from __future__ import annotations
 import datetime
 import logging
 
-from sqlmodel import Session, func, select
+from sqlalchemy import or_
+from sqlmodel import Session, col, func, select
 
 from api.models import Goal, Transaction
 
@@ -83,6 +84,12 @@ def _compute_expense_limit(goal: Goal, session: Session) -> float:
         .where(Transaction.txn_date <= today)
         # Exclude pass-through payments that don't represent real spending
         .where(Transaction.txn_type.not_in(["SELF_TRANSFER", "CARD_PAYMENT"]))  # type: ignore[union-attr]
+        .where(
+            or_(
+                col(Transaction.exclude_from_analytics).is_(None),
+                col(Transaction.exclude_from_analytics).is_(False),
+            )
+        )
     )
 
     if goal.linked_category:

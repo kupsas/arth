@@ -19,7 +19,9 @@ import { ThemeToggle } from "./theme-toggle";
 const PAGE_TITLES: Record<string, string> = {
   "/": "Dashboard",
   "/transactions": "Transactions",
+  "/goals": "Goals",
   "/review": "Review Queue",
+  "/settings": "Settings",
 };
 
 export function Header() {

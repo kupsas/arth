@@ -16,20 +16,29 @@
 
 import type {
   AccountSummary,
+  BarDrilldownChart,
   BulkUpdateRequest,
   BulkUpdateResponse,
   CategoryBreakdown,
+  CategoryTrendRow,
+  DashboardCategorySeries,
   DateRange,
   Direction,
+  ExpenseStackedRow,
   Goal,
   GoalCreate,
+  GoalProgressResponse,
   GoalUpdate,
+  InvestmentTrendRow,
   MetricsSummary,
   MonthlyTrend,
   NegativeSurplusResponse,
   PaginatedResponse,
   RecurringPattern,
   RecurringSummary,
+  Reminder,
+  ReminderCreate,
+  ReminderUpdate,
   SpendCategoryBreakdown,
   TopCounterparty,
   Transaction,
@@ -454,6 +463,71 @@ export function updateGoal(id: number, update: GoalUpdate): Promise<Goal> {
  */
 export function deleteGoal(id: number): Promise<void> {
   return del(`/api/goals/${id}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard V2 metrics
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function fetchGoalProgress(goalId: number): Promise<GoalProgressResponse> {
+  return get<GoalProgressResponse>("/api/metrics/goal-progress", { goal_id: goalId });
+}
+
+export function fetchInvestmentTrend(months: number): Promise<InvestmentTrendRow[]> {
+  return get<InvestmentTrendRow[]>("/api/metrics/investment-trend", { months });
+}
+
+export function fetchExpenseTrendStacked(months: number): Promise<ExpenseStackedRow[]> {
+  return get<ExpenseStackedRow[]>("/api/metrics/expense-trend-stacked", { months });
+}
+
+export function fetchCategoryTrend(
+  series: DashboardCategorySeries,
+  months: number,
+): Promise<CategoryTrendRow[]> {
+  return get<CategoryTrendRow[]>("/api/metrics/category-trend", { series, months });
+}
+
+export function fetchTopExpenses(
+  threshold = 5000,
+  yearMonth?: string,
+): Promise<Transaction[]> {
+  return get<Transaction[]>("/api/metrics/top-expenses", {
+    threshold,
+    year_month: yearMonth ?? undefined,
+  });
+}
+
+export function fetchBarDrilldown(params: {
+  chart: BarDrilldownChart;
+  month: string;
+  series?: DashboardCategorySeries;
+}): Promise<Transaction[]> {
+  return get<Transaction[]>("/api/metrics/bar-drilldown", {
+    chart: params.chart,
+    month: params.month,
+    series: params.series,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings / reminders
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function fetchReminders(): Promise<Reminder[]> {
+  return get<Reminder[]>("/api/settings/reminders");
+}
+
+export function createReminder(body: ReminderCreate): Promise<Reminder> {
+  return post<Reminder>("/api/settings/reminders", body);
+}
+
+export function updateReminder(id: number, body: ReminderUpdate): Promise<Reminder> {
+  return patch<Reminder>(`/api/settings/reminders/${id}`, body);
+}
+
+export function deleteReminder(id: number): Promise<void> {
+  return del(`/api/settings/reminders/${id}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
