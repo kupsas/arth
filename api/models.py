@@ -302,6 +302,10 @@ class Reminder(SQLModel, table=True):
     due_day_of_month: int = Field(ge=1, le=31)
     amount: float | None = None
     counterparty_category: str | None = None
+    # JSON array of transaction IDs, e.g. "[12, 45]" — optional mapping for matching.
+    example_transaction_ids: str | None = Field(default=None)
+    # JSON array of substrings; ANY must match raw_description or ref_number (case-insensitive).
+    description_match_anchors: str | None = Field(default=None)
     is_active: bool = Field(default=True)
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),

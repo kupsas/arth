@@ -39,6 +39,8 @@ import type {
   Reminder,
   ReminderCreate,
   ReminderUpdate,
+  RemindersStatusResponse,
+  DeriveReminderAnchorsResponse,
   SpendCategoryBreakdown,
   TopCounterparty,
   Transaction,
@@ -516,6 +518,27 @@ export function fetchBarDrilldown(params: {
 
 export function fetchReminders(): Promise<Reminder[]> {
   return get<Reminder[]>("/api/settings/reminders");
+}
+
+/** Per-reminder match status for a calendar month (YYYY-MM). */
+export function fetchRemindersStatus(
+  month: string,
+  activeOnly = true,
+): Promise<RemindersStatusResponse> {
+  return get<RemindersStatusResponse>("/api/settings/reminders/status", {
+    month,
+    active_only: activeOnly,
+  });
+}
+
+/** Preview auto-derived description anchors from example transaction IDs. */
+export function deriveReminderAnchors(
+  transactionIds: number[],
+): Promise<DeriveReminderAnchorsResponse> {
+  return post<DeriveReminderAnchorsResponse>(
+    "/api/settings/reminders/derive-anchors",
+    { transaction_ids: transactionIds },
+  );
 }
 
 export function createReminder(body: ReminderCreate): Promise<Reminder> {

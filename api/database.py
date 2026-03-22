@@ -120,6 +120,14 @@ def _apply_sqlite_patches() -> None:
             )
         )
         _backfill_goal_chart_keys(conn)
+        if not _column_exists(conn, "reminders", "example_transaction_ids"):
+            conn.execute(
+                text("ALTER TABLE reminders ADD COLUMN example_transaction_ids TEXT")
+            )
+        if not _column_exists(conn, "reminders", "description_match_anchors"):
+            conn.execute(
+                text("ALTER TABLE reminders ADD COLUMN description_match_anchors TEXT")
+            )
 
 
 def init_db() -> None:

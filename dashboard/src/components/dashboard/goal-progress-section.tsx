@@ -352,8 +352,7 @@ export function GoalProgressSection({ goals }: { goals: Goal[] | undefined }) {
       <CardHeader>
         <CardTitle className="text-base">Progress on Goals</CardTitle>
         <p className="text-xs font-normal text-muted-foreground">
-          Donut = progress this period. Below each goal: last four months with month labels — hover
-          ✓/✗ for net or spend in that month.
+          Donut = progress this period.
         </p>
       </CardHeader>
       <CardContent className="grid gap-4 sm:grid-cols-2">

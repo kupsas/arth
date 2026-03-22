@@ -46,6 +46,16 @@ function dateToLocalYYYYMMDD(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
+/**
+ * Calendar month for API params like GET /reminders/status?month= — local timezone.
+ */
+export function getCurrentCalendarMonthYYYYMM(): string {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, "0")
+  return `${y}-${m}`
+}
+
 export function getPresetRange(preset: Preset): DateRange {
   const now = new Date()
   switch (preset) {

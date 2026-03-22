@@ -155,9 +155,6 @@ export function CategoryTrendGrid({
       <h2 className="text-lg font-semibold mb-2">Category trends</h2>
       <p className="text-sm text-muted-foreground mb-4">
         Six-month view (uses the same window as the toggles above). Click a bar for details.
-        In the classifier, only <strong className="text-foreground">Swiggy Instamart</strong> is
-        a need; Swiggy Food, Swiggy Dineout, and Food &amp; Dining are wants (ambiguous
-        &quot;Swiggy&quot; without a sub-brand is also a want).
       </p>
       {/* 6 tiles → 2×3 on md+ (gifts chart removed so the grid stays even) */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">

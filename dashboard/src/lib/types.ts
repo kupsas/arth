@@ -483,6 +483,17 @@ export interface Reminder {
   due_day_of_month: number;
   amount: number | null;
   counterparty_category: string | null;
+  /** DB-backed mapping: expense transactions that define payee + amount fingerprint. */
+  example_transaction_ids: number[];
+  /** True if some stored example IDs no longer exist (re-pick in Settings). */
+  examples_stale: boolean;
+  /**
+   * Substrings matched case-insensitively against raw_description / ref_number.
+   * ANY match counts (OR). Usually auto-derived from examples; edit as comma-separated text.
+   */
+  description_match_anchors: string[];
+  /** Examples exist but no anchors — add comma-separated match text for accuracy. */
+  suggest_manual_anchors: boolean;
   is_active: boolean;
   created_at: string | null;
   updated_at: string | null;
@@ -493,6 +504,8 @@ export interface ReminderCreate {
   due_day_of_month: number;
   amount?: number | null;
   counterparty_category?: string | null;
+  example_transaction_ids?: number[] | null;
+  description_match_anchors?: string[] | null;
   is_active?: boolean;
 }
 
@@ -501,7 +514,37 @@ export interface ReminderUpdate {
   due_day_of_month?: number;
   amount?: number | null;
   counterparty_category?: string | null;
+  example_transaction_ids?: number[] | null;
+  description_match_anchors?: string[] | null;
   is_active?: boolean;
+}
+
+/** POST /api/settings/reminders/derive-anchors */
+export interface DeriveReminderAnchorsResponse {
+  anchors: string[];
+  ok: boolean;
+}
+
+/** One row from GET /api/settings/reminders/status */
+export interface ReminderMatchedTxn {
+  id: number;
+  txn_date: string;
+  amount: number;
+  counterparty: string | null;
+}
+
+export interface ReminderMonthStatus {
+  reminder_id: number;
+  has_mapping: boolean;
+  examples_stale: boolean;
+  matched_this_month: boolean;
+  matched_transactions: ReminderMatchedTxn[];
+  unmapped_reason: string | null;
+}
+
+export interface RemindersStatusResponse {
+  month: string;
+  items: ReminderMonthStatus[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
