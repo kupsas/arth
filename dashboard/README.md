@@ -1,6 +1,6 @@
 # Arth Dashboard
 
-Next.js + shadcn/ui dashboard for the Arth personal finance pipeline. Surfaces spending insights, a searchable transaction table with inline editing, and a review queue for unreviewed transactions.
+Next.js + shadcn/ui dashboard for the Arth personal finance pipeline. You log in once (session cookie against the FastAPI backend), then use the home dashboard (trends, charts, drill-downs), full transaction table, review queue, goals, and settings (reminders + statement upload).
 
 ## Stack
 
@@ -36,7 +36,7 @@ npm run dev
 The dashboard fetches data from the FastAPI backend. In a separate terminal:
 
 ```bash
-# From the repo root (Arth-ui-dashboard/)
+# From the repo root (same folder as `api/` and `pipeline/`)
 python3 -m uvicorn api.main:app --port 8000 --reload
 # Swagger UI → http://localhost:8000/docs
 ```
@@ -48,9 +48,12 @@ python3 -m uvicorn api.main:app --port 8000 --reload
 
 | Route | Description |
 |-------|-------------|
-| `/` | Dashboard — summary cards, category breakdown chart, monthly trend, top counterparties |
-| `/transactions` | Full transaction table with filters, sorting, pagination, and inline editing |
+| `/login` | Household login — posts to `POST /api/auth/login`; API sets httpOnly `arth_session` (configure `AUTH_*` in the **repo root** `.env`) |
+| `/` | Dashboard — “V2” layout: this-month focus, trend charts, category grids, bar drill-down, goals/reminders snippets, statement upload entry points |
+| `/transactions` | Full transaction table with filters, sorting, pagination, slide-out edit (including spend tags and exclude-from-analytics) |
 | `/review` | Review queue — card-based view of unreviewed transactions with approve/edit/skip actions |
+| `/goals` | Goals CRUD and progress (ties into metrics like expense limits and chart keys) |
+| `/settings` | Reminders (monthly due dates) and statement upload UI (calls API pipeline upload) |
 
 ## Environment Variables
 
@@ -61,6 +64,8 @@ python3 -m uvicorn api.main:app --port 8000 --reload
 | `NEXT_ALLOWED_DEV_ORIGINS` | _(unset)_ | Comma-separated hostnames only (no `https://`) so HMR works when using Cloudflare Tunnel in dev — optional |
 
 Create a `.env.local` file in `dashboard/` to override.
+
+**Auth:** The browser never sees the password hash — only the API validates login. You must set `AUTH_USERNAME`, `AUTH_PASSWORD`, and `AUTH_SECRET_KEY` in the **repository root** `.env` (same file the API loads), then restart `uvicorn`.
 
 **Local dev (default):**
 
@@ -83,6 +88,7 @@ Optional: `INTERNAL_API_URL` if FastAPI is not on `127.0.0.1:8000`.
 
 ```
 dashboard/src/
+  proxy.ts                  # Middleware: auth gate + redirects (see file for matchers)
   app/
     layout.tsx                # Root shell: Providers + Sidebar + Header
     page.tsx                  # Dashboard V2 (this month + trends + drill-down)
@@ -120,7 +126,8 @@ dashboard/src/
   hooks/
     use-transactions.ts       # React Query hooks for transaction endpoints
     use-metrics.ts            # React Query hooks for metrics endpoints
-    use-goals.ts
+    use-goals.ts              # Goals CRUD + cache helpers
+    use-recurring.ts          # Recurring pattern list / detect / patch
     use-settings.ts           # Reminders API
   lib/
     types.ts                  # Shared TypeScript types (mirrors Python models)
@@ -131,6 +138,7 @@ dashboard/src/
 
 ## Key Implementation Notes
 
+- **Protected routes** — `/login` is public; all other app routes expect a valid session (`GET /api/auth/me`). The Next.js `src/proxy.ts` middleware enforces this — see that file for the exact matcher.
 - **Date range presets** — "This Month", "Last Month", "Last 3M", "Last 6M" or custom via calendar popover.
 - **Server-side pagination + sorting** — TanStack Table is used for column definitions and row selection only; the actual data operations happen on the backend.
 - **Optimistic cache updates** — `useUpdateTransaction` writes the updated transaction into the React Query cache immediately, then invalidates list queries in the background.

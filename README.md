@@ -14,7 +14,7 @@ Personal finance system for Sashank and Aditi — built for India's banking ecos
 | **Auto-classification** | Rules + LLM pipeline assigns type, channel, counterparty, and category to every transaction |
 | **Real-time email scraping** | Gmail API polls bank alert emails every 15 minutes — no waiting for monthly statements |
 | **Statement reconciliation** | Email and statement data are automatically merged; no duplicates, no lost review work |
-| **Dashboard** | Three screens: spending overview, full transaction table with search/filter/edit, review queue |
+| **Dashboard** | Session login, spending overview (charts + drill-downs), transactions, review queue, goals, settings (reminders + statement upload) |
 | **3,236 transactions** | Across all 4 sources, all-time — fully classified and searchable |
 
 ---
@@ -27,7 +27,7 @@ python3 -m pip install -r requirements.txt
 
 # 2. Configure API keys and settings
 cp .env.example .env
-# Edit .env with your LLM API keys (Google, Anthropic, or OpenAI)
+# Edit .env: LLM API keys (Google, Anthropic, or OpenAI) plus AUTH_* for dashboard login
 
 # 3. Load your bank statements into the database
 python3 -m pipeline.run --all-sources
@@ -90,13 +90,15 @@ flowchart LR
 
 ## Dashboard
 
-Three screens, all talking to the FastAPI backend:
+Next.js app with cookie-based login (`/login` → FastAPI sets `arth_session`). Main areas:
 
 | Screen | What it shows |
 |---|---|
-| **Dashboard** (`/`) | Summary cards (income, expense, net, savings rate with MoM delta), category breakdown chart, monthly income vs expense trend, top counterparties table |
-| **Transactions** (`/transactions`) | Searchable, filterable, sortable table with server-side pagination; slide-in edit panel for correcting counterparty, category, and txn type |
+| **Dashboard** (`/`) | This-month snapshot, trend charts, category grids, bar drill-down, goals/reminders, upload entry points |
+| **Transactions** (`/transactions`) | Searchable, filterable, sortable table with server-side pagination; slide-in edit (counterparty, category, txn type, spend tags, exclude-from-analytics) |
 | **Review Queue** (`/review`) | Card-based view of unreviewed transactions (mainly email-sourced); approve, edit-and-approve, or skip |
+| **Goals** (`/goals`) | Financial goals with progress tied to metrics/charts |
+| **Settings** (`/settings`) | Payment reminders and statement upload |
 
 See [`dashboard/README.md`](dashboard/README.md) for setup and implementation details.
 
@@ -146,14 +148,18 @@ See [`scraper/README.md`](scraper/README.md) for setup (GCP project, OAuth conse
 
 ## API Reference
 
-The FastAPI backend serves four route groups:
+The FastAPI backend groups routes like this (all except `/api/auth/*` login/logout and `/health` require a valid session cookie after login):
 
 | Group | Prefix | What it does |
 |---|---|---|
+| Auth | `/api/auth` | Login, logout, session status |
 | Transactions | `/api/transactions` | List, filter, CRUD, bulk update |
-| Metrics | `/api/metrics` | Summary, category breakdown, trends, accounts |
-| Pipeline | `/api/pipeline` | Trigger runs, list run history |
+| Metrics | `/api/metrics` | Summary, categories, trends, accounts, dashboard chart series |
+| Pipeline | `/api/pipeline` | Trigger runs, upload statements, run history |
 | Scraper | `/api/scraper` | Scheduler control, OAuth, coverage map |
+| Recurring | `/api/recurring` | Detect and manage recurring patterns |
+| Goals | `/api/goals` | CRUD for user goals |
+| Settings | `/api/settings` | Reminders |
 
 Full interactive docs at **http://localhost:8000/docs** (Swagger UI).
 
@@ -191,8 +197,8 @@ Arth/
     gmail_client.py            OAuth2 auth + email fetching
 
   dashboard/                 Next.js frontend
-    src/app/                   Three pages: /, /transactions, /review
-    src/components/            Dashboard charts, transaction table, review queue components
+    src/app/                   Pages: /, /login, /transactions, /review, /goals, /settings
+    src/components/            Dashboard V2, layout, transactions, review, goals, settings
     src/hooks/                 React Query hooks (use-transactions, use-metrics)
     src/lib/                   Types, API client, utilities
 
