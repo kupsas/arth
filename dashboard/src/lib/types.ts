@@ -360,6 +360,34 @@ export type GoalStatus = "ON_TRACK" | "AT_RISK" | "BEHIND" | "ACHIEVED" | "PAUSE
 /** How automatic progress is evaluated (EXPENSE_LIMIT + INVESTMENT on dashboard). */
 export type ProgressCadence = "MONTHLY" | "ANNUAL";
 
+/**
+ * Goal pyramid tier (Phase B). Stored uppercase on the API; list filter uses same values.
+ */
+export type GoalTier = "VISION" | "STRATEGY" | "TACTIC" | "OPERATIONAL";
+
+export type GoalTimeHorizon =
+  | "MONTHLY"
+  | "QUARTERLY"
+  | "ANNUAL"
+  | "MULTI_YEAR"
+  | "DECADE";
+
+export type GoalFundingMode =
+  | "ACCUMULATION"
+  | "CONSTRAINT"
+  | "EVENT"
+  | "MAINTENANCE";
+
+/**
+ * Lifecycle state for when a goal is "in play" in the pyramid — separate from
+ * progress `status` (ON_TRACK / AT_RISK / …).
+ */
+export type GoalActivationStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "PAUSED";
+
+export type SensitivityToReturns = "LOW" | "MEDIUM" | "HIGH";
+
+export type GoalLinkType = "DECOMPOSES_INTO" | "DEPENDS_ON" | "CONTRIBUTES_TO";
+
 /** Mirrors the goal dict returned by api/routes/goals.py */
 export interface Goal {
   id: number;
@@ -377,6 +405,18 @@ export interface Goal {
   user_id: string;
   current_value: number | null;    // manually entered
   notes: string | null;
+  /** Phase B — optional on legacy rows; API returns null when unset. */
+  pyramid_id?: string | null;
+  tier?: string | null;
+  time_horizon?: string | null;
+  funding_mode?: string | null;
+  activation_status?: string | null;
+  /** DSL: e.g. goal:S4:completed AND event:child_born */
+  activation_condition?: string | null;
+  monthly_allocation?: number | null;
+  allocation_priority?: number | null;
+  interruptible?: boolean | null;
+  sensitivity_to_returns?: string | null;
   // Computed progress (live from DB)
   computed_current_value: number;
   computed_percentage: number;     // 0–100+
@@ -390,26 +430,98 @@ export interface GoalCreate {
   goal_type: GoalType;
   target_amount?: number;
   target_date?: string;
+  target_metric?: string | null;
   priority?: number;
   linked_layer?: number;
   linked_category?: string;
   chart_key?: string | null;
   progress_cadence?: ProgressCadence | null;
-  user_id?: string;
   current_value?: number;
   notes?: string;
+  pyramid_id?: string | null;
+  tier?: string | null;
+  time_horizon?: string | null;
+  funding_mode?: string | null;
+  activation_status?: string | null;
+  activation_condition?: string | null;
+  monthly_allocation?: number | null;
+  allocation_priority?: number | null;
+  interruptible?: boolean | null;
+  sensitivity_to_returns?: string | null;
 }
 
 export interface GoalUpdate {
   name?: string;
   target_amount?: number | null;
   target_date?: string | null;
+  target_metric?: string | null;
   priority?: number;
   linked_category?: string | null;
   chart_key?: string | null;
   progress_cadence?: ProgressCadence | null;
   current_value?: number | null;
   status?: GoalStatus;
+  notes?: string | null;
+  pyramid_id?: string | null;
+  tier?: string | null;
+  time_horizon?: string | null;
+  funding_mode?: string | null;
+  activation_status?: string | null;
+  activation_condition?: string | null;
+  monthly_allocation?: number | null;
+  allocation_priority?: number | null;
+  interruptible?: boolean | null;
+  sensitivity_to_returns?: string | null;
+}
+
+/** One edge in the goal pyramid — mirrors api/routes/goal_links.py */
+export interface GoalLink {
+  id: number;
+  parent_goal_id: number;
+  child_goal_id: number;
+  link_type: GoalLinkType | string;
+  description: string | null;
+  contribution_amount: number | null;
+  user_id: string;
+  created_at: string | null;
+}
+
+export interface GoalLinkCreate {
+  parent_goal_id: number;
+  child_goal_id: number;
+  link_type: GoalLinkType | string;
+  description?: string | null;
+  contribution_amount?: number | null;
+}
+
+/**
+ * GET /api/goals/tree — goals grouped by tier (lowercase keys) plus all links.
+ * Each goal includes the same fields as GET /api/goals (including computed progress).
+ */
+export interface GoalTree {
+  vision: Goal[];
+  strategy: Goal[];
+  tactic: Goal[];
+  operational: Goal[];
+  untiered: Goal[];
+  links: GoalLink[];
+}
+
+/** GET /api/life-events — milestones referenced by activation_condition event:… atoms. */
+export interface LifeEvent {
+  id: number;
+  event_key: string;
+  occurred: boolean;
+  occurred_date: string | null;
+  user_id: string;
+  notes: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface LifeEventUpdate {
+  occurred?: boolean;
+  occurred_date?: string | null;
   notes?: string | null;
 }
 

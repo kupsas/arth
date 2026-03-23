@@ -18,6 +18,7 @@ import * as React from "react"
 import {
   CheckCircle2,
   Clock,
+  Layers,
   Pencil,
   Plus,
   Target,
@@ -27,6 +28,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
@@ -46,8 +48,17 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import { useCreateGoal, useDeleteGoal, useGoals, useUpdateGoal } from "@/hooks/use-goals"
+import {
+  useCreateGoal,
+  useDeleteGoal,
+  useGoalTree,
+  useGoals,
+  useLifeEvents,
+  useUpdateGoal,
+  useUpdateLifeEvent,
+} from "@/hooks/use-goals"
 import {
   CHART_KEY_EXPENSE_NEED_WANT_STACK,
   CHART_KEY_INVESTMENT_NET,
@@ -57,11 +68,17 @@ import { formatCurrency, cn } from "@/lib/utils"
 import type {
   DashboardCategorySeries,
   Goal,
+  GoalActivationStatus,
   GoalCreate,
+  GoalFundingMode,
   GoalStatus,
+  GoalTier,
+  GoalTree,
   GoalType,
   GoalUpdate,
+  LifeEvent,
   ProgressCadence,
+  SensitivityToReturns,
 } from "@/lib/types"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +123,86 @@ const DASHBOARD_CATEGORY_SERIES: { id: DashboardCategorySeries; label: string }[
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Phase B.5 — pyramid tiers, activation lifecycle, tree helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Maps each API tier bucket to a short label and a left-border accent (Tailwind). */
+const TIER_PANELS: {
+  treeKey: keyof Pick<GoalTree, "vision" | "strategy" | "tactic" | "operational" | "untiered">
+  label: string
+  borderClass: string
+}[] = [
+  { treeKey: "vision", label: "Vision", borderClass: "border-l-violet-500" },
+  { treeKey: "strategy", label: "Strategy", borderClass: "border-l-blue-500" },
+  { treeKey: "tactic", label: "Tactic", borderClass: "border-l-emerald-600" },
+  { treeKey: "operational", label: "Operational", borderClass: "border-l-amber-500" },
+  { treeKey: "untiered", label: "Untiered", borderClass: "border-l-muted-foreground" },
+]
+
+const ACTIVATION_STATUS_LABELS: Record<string, string> = {
+  PENDING: "Pending",
+  ACTIVE: "Active",
+  COMPLETED: "Completed",
+  PAUSED: "Paused",
+}
+
+const ACTIVATION_STATUS_STYLES: Record<string, string> = {
+  PENDING: "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
+  ACTIVE: "border-green-500/40 bg-green-500/10 text-green-800 dark:text-green-300",
+  COMPLETED: "border-blue-500/40 bg-blue-500/10 text-blue-800 dark:text-blue-300",
+  PAUSED: "border-muted-foreground/40 bg-muted text-muted-foreground",
+}
+
+const GOAL_TIERS: GoalTier[] = ["VISION", "STRATEGY", "TACTIC", "OPERATIONAL"]
+const GOAL_TIME_HORIZONS = [
+  "MONTHLY",
+  "QUARTERLY",
+  "ANNUAL",
+  "MULTI_YEAR",
+  "DECADE",
+] as const
+const GOAL_FUNDING_MODES: GoalFundingMode[] = [
+  "ACCUMULATION",
+  "CONSTRAINT",
+  "EVENT",
+  "MAINTENANCE",
+]
+const GOAL_ACTIVATION_STATUSES: GoalActivationStatus[] = [
+  "PENDING",
+  "ACTIVE",
+  "COMPLETED",
+  "PAUSED",
+]
+const SENSITIVITY_OPTIONS: SensitivityToReturns[] = ["LOW", "MEDIUM", "HIGH"]
+
+/** Build id → goal for every node returned in GET /api/goals/tree. */
+function goalsByIdFromTree(tree: GoalTree): Map<number, Goal> {
+  const m = new Map<number, Goal>()
+  for (const g of tree.vision) m.set(g.id, g)
+  for (const g of tree.strategy) m.set(g.id, g)
+  for (const g of tree.tactic) m.set(g.id, g)
+  for (const g of tree.operational) m.set(g.id, g)
+  for (const g of tree.untiered) m.set(g.id, g)
+  return m
+}
+
+/**
+ * Parent goals (higher pyramid) point *to* children via GoalLink rows.
+ * For a given goal, list human-readable parent labels for "Feeds:" lines.
+ */
+function parentLabelsForGoal(goalId: number, tree: GoalTree, byId: Map<number, Goal>): string[] {
+  const labels: string[] = []
+  for (const link of tree.links) {
+    if (link.child_goal_id !== goalId) continue
+    const p = byId.get(link.parent_goal_id)
+    if (p) {
+      labels.push(p.pyramid_id ? `${p.pyramid_id} · ${p.name}` : p.name)
+    }
+  }
+  return labels
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // EditGoalSheet — change name, targets, notes (goal type is fixed after create)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -126,6 +223,25 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
     goal.progress_cadence ?? "MONTHLY",
   )
   const [notes, setNotes] = React.useState(goal.notes ?? "")
+  // Phase B — pyramid / activation (optional on legacy goals)
+  const [pyramidId, setPyramidId] = React.useState(goal.pyramid_id ?? "")
+  const [tier, setTier] = React.useState(goal.tier ?? "")
+  const [timeHorizon, setTimeHorizon] = React.useState(goal.time_horizon ?? "")
+  const [fundingMode, setFundingMode] = React.useState(goal.funding_mode ?? "")
+  const [activationStatus, setActivationStatus] = React.useState(
+    (goal.activation_status as GoalActivationStatus | undefined) ?? "ACTIVE",
+  )
+  const [monthlyAllocation, setMonthlyAllocation] = React.useState(
+    goal.monthly_allocation != null ? String(goal.monthly_allocation) : "",
+  )
+  const [allocationPriority, setAllocationPriority] = React.useState(
+    goal.allocation_priority != null ? String(goal.allocation_priority) : "",
+  )
+  const [activationCondition, setActivationCondition] = React.useState(
+    goal.activation_condition ?? "",
+  )
+  const [interruptible, setInterruptible] = React.useState(goal.interruptible !== false)
+  const [sensitivity, setSensitivity] = React.useState(goal.sensitivity_to_returns ?? "")
 
   React.useEffect(() => {
     if (!open) return
@@ -136,6 +252,16 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
     setExpenseChartBind(goal.chart_key ?? "")
     setProgressCadence(goal.progress_cadence ?? "MONTHLY")
     setNotes(goal.notes ?? "")
+    setPyramidId(goal.pyramid_id ?? "")
+    setTier(goal.tier ?? "")
+    setTimeHorizon(goal.time_horizon ?? "")
+    setFundingMode(goal.funding_mode ?? "")
+    setActivationStatus((goal.activation_status as GoalActivationStatus | undefined) ?? "ACTIVE")
+    setMonthlyAllocation(goal.monthly_allocation != null ? String(goal.monthly_allocation) : "")
+    setAllocationPriority(goal.allocation_priority != null ? String(goal.allocation_priority) : "")
+    setActivationCondition(goal.activation_condition ?? "")
+    setInterruptible(goal.interruptible !== false)
+    setSensitivity(goal.sensitivity_to_returns ?? "")
   }, [open, goal])
 
   const isExpenseLimit = goal.goal_type === "EXPENSE_LIMIT"
@@ -167,6 +293,28 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
         update.linked_category = linkedCategory.trim() ? linkedCategory.trim() : null
       }
       update.progress_cadence = progressCadence
+    }
+
+    // Pyramid & activation — send null when cleared so the API can unset optional fields
+    update.pyramid_id = pyramidId.trim() ? pyramidId.trim() : null
+    update.tier = tier.trim() ? tier.trim().toUpperCase() : null
+    update.time_horizon = timeHorizon.trim() ? timeHorizon.trim().toUpperCase() : null
+    update.funding_mode = fundingMode.trim() ? fundingMode.trim().toUpperCase() : null
+    update.activation_status = activationStatus
+    update.activation_condition = activationCondition.trim() ? activationCondition.trim() : null
+    update.interruptible = interruptible
+    update.sensitivity_to_returns = sensitivity.trim() ? sensitivity.trim().toUpperCase() : null
+    if (monthlyAllocation.trim() === "") {
+      update.monthly_allocation = null
+    } else {
+      const ma = parseFloat(monthlyAllocation)
+      if (!Number.isNaN(ma)) update.monthly_allocation = ma
+    }
+    if (allocationPriority.trim() === "") {
+      update.allocation_priority = null
+    } else {
+      const ap = parseInt(allocationPriority, 10)
+      if (!Number.isNaN(ap)) update.allocation_priority = ap
     }
 
     patchGoal(
@@ -314,6 +462,170 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
             </p>
           )}
 
+          <div className="rounded-md border border-dashed p-3 space-y-4">
+            <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+              <Layers className="size-3.5" />
+              Pyramid &amp; activation
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-pyramid-${goal.id}`}>Pyramid id</Label>
+                <Input
+                  id={`edit-pyramid-${goal.id}`}
+                  placeholder="e.g. V1"
+                  maxLength={10}
+                  value={pyramidId}
+                  onChange={(e) => setPyramidId(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-tier-${goal.id}`}>Tier</Label>
+                <Select
+                  value={tier || "__none__"}
+                  onValueChange={(v) => setTier(!v || v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id={`edit-tier-${goal.id}`}>
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {GOAL_TIERS.map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-horizon-${goal.id}`}>Time horizon</Label>
+                <Select
+                  value={timeHorizon || "__none__"}
+                  onValueChange={(v) => setTimeHorizon(!v || v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id={`edit-horizon-${goal.id}`}>
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {GOAL_TIME_HORIZONS.map((h) => (
+                      <SelectItem key={h} value={h}>{h.replaceAll("_", " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-funding-${goal.id}`}>Funding mode</Label>
+                <Select
+                  value={fundingMode || "__none__"}
+                  onValueChange={(v) => setFundingMode(!v || v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id={`edit-funding-${goal.id}`}>
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {GOAL_FUNDING_MODES.map((f) => (
+                      <SelectItem key={f} value={f}>{f}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-act-${goal.id}`}>Activation status</Label>
+                <Select
+                  value={activationStatus}
+                  onValueChange={(v) => {
+                    if (v) setActivationStatus(v as GoalActivationStatus)
+                  }}
+                >
+                  <SelectTrigger id={`edit-act-${goal.id}`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GOAL_ACTIVATION_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>{ACTIVATION_STATUS_LABELS[s] ?? s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-sens-${goal.id}`}>Sensitivity to returns</Label>
+                <Select
+                  value={sensitivity || "__none__"}
+                  onValueChange={(v) => setSensitivity(!v || v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id={`edit-sens-${goal.id}`}>
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {SENSITIVITY_OPTIONS.map((s) => (
+                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-moalloc-${goal.id}`}>Monthly allocation (₹)</Label>
+                <Input
+                  id={`edit-moalloc-${goal.id}`}
+                  type="number"
+                  min={0}
+                  placeholder="Optional"
+                  value={monthlyAllocation}
+                  onChange={(e) => setMonthlyAllocation(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor={`edit-prio-${goal.id}`}>Allocation priority (1–100)</Label>
+                <Input
+                  id={`edit-prio-${goal.id}`}
+                  type="number"
+                  min={1}
+                  max={100}
+                  placeholder="Optional"
+                  value={allocationPriority}
+                  onChange={(e) => setAllocationPriority(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor={`edit-actcond-${goal.id}`}>Activation condition (DSL)</Label>
+              <Textarea
+                id={`edit-actcond-${goal.id}`}
+                rows={2}
+                className="font-mono text-xs"
+                placeholder='e.g. goal:S5:completed AND goal:S4:completed'
+                value={activationCondition}
+                onChange={(e) => setActivationCondition(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                When <span className="font-medium">activation status</span> is Pending, the API evaluates this expression
+                against your goals&apos; activation states and life events. Atoms:{" "}
+                <code className="rounded bg-muted px-0.5">goal:PYRAMID_ID:status</code>{" "}
+                (status: pending, active, completed, paused) and{" "}
+                <code className="rounded bg-muted px-0.5">event:key</code>. Combine with{" "}
+                <code className="rounded bg-muted px-0.5">AND</code> /{" "}
+                <code className="rounded bg-muted px-0.5">OR</code> and parentheses. Max 500 characters.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id={`edit-interrupt-${goal.id}`}
+                checked={interruptible}
+                onCheckedChange={(c) => setInterruptible(c === true)}
+              />
+              <Label htmlFor={`edit-interrupt-${goal.id}`} className="text-sm font-normal cursor-pointer">
+                Interruptible (safe to pause if surplus drops)
+              </Label>
+            </div>
+          </div>
+
           <div className="flex flex-col gap-2">
             <Label htmlFor={`edit-goal-notes-${goal.id}`}>Notes (optional)</Label>
             <Textarea
@@ -339,7 +651,17 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
 // GoalCard — single goal row
 // ─────────────────────────────────────────────────────────────────────────────
 
-function GoalCard({ goal }: { goal: Goal }) {
+function GoalCard({
+  goal,
+  hierarchyMeta,
+  tierBorderClass,
+}: {
+  goal: Goal
+  /** When set, show pyramid / activation badges and optional "Feeds:" parents (hierarchy tab). */
+  hierarchyMeta?: { parentLabels: string[] }
+  /** e.g. border-l-violet-500 — applied as thick left stripe in hierarchy view */
+  tierBorderClass?: string
+}) {
   const { mutate: updateGoal } = useUpdateGoal()
   const { mutate: deleteGoal } = useDeleteGoal()
   const [editingValue, setEditingValue] = React.useState(false)
@@ -361,8 +683,15 @@ function GoalCard({ goal }: { goal: Goal }) {
     setEditingValue(false)
   }
 
+  const act = (goal.activation_status ?? "ACTIVE").toUpperCase()
+
   return (
-    <div className="rounded-lg border bg-card px-4 py-3 space-y-2.5">
+    <div
+      className={cn(
+        "rounded-lg border bg-card px-4 py-3 space-y-2.5",
+        hierarchyMeta && tierBorderClass && `border-l-4 ${tierBorderClass}`,
+      )}
+    >
       {/* Header row */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -374,9 +703,31 @@ function GoalCard({ goal }: { goal: Goal }) {
               {goal.chart_key && ` · ${goal.chart_key}`}
               {!goal.chart_key && goal.linked_category && ` · ${goal.linked_category}`}
             </p>
+            {hierarchyMeta && hierarchyMeta.parentLabels.length > 0 && (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                <span className="font-medium text-foreground/80">Feeds:</span>{" "}
+                {hierarchyMeta.parentLabels.join(" · ")}
+              </p>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+          {hierarchyMeta && goal.pyramid_id && (
+            <Badge variant="secondary" className="text-[10px] px-1 py-0 font-mono">
+              {goal.pyramid_id}
+            </Badge>
+          )}
+          {hierarchyMeta && (
+            <Badge
+              variant="outline"
+              className={cn(
+                "text-[10px] px-1 py-0",
+                ACTIVATION_STATUS_STYLES[act] ?? "border-muted",
+              )}
+            >
+              {ACTIVATION_STATUS_LABELS[act] ?? act}
+            </Badge>
+          )}
           {goal.goal_type === "EXPENSE_LIMIT" &&
             (goal.progress_cadence ?? "MONTHLY") === "ANNUAL" && (
               <Badge variant="secondary" className="text-[10px] px-1 py-0">
@@ -491,7 +842,6 @@ const defaultAddForm = (): Partial<GoalCreate> => ({
   goal_type: "EXPENSE_LIMIT",
   priority: 3,
   linked_layer: 3,
-  user_id: "sashank",
 })
 
 function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) {
@@ -502,11 +852,31 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
   /** When set, create/update EXPENSE_LIMIT with this chart_key (else use linked_category). */
   const [expenseChartBind, setExpenseChartBind] = React.useState("")
   const [expenseCadence, setExpenseCadence] = React.useState<ProgressCadence>("MONTHLY")
+  const [pyramidId, setPyramidId] = React.useState("")
+  const [tier, setTier] = React.useState("")
+  const [timeHorizon, setTimeHorizon] = React.useState("")
+  const [fundingMode, setFundingMode] = React.useState("")
+  const [activationStatus, setActivationStatus] = React.useState<GoalActivationStatus>("ACTIVE")
+  const [monthlyAllocation, setMonthlyAllocation] = React.useState("")
+  const [allocationPriority, setAllocationPriority] = React.useState("")
+  const [activationCondition, setActivationCondition] = React.useState("")
+  const [interruptible, setInterruptible] = React.useState(true)
+  const [sensitivity, setSensitivity] = React.useState("")
 
   function resetAddForm() {
     setForm(defaultAddForm())
     setExpenseChartBind("")
     setExpenseCadence("MONTHLY")
+    setPyramidId("")
+    setTier("")
+    setTimeHorizon("")
+    setFundingMode("")
+    setActivationStatus("ACTIVE")
+    setMonthlyAllocation("")
+    setAllocationPriority("")
+    setActivationCondition("")
+    setInterruptible(true)
+    setSensitivity("")
   }
 
   function handleOpenChange(next: boolean) {
@@ -534,8 +904,24 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
       target_date: form.target_date,
       priority: form.priority ?? 3,
       linked_layer: form.linked_layer ?? 3,
-      user_id: form.user_id ?? "sashank",
       notes: form.notes,
+    }
+
+    if (pyramidId.trim()) base.pyramid_id = pyramidId.trim()
+    if (tier) base.tier = tier
+    if (timeHorizon) base.time_horizon = timeHorizon
+    if (fundingMode) base.funding_mode = fundingMode
+    base.activation_status = activationStatus
+    if (activationCondition.trim()) base.activation_condition = activationCondition.trim()
+    base.interruptible = interruptible
+    if (sensitivity) base.sensitivity_to_returns = sensitivity
+    if (monthlyAllocation.trim()) {
+      const ma = parseFloat(monthlyAllocation)
+      if (!Number.isNaN(ma)) base.monthly_allocation = ma
+    }
+    if (allocationPriority.trim()) {
+      const ap = parseInt(allocationPriority, 10)
+      if (!Number.isNaN(ap)) base.allocation_priority = ap
     }
 
     if (form.goal_type === "EXPENSE_LIMIT") {
@@ -710,6 +1096,167 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
             </p>
           )}
 
+          <div className="rounded-md border border-dashed p-3 space-y-4">
+            <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+              <Layers className="size-3.5" />
+              Pyramid &amp; activation (optional)
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="add-pyramid">Pyramid id</Label>
+                <Input
+                  id="add-pyramid"
+                  placeholder="e.g. O5"
+                  maxLength={10}
+                  value={pyramidId}
+                  onChange={(e) => setPyramidId(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="add-tier">Tier</Label>
+                <Select
+                  value={tier || "__none__"}
+                  onValueChange={(v) => setTier(!v || v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id="add-tier">
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {GOAL_TIERS.map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="add-horizon">Time horizon</Label>
+                <Select
+                  value={timeHorizon || "__none__"}
+                  onValueChange={(v) => setTimeHorizon(!v || v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id="add-horizon">
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {GOAL_TIME_HORIZONS.map((h) => (
+                      <SelectItem key={h} value={h}>{h.replaceAll("_", " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="add-funding">Funding mode</Label>
+                <Select
+                  value={fundingMode || "__none__"}
+                  onValueChange={(v) => setFundingMode(!v || v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id="add-funding">
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {GOAL_FUNDING_MODES.map((f) => (
+                      <SelectItem key={f} value={f}>{f}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="add-act">Activation status</Label>
+                <Select
+                  value={activationStatus}
+                  onValueChange={(v) => {
+                    if (v) setActivationStatus(v as GoalActivationStatus)
+                  }}
+                >
+                  <SelectTrigger id="add-act">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GOAL_ACTIVATION_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>{ACTIVATION_STATUS_LABELS[s] ?? s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="add-sens">Sensitivity to returns</Label>
+                <Select
+                  value={sensitivity || "__none__"}
+                  onValueChange={(v) => setSensitivity(!v || v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id="add-sens">
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {SENSITIVITY_OPTIONS.map((s) => (
+                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="add-moalloc">Monthly allocation (₹)</Label>
+                <Input
+                  id="add-moalloc"
+                  type="number"
+                  min={0}
+                  placeholder="Optional"
+                  value={monthlyAllocation}
+                  onChange={(e) => setMonthlyAllocation(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="add-prio">Allocation priority (1–100)</Label>
+                <Input
+                  id="add-prio"
+                  type="number"
+                  min={1}
+                  max={100}
+                  placeholder="Optional"
+                  value={allocationPriority}
+                  onChange={(e) => setAllocationPriority(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="add-actcond">Activation condition (DSL)</Label>
+              <Textarea
+                id="add-actcond"
+                rows={2}
+                className="font-mono text-xs"
+                placeholder="Leave empty unless this goal should wait on others"
+                value={activationCondition}
+                onChange={(e) => setActivationCondition(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                Use <code className="rounded bg-muted px-0.5">goal:ID:completed</code>,{" "}
+                <code className="rounded bg-muted px-0.5">event:employed</code>, with{" "}
+                <code className="rounded bg-muted px-0.5">AND</code> /{" "}
+                <code className="rounded bg-muted px-0.5">OR</code>. Validated on save.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="add-interrupt"
+                checked={interruptible}
+                onCheckedChange={(c) => setInterruptible(c === true)}
+              />
+              <Label htmlFor="add-interrupt" className="text-sm font-normal cursor-pointer">
+                Interruptible
+              </Label>
+            </div>
+          </div>
+
           <div className="flex flex-col gap-2">
             <Label htmlFor="goal-notes">Notes (optional)</Label>
             <Textarea
@@ -741,8 +1288,106 @@ interface Props {
   initialChartKey?: string | null
 }
 
+/** Renders tier buckets from GET /api/goals/tree with parent “Feeds:” labels. */
+function GoalsHierarchyPanels({ tree }: { tree: GoalTree }) {
+  const byId = React.useMemo(() => goalsByIdFromTree(tree), [tree])
+  const totalInBuckets = TIER_PANELS.reduce((n, p) => n + tree[p.treeKey].length, 0)
+
+  if (totalInBuckets === 0) {
+    return (
+      <p className="text-sm text-muted-foreground py-6 text-center">
+        No goals returned from the hierarchy endpoint.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {TIER_PANELS.map(({ treeKey, label, borderClass }) => {
+        const bucket = tree[treeKey]
+        if (bucket.length === 0) return null
+        return (
+          <details key={treeKey} open className="rounded-lg border bg-card/30">
+            <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+              <span>{label}</span>
+              <Badge variant="secondary" className="text-[10px] font-normal">
+                {bucket.length}
+              </Badge>
+            </summary>
+            <div className="space-y-2 px-2 pb-3 pt-1">
+              {bucket.map((g) => (
+                <GoalCard
+                  key={g.id}
+                  goal={g}
+                  hierarchyMeta={{ parentLabels: parentLabelsForGoal(g.id, tree, byId) }}
+                  tierBorderClass={borderClass}
+                />
+              ))}
+            </div>
+          </details>
+        )
+      })}
+    </div>
+  )
+}
+
+function formatEventKeyLabel(key: string): string {
+  return key.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+/** Checkboxes for life-event rows — flipping &quot;occurred&quot; can auto-activate pending goals server-side. */
+function LifeEventsPanel({ events }: { events: LifeEvent[] }) {
+  const { mutate, isPending } = useUpdateLifeEvent()
+
+  if (events.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground px-1 py-2">
+        No life events yet. They are created by the seed script or API and referenced in activation conditions
+        as <code className="rounded bg-muted px-0.5">event:key</code>.
+      </p>
+    )
+  }
+
+  return (
+    <ul className="space-y-2 px-1 py-1">
+      {events.map((ev) => (
+        <li key={ev.id} className="flex items-start gap-2 text-sm">
+          <Checkbox
+            id={`life-ev-${ev.id}`}
+            checked={ev.occurred}
+            disabled={isPending}
+            onCheckedChange={(c) => {
+              const checked = c === true
+              mutate({
+                id: ev.id,
+                update: {
+                  occurred: checked,
+                  occurred_date: checked
+                    ? new Date().toISOString().slice(0, 10)
+                    : null,
+                },
+              })
+            }}
+          />
+          <div className="min-w-0 flex-1">
+            <Label htmlFor={`life-ev-${ev.id}`} className="font-medium cursor-pointer leading-tight">
+              {formatEventKeyLabel(ev.event_key)}
+            </Label>
+            <p className="text-[11px] text-muted-foreground font-mono mt-0.5">{ev.event_key}</p>
+            {ev.occurred_date && (
+              <p className="text-[11px] text-muted-foreground">Date: {ev.occurred_date}</p>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export function GoalsSection({ className, initialChartKey = null }: Props) {
   const { data: goals, isLoading } = useGoals()
+  const { data: tree, isLoading: treeLoading, isError: treeError } = useGoalTree()
+  const { data: lifeEvents } = useLifeEvents()
 
   const activeGoals = (goals ?? []).filter((g) => g.status !== "ACHIEVED" && g.status !== "PAUSED")
   const achievedGoals = (goals ?? []).filter((g) => g.status === "ACHIEVED")
@@ -761,35 +1406,74 @@ export function GoalsSection({ className, initialChartKey = null }: Props) {
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-2">
-        {isLoading ? (
-          <div className="space-y-3">
-            {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20" />)}
-          </div>
-        ) : (goals ?? []).length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center text-sm text-muted-foreground gap-2">
-            <Target className="size-8 opacity-30" />
-            <p>No goals yet.</p>
-            <p className="text-xs">Add your first goal to start tracking progress.</p>
-          </div>
-        ) : (
-          <>
-            {activeGoals.map((goal) => (
-              <GoalCard key={goal.id} goal={goal} />
-            ))}
-            {achievedGoals.length > 0 && (
-              <div className="pt-2">
-                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                  <CheckCircle2 className="size-3 text-blue-500" />
-                  Achieved
-                </p>
-                {achievedGoals.map((goal) => (
-                  <GoalCard key={goal.id} goal={goal} />
+      <CardContent>
+        <Tabs defaultValue="flat" className="w-full">
+          <TabsList variant="line" className="mb-3 h-8 w-full min-w-0 justify-start">
+            <TabsTrigger value="flat" className="text-xs">
+              Flat
+            </TabsTrigger>
+            <TabsTrigger value="hierarchy" className="text-xs gap-1">
+              <Layers className="size-3" />
+              Hierarchy
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="flat" className="space-y-2 mt-0">
+            {isLoading ? (
+              <div className="space-y-3">
+                {[...Array(3)].map((_, i) => (
+                  <Skeleton key={i} className="h-20" />
                 ))}
               </div>
+            ) : (goals ?? []).length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center text-sm text-muted-foreground gap-2">
+                <Target className="size-8 opacity-30" />
+                <p>No goals yet.</p>
+                <p className="text-xs">Add your first goal to start tracking progress.</p>
+              </div>
+            ) : (
+              <>
+                {activeGoals.map((goal) => (
+                  <GoalCard key={goal.id} goal={goal} />
+                ))}
+                {achievedGoals.length > 0 && (
+                  <div className="pt-2">
+                    <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+                      <CheckCircle2 className="size-3 text-blue-500" />
+                      Achieved
+                    </p>
+                    {achievedGoals.map((goal) => (
+                      <GoalCard key={goal.id} goal={goal} />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
-          </>
-        )}
+          </TabsContent>
+
+          <TabsContent value="hierarchy" className="space-y-3 mt-0">
+            {treeLoading ? (
+              <div className="space-y-3">
+                {[...Array(4)].map((_, i) => (
+                  <Skeleton key={i} className="h-24" />
+                ))}
+              </div>
+            ) : treeError ? (
+              <p className="text-sm text-destructive">
+                Could not load goal tree. Check that the API is running and you are logged in.
+              </p>
+            ) : tree ? (
+              <GoalsHierarchyPanels tree={tree} />
+            ) : null}
+
+            <details className="rounded-lg border text-sm">
+              <summary className="cursor-pointer select-none px-3 py-2 font-medium text-muted-foreground list-none [&::-webkit-details-marker]:hidden">
+                Life events (activation DSL)
+              </summary>
+              <LifeEventsPanel events={lifeEvents ?? []} />
+            </details>
+          </TabsContent>
+        </Tabs>
       </CardContent>
     </Card>
   )

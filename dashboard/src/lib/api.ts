@@ -27,8 +27,13 @@ import type {
   ExpenseStackedRow,
   Goal,
   GoalCreate,
+  GoalLink,
+  GoalLinkCreate,
   GoalProgressResponse,
+  GoalTree,
   GoalUpdate,
+  LifeEvent,
+  LifeEventUpdate,
   InvestmentTrendRow,
   MetricsSummary,
   MonthlyTrend,
@@ -425,12 +430,15 @@ export function updateRecurringPattern(
 
 /**
  * GET /api/goals
- * Returns all goals, optionally filtered.
+ * Returns all goals for the logged-in user, optionally filtered.
+ * (user_id is not a query param — the session determines the user.)
  */
 export function fetchGoals(params?: {
-  user_id?: string;
   goal_type?: string;
   status?: string;
+  tier?: string;
+  activation_status?: string;
+  funding_mode?: string;
 }): Promise<Goal[]> {
   return get<Goal[]>("/api/goals", params as QueryParams);
 }
@@ -465,6 +473,46 @@ export function updateGoal(id: number, update: GoalUpdate): Promise<Goal> {
  */
 export function deleteGoal(id: number): Promise<void> {
   return del(`/api/goals/${id}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Goal hierarchy (Phase B.5) — /api/goals/tree, /api/goal-links, /api/life-events
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** GET /api/goals/tree — tier buckets + links, goals include live progress. */
+export function fetchGoalTree(): Promise<GoalTree> {
+  return get<GoalTree>("/api/goals/tree");
+}
+
+/** GET /api/goal-links — optional filter by parent or child goal id. */
+export function fetchGoalLinks(params?: {
+  parent_goal_id?: number;
+  child_goal_id?: number;
+}): Promise<GoalLink[]> {
+  return get<GoalLink[]>("/api/goal-links", params as QueryParams);
+}
+
+/** POST /api/goal-links — create edge (server runs cycle detection). */
+export function createGoalLink(body: GoalLinkCreate): Promise<GoalLink> {
+  return post<GoalLink>("/api/goal-links", body);
+}
+
+/** DELETE /api/goal-links/{id} */
+export function deleteGoalLink(id: number): Promise<void> {
+  return del(`/api/goal-links/${id}`);
+}
+
+/** GET /api/life-events */
+export function fetchLifeEvents(): Promise<LifeEvent[]> {
+  return get<LifeEvent[]>("/api/life-events");
+}
+
+/** PATCH /api/life-events/{id} — may trigger activation cascade when occurred → true. */
+export function updateLifeEvent(
+  id: number,
+  body: LifeEventUpdate,
+): Promise<LifeEvent> {
+  return patch<LifeEvent>(`/api/life-events/${id}`, body);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
