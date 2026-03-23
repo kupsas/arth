@@ -16,12 +16,10 @@ What we test here vs. test_goal_hierarchy_api.py:
 
 from __future__ import annotations
 
-import datetime
-
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, SQLModel, create_engine
 
 from api.models import Goal, GoalLink, LifeEvent
 from api.services.activation_engine import (
@@ -429,7 +427,7 @@ class TestCheckAndUpdateActivations:
 
     def test_pending_goal_activated_when_condition_met(self, session):
         """A PENDING goal whose condition is now True should flip to ACTIVE."""
-        prerequisite = _make_goal(
+        _make_goal(
             session, name="Prereq", pyramid_id="S4", activation_status="COMPLETED"
         )
         # Target is PENDING, condition requires S4 to be completed
@@ -512,14 +510,14 @@ class TestCheckAndUpdateActivations:
 
     def test_event_triggers_activation(self, session):
         """A LifeEvent occurring is enough to satisfy an event: condition."""
-        event = _make_event(session, event_key="child_born", occurred=True)
+        _make_event(session, event_key="child_born", occurred=True)
         target = _make_goal(
             session, name="Child Fund", pyramid_id="T11",
             activation_status="PENDING", activation_condition="event:child_born",
         )
         session.commit()
 
-        activated = check_and_update_activations(session, "tester")
+        check_and_update_activations(session, "tester")
         session.commit()
 
         session.refresh(target)

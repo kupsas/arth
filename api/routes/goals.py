@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+from typing import TypeGuard
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -214,7 +215,8 @@ def _validate_activation_condition_or_400(raw: str | None) -> None:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-def _goal_owned(goal: Goal | None, current_user: str) -> bool:
+def _goal_owned(goal: Goal | None, current_user: str) -> TypeGuard[Goal]:
+    """True when ``goal`` exists and belongs to ``current_user`` (narrows type for mypy)."""
     return goal is not None and goal.user_id == current_user
 
 
@@ -267,11 +269,11 @@ def create_goal(
     if act_status is None:
         activation_status = "ACTIVE"
     else:
-        activation_status = _validate_optional_enum(
+        validated_act = _validate_optional_enum(
             "activation_status", act_status, _VALID_ACTIVATION_STATUS
         )
-        if activation_status is None:
-            activation_status = "ACTIVE"
+        # Empty or whitespace-only client values normalize to default ACTIVE.
+        activation_status = validated_act if validated_act is not None else "ACTIVE"
     sensitivity = _validate_optional_enum(
         "sensitivity_to_returns", body.sensitivity_to_returns, _VALID_SENSITIVITY
     )

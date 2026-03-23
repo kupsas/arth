@@ -159,6 +159,11 @@ def _tokenize(condition: str) -> list[_Token]:
             )
 
         group_name = match.lastgroup
+        # Named-group alternation always sets lastgroup for matches we keep.
+        if group_name is None:
+            raise ConditionParseError(
+                f"Internal tokenizer error at position {match.start()!r}"
+            )
         if group_name == "WHITESPACE":
             # Consume but don't emit.
             pos = match.end()

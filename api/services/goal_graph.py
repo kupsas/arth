@@ -482,19 +482,24 @@ def get_allocation_summary(session: Session, user_id: str) -> dict:
     )
     active_goals = session.exec(query).all()
 
-    goal_rows = [
-        {
-            "id": g.id,
-            "name": g.name,
-            "pyramid_id": g.pyramid_id,
-            "monthly_allocation": g.monthly_allocation,
-            "allocation_priority": g.allocation_priority,
-        }
-        for g in active_goals
-        if g.monthly_allocation is not None  # belt-and-suspenders after the SQL filter
-    ]
-
-    total_allocated = sum(float(r["monthly_allocation"]) for r in goal_rows)
+    # Build rows in a plain loop so static types stay precise (SQLModel columns are
+    # loose unions; dict comprehensions + sum() confused mypy on this file).
+    goal_rows: list[dict[str, int | str | float | None]] = []
+    total_allocated = 0.0
+    for g in active_goals:
+        if g.monthly_allocation is None:
+            continue
+        ma = float(g.monthly_allocation)
+        total_allocated += ma
+        goal_rows.append(
+            {
+                "id": g.id,
+                "name": g.name,
+                "pyramid_id": g.pyramid_id,
+                "monthly_allocation": ma,
+                "allocation_priority": g.allocation_priority,
+            }
+        )
 
     return {
         "total_allocated": round(total_allocated, 2),
