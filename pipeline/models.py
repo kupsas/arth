@@ -103,6 +103,69 @@ class SpendCategory(str, Enum):
 
 
 # ---------------------------------------------------------------------------
+# Asset / portfolio enums (Phase A.0 — Layer 1 net worth)
+# Stored as strings in SQLite; use these values in API and parsers.
+# ---------------------------------------------------------------------------
+
+
+class AssetClass(str, Enum):
+    EQUITY = "EQUITY"
+    MUTUAL_FUND = "MUTUAL_FUND"
+    FD = "FD"
+    PPF = "PPF"
+    NPS = "NPS"
+    SAVINGS = "SAVINGS"
+    GOLD = "GOLD"
+    SOVEREIGN_GOLD_BOND = "SOVEREIGN_GOLD_BOND"
+    REAL_ESTATE = "REAL_ESTATE"
+    ESOP = "ESOP"
+    OTHER = "OTHER"
+
+
+class ValuationMethod(str, Enum):
+    MARKET_PRICE = "MARKET_PRICE"
+    FIXED_RETURN = "FIXED_RETURN"
+    MANUAL = "MANUAL"
+
+
+class LiquidityClass(str, Enum):
+    INSTANT = "INSTANT"
+    T_PLUS_1 = "T_PLUS_1"
+    T_PLUS_3 = "T_PLUS_3"
+    WEEKS = "WEEKS"
+    ILLIQUID = "ILLIQUID"
+
+
+class InvestmentTxnType(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    DIVIDEND = "DIVIDEND"
+    SIP = "SIP"
+    SWITCH_IN = "SWITCH_IN"
+    SWITCH_OUT = "SWITCH_OUT"
+
+
+class LiabilityType(str, Enum):
+    SECURED_LOAN = "SECURED_LOAN"
+    UNSECURED_LOAN = "UNSECURED_LOAN"
+    REVOLVING_CREDIT = "REVOLVING_CREDIT"
+    RECURRING_OBLIGATION = "RECURRING_OBLIGATION"
+
+
+class CompoundingFrequency(str, Enum):
+    MONTHLY = "MONTHLY"
+    QUARTERLY = "QUARTERLY"
+    HALF_YEARLY = "HALF_YEARLY"
+    ANNUALLY = "ANNUALLY"
+
+
+class MutualFundType(str, Enum):
+    GROWTH = "GROWTH"
+    DIVIDEND = "DIVIDEND"
+    IDCW = "IDCW"
+
+
+# ---------------------------------------------------------------------------
 # ParsedTransaction  (intermediate — what every parser produces)
 # ---------------------------------------------------------------------------
 

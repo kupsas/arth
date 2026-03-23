@@ -128,6 +128,9 @@ def _apply_sqlite_patches() -> None:
             conn.execute(
                 text("ALTER TABLE reminders ADD COLUMN description_match_anchors TEXT")
             )
+        # Phase A.0 — link bank transactions to holdings (e.g. dividend → equity position).
+        if not _column_exists(conn, "transactions", "holding_id"):
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN holding_id INTEGER"))
 
 
 def init_db() -> None:
