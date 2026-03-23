@@ -90,6 +90,11 @@ def scraper_status():
       - last_emails_failed:    Emails that errored in the last run.
       - last_txns_created:     New DB rows inserted in the last run.
       - last_error:            First error message from the last run (or null).
+      - price_last_run_at:     When the daily price job last finished (attempt).
+      - price_last_success_at: When it last completed without error (or null).
+      - price_last_error:      Last price-job error message (or null).
+      - price_next_run_at:     Next scheduled 18:30 IST price refresh (or null).
+      - is_price_job_running:  True while NSE/AMFI refresh is executing.
     """
     return get_status()
 

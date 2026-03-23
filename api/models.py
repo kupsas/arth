@@ -5,11 +5,15 @@ Tables:
   - PipelineRun       — audit trail of each pipeline execution
   - Transaction       — the core financial data, mirrors CanonicalTransaction
                         with DB-specific additions (id, content_hash, timestamps,
-                        source_type, gmail_message_id, spend_category)
+                        source_type, gmail_message_id, spend_category, holding_id)
   - ProcessedEmail    — dedup ledger for the Gmail scraper; one row per Gmail
                         message ID so the same email is never processed twice
   - RecurringPattern  — auto-detected recurring transaction patterns (Phase 4.5c)
   - Goal              — user-defined financial goals (Phase 4.5d)
+  - Holding           — portfolio position snapshot (Phase A.0)
+  - InvestmentTransaction — broker/fund ledger rows (Phase A.0)
+  - Liability         — loans and recurring obligations (Phase A.0)
+  - Price             — daily close/NAV per symbol (Phase A.0)
 
 Design notes:
   - Enum fields are stored as VARCHAR (SQLite has no native enum type anyway).
@@ -29,8 +33,10 @@ Design notes:
 
 import datetime
 
-from sqlalchemy import Index
+from sqlalchemy import Column, Index
 from sqlmodel import Field, SQLModel
+
+from api.services.encryption import EncryptedStr
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -132,6 +138,9 @@ class Transaction(SQLModel, table=True):
     exclude_from_analytics: bool = Field(default=False, index=True)
     # Stored reason: "refund" | "test_transaction" | "duplicate" | "other" or free text for "other".
     exclusion_reason: str | None = Field(default=None)
+
+    # ── Phase A.0: link bank rows (e.g. INCOME_DIVIDEND) to a holding ────────
+    holding_id: int | None = Field(default=None, foreign_key="holdings.id")
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -313,3 +322,132 @@ class Reminder(SQLModel, table=True):
     updated_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Holding — one row per position / manual asset (Phase A.0)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class Holding(SQLModel, table=True):
+    """A portfolio position or manually tracked asset.
+
+    Enum-like fields (asset_class, valuation_method, …) store string values
+    matching ``pipeline.models`` (e.g. AssetClass.EQUITY.value).
+    """
+
+    __tablename__ = "holdings"
+
+    id: int | None = Field(default=None, primary_key=True)
+    symbol: str | None = None
+    name: str
+    quantity: float | None = None
+    asset_class: str = Field(index=True)
+    # Display label only ("ICICI Direct") — safe to filter in SQL.
+    account_platform: str = Field(index=True)
+    # Sensitive account / demat fragments — encrypted at rest.
+    account_identifier_encrypted: str | None = Field(
+        default=None,
+        sa_column=Column("account_identifier_encrypted", EncryptedStr(), nullable=True),
+    )
+    valuation_method: str
+    current_value: float | None = None
+    last_valued_date: datetime.date | None = None
+    liquidity_class: str
+    currency: str = "INR"
+
+    average_cost_per_unit: float | None = None
+    current_price_per_unit: float | None = None
+
+    principal_amount: float | None = None
+    interest_rate: float | None = None
+    maturity_date: datetime.date | None = None
+    compounding_frequency: str | None = None
+
+    face_value: float | None = None
+    coupon_rate: float | None = None
+    coupon_frequency: str | None = None
+
+    folio_number_encrypted: str | None = Field(
+        default=None,
+        sa_column=Column("folio_number_encrypted", EncryptedStr(), nullable=True),
+    )
+    fund_type: str | None = None
+
+    user_id: str = Field(default="sashank", index=True)
+    is_active: bool = Field(default=True, index=True)
+    notes: str | None = None
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# InvestmentTransaction — trades, SIPs, switches (Phase A.0)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class InvestmentTransaction(SQLModel, table=True):
+    __tablename__ = "investment_transactions"
+
+    id: int | None = Field(default=None, primary_key=True)
+    txn_date: datetime.date = Field(index=True)
+    symbol: str | None = None
+    txn_type: str = Field(index=True)
+    quantity: float
+    price_per_unit: float
+    total_amount: float
+    account_platform: str
+    holding_id: int | None = Field(default=None, foreign_key="holdings.id")
+    bank_transaction_id: int | None = Field(default=None, foreign_key="transactions.id")
+    notes: str | None = None
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Liability — loans, EMIs, recurring premiums (Phase A.0)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class Liability(SQLModel, table=True):
+    __tablename__ = "liabilities"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    liability_type: str = Field(index=True)
+    principal_outstanding: float
+    interest_rate: float
+    emi_amount: float | None = None
+    tenure_remaining_months: int | None = None
+    emi_start_date: datetime.date | None = None
+    emi_end_date: datetime.date | None = None
+    user_id: str = Field(default="sashank", index=True)
+    is_active: bool = Field(default=True, index=True)
+    notes: str | None = None
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Price — historical closes / NAVs (Phase A.0)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class Price(SQLModel, table=True):
+    __tablename__ = "prices"
+    __table_args__ = (Index("ix_price_symbol_date", "symbol", "date", unique=True),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    symbol: str = Field(index=True)
+    date: datetime.date
+    close_price: float
+    source: str = "nse"

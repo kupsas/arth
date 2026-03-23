@@ -1,0 +1,3 @@
+Date,Transaction ID,Transaction Type,Fund Name,Scheme Name,Folio No,Last recorded NAV,Last recorded NAV On,Div-Reinvestment,Amount,Secure Mind Premium Amount,Unit,Status,Tax Saving,Channel
+"10-MAR-2024 00:00:00",1,Purchase,Quant,SMALL CAP,12345,150.5,10-MAR-2024,0,1580.25,0,10.5,Executed,NO,DIRECT
+"11-MAR-2024 00:00:00",2,Purchase,Quant,SMALL CAP,12345,151.0,11-MAR-2024,0,0,0,0,Rejected,NO,DIRECT

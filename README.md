@@ -235,6 +235,8 @@ Hooks run `ruff check` on `pipeline/`, `api/`, `scraper/`, and `tests/` (same pa
 | test | `data/arth_test.db` | `APP_ENV=test python3 -m uvicorn api.main:app --port 8001` |
 | pytest | in-memory SQLite | `pytest tests/` |
 
+**Local file permissions (Phase A.5):** After `init_db()` creates or touches the SQLite file, Arth sets **`chmod 600`** on `data/arth.db` (and `data/gmail_token.json` when present) so only your OS user can read/write them. This is a best-effort call on Unix-like systems; use full-disk encryption for stronger at-rest protection. See [`docs/evaluations/sqlcipher-evaluation.md`](docs/evaluations/sqlcipher-evaluation.md) for full-database encryption (SQLCipher) — **deferred** for this project’s threat model.
+
 **Add a new bank parser:** See [`pipeline/README.md`](pipeline/README.md) for a step-by-step guide.
 
 **Modify LLM prompts:** Edit the YAML files in `prompts/`. Read [`prompts/README.md`](prompts/README.md) first.

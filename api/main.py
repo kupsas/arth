@@ -9,6 +9,7 @@ Swagger docs at http://localhost:8000/docs
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -18,15 +19,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from api.auth import get_current_user
-from api.database import init_db
+from api.database import get_engine, init_db
 from api.routes import metrics, pipeline, transactions
+from api.services.price_feed import run_startup_price_sync
 from api.routes.auth import router as auth_router
 from api.routes.goals import router as goals_router
+from api.routes.holdings import router as holdings_router
+from api.routes.investment_transactions import router as investment_transactions_router
+from api.routes.liabilities import router as liabilities_router
+from api.routes.prices import router as prices_router
 from api.routes.settings import router as settings_router
 from api.routes.recurring import router as recurring_router
 from api.routes.scraper import router as scraper_router
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
+from sqlmodel import Session
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +45,27 @@ async def lifespan(app: FastAPI):
     Startup:
       1. Configure structured logging (stdout INFO + rotating file DEBUG).
       2. Ensure all DB tables exist (init_db is idempotent — safe to call every boot).
-      3. Start the email scraper scheduler.  If Gmail hasn't been authenticated
-         yet (no token file), start_scheduler() is a no-op and the scheduler
-         stays inactive until the user completes OAuth via /api/scraper/oauth/init.
+      3. Phase A.4.2 — If there are market-priced holdings, backfill stale NSE ``prices``
+         rows then refresh marks (runs in a worker thread so bind stays responsive).
+      4. Start APScheduler: daily price job at 18:30 IST always; Gmail poll only
+         if ``gmail_token.json`` exists (or after OAuth adds the email job).
 
     Shutdown:
-      4. Clean up the APScheduler background thread so the process exits cleanly.
+      5. Clean up the APScheduler background thread so the process exits cleanly.
     """
     setup_logging()
     logger.info("Arth API starting up...")
     init_db()
+
+    def _sync_startup_prices() -> None:
+        try:
+            with Session(get_engine()) as session:
+                run_startup_price_sync(session)
+                session.commit()
+        except Exception:
+            logger.exception("Startup price backfill/refresh failed — will retry at next scheduled run")
+
+    await asyncio.to_thread(_sync_startup_prices)
     start_scheduler()
     logger.info("Arth API ready")
     yield
@@ -104,6 +122,10 @@ app.include_router(scraper_router,      prefix="/api/scraper",       tags=["Scra
 app.include_router(recurring_router,    prefix="/api/recurring",     tags=["Recurring"],     dependencies=_auth)
 app.include_router(goals_router,        prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
 app.include_router(settings_router,    prefix="/api/settings",      tags=["Settings"],      dependencies=_auth)
+app.include_router(holdings_router,           prefix="/api/holdings",                  tags=["Holdings"],                  dependencies=_auth)
+app.include_router(investment_transactions_router, prefix="/api/investment-transactions", tags=["Investment transactions"], dependencies=_auth)
+app.include_router(liabilities_router,       prefix="/api/liabilities",               tags=["Liabilities"],               dependencies=_auth)
+app.include_router(prices_router,            prefix="/api/prices",                    tags=["Prices"],                    dependencies=_auth)
 
 
 # ---------------------------------------------------------------------------

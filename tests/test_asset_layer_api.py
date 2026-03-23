@@ -1,0 +1,240 @@
+"""
+Phase A.6 — FastAPI routes for holdings, investment txns, liabilities, prices.
+
+Reuses the in-memory DB + auth override pattern from ``test_db_and_api``.
+"""
+
+from __future__ import annotations
+
+import datetime
+import io
+import os
+from unittest.mock import patch
+
+import pytest
+from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
+from sqlmodel import Session, SQLModel, create_engine
+
+os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode("ascii"))
+
+from api.auth import get_current_user  # noqa: E402
+from api.database import get_session  # noqa: E402
+from api.main import app  # noqa: E402
+from api.models import Holding, Price  # noqa: E402
+from pipeline.models import (  # noqa: E402
+    AssetClass,
+    InvestmentTxnType,
+    LiabilityType,
+    LiquidityClass,
+    ValuationMethod,
+)
+
+
+@pytest.fixture(name="engine")
+def in_memory_engine():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    yield engine
+    SQLModel.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@pytest.fixture(name="client")
+def api_client(engine, monkeypatch):
+    # Lifespan still runs: avoid real DB + NSE in ``run_startup_price_sync`` and
+    # avoid APScheduler threads (same pitfall as production ``get_engine()``).
+    monkeypatch.setattr(
+        "api.main.run_startup_price_sync",
+        lambda _session: {"skipped": True, "reason": "test"},
+    )
+    monkeypatch.setattr("api.main.start_scheduler", lambda: None)
+    monkeypatch.setattr("api.main.shutdown_scheduler", lambda: None)
+
+    def _override_session():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_session
+    app.dependency_overrides[get_current_user] = lambda: "test_user"
+
+    import api.database as _db_mod
+
+    _original_init = _db_mod.init_db
+    _db_mod.init_db = lambda: None
+
+    with TestClient(app) as c:
+        yield c
+
+    _db_mod.init_db = _original_init
+    app.dependency_overrides.clear()
+
+
+def _seed_holding(session: Session) -> int:
+    h = Holding(
+        name="API Test Equity",
+        symbol="TESTAPI",
+        quantity=5.0,
+        asset_class=AssetClass.EQUITY.value,
+        account_platform="Unit",
+        valuation_method=ValuationMethod.MANUAL.value,
+        liquidity_class=LiquidityClass.T_PLUS_1.value,
+        current_value=25_000.0,
+        user_id="sashank",
+    )
+    session.add(h)
+    session.commit()
+    session.refresh(h)
+    return h.id
+
+
+def test_list_and_get_holding(client: TestClient, engine):
+    with Session(engine) as s:
+        hid = _seed_holding(s)
+
+    r = client.get("/api/holdings?user_id=sashank")
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 1
+    assert rows[0]["name"] == "API Test Equity"
+
+    r2 = client.get(f"/api/holdings/{hid}?user_id=sashank")
+    assert r2.status_code == 200
+    body = r2.json()
+    assert body["holding"]["id"] == hid
+    assert "returns" in body
+
+
+def test_create_holding_validation_rejects_bad_rate(client: TestClient):
+    payload = {
+        "name": "Bad rate",
+        "asset_class": AssetClass.EQUITY.value,
+        "account_platform": "X",
+        "valuation_method": ValuationMethod.FIXED_RETURN.value,
+        "liquidity_class": LiquidityClass.T_PLUS_1.value,
+        "interest_rate": 150.0,
+    }
+    r = client.post("/api/holdings", json=payload)
+    assert r.status_code == 422
+
+
+def test_patch_holding_manual_only(client: TestClient, engine):
+    with Session(engine) as s:
+        hid = _seed_holding(s)
+
+    r = client.patch(
+        f"/api/holdings/{hid}?user_id=sashank",
+        json={"current_value": 26_000.0},
+    )
+    assert r.status_code == 200
+    assert r.json()["current_value"] == pytest.approx(26_000.0)
+
+
+def test_liabilities_crud_and_summary(client: TestClient, engine):
+    payload = {
+        "name": "Bike",
+        "liability_type": LiabilityType.SECURED_LOAN.value,
+        "principal_outstanding": 200_000.0,
+        "interest_rate": 9.0,
+        "emi_amount": 8000.0,
+        "user_id": "sashank",
+    }
+    r = client.post("/api/liabilities/", json=payload)
+    assert r.status_code == 201
+    lid = r.json()["id"]
+
+    g = client.get(f"/api/liabilities/{lid}?user_id=sashank")
+    assert g.status_code == 200
+
+    s = client.get("/api/liabilities/summary?user_id=sashank")
+    assert s.status_code == 200
+    assert s.json()["principal_outstanding"] == pytest.approx(200_000.0)
+
+
+def test_investment_transaction_create_and_list(client: TestClient, engine):
+    with Session(engine) as s:
+        hid = _seed_holding(s)
+
+    body = {
+        "txn_date": "2025-02-01",
+        "symbol": "TESTAPI",
+        "txn_type": InvestmentTxnType.BUY.value,
+        "quantity": 1.0,
+        "price_per_unit": 100.0,
+        "total_amount": 100.0,
+        "account_platform": "Unit",
+        "holding_id": hid,
+    }
+    r = client.post("/api/investment-transactions/", json=body)
+    assert r.status_code == 201
+
+    lst = client.get("/api/investment-transactions", params={"holding_id": hid})
+    assert lst.status_code == 200
+    assert len(lst.json()) == 1
+
+
+@patch("api.routes.prices.refresh_all_prices")
+def test_prices_refresh_endpoint(mock_refresh, client: TestClient):
+    mock_refresh.return_value = {
+        "as_of": "2025-03-01",
+        "price_rows_upserted": 3,
+        "holdings_updated": 2,
+        "nse_symbols": ["A", "B"],
+        "mf_codes": ["119551"],
+        "international_yfinance_symbols": [],
+    }
+    r = client.post("/api/prices/refresh")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["price_rows_upserted"] == 3
+    assert data["mf_codes"] == ["119551"]
+
+
+def test_price_history_rejects_long_symbol(client: TestClient):
+    sym = "X" * 80
+    r = client.get(f"/api/prices/{sym}/history")
+    assert r.status_code == 400
+
+
+def test_price_history_returns_rows(client: TestClient, engine):
+    with Session(engine) as s:
+        s.add(
+            Price(
+                symbol="ZZTOP",
+                date=datetime.date(2025, 1, 5),
+                close_price=42.0,
+                source="nse",
+            )
+        )
+        s.commit()
+
+    r = client.get("/api/prices/ZZTOP/history?start_date=2025-01-01&end_date=2025-01-31")
+    assert r.status_code == 200
+    pts = r.json()
+    assert len(pts) == 1
+    assert pts[0]["close_price"] == pytest.approx(42.0)
+
+
+def test_holdings_import_multipart(client: TestClient, engine):
+    """Smoke-test multipart import wiring (parser + ingest on tiny fixture)."""
+    from pathlib import Path
+
+    csv_path = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "holdings"
+        / "icici_portfolio_summary_min.csv"
+    )
+    raw = csv_path.read_bytes()
+    files = {"files": ("icici_portfolio_summary_min.csv", io.BytesIO(raw), "text/csv")}
+    data = {"source": "icici_direct_equity", "user_id": "sashank"}
+    r = client.post("/api/holdings/import", files=files, data=data)
+    assert r.status_code == 200
+    out = r.json()
+    assert out["source"] == "icici_direct_equity"
+    assert "holdings_stats" in out

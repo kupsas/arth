@@ -11,10 +11,13 @@ injection to point at an in-memory SQLite database instead.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine
 
-from pipeline.config import DB_PATH
+from pipeline.config import DB_PATH, REPO_ROOT
 
 # `check_same_thread=False` is required because FastAPI serves requests
 # across multiple threads, but SQLite's default is single-thread only.
@@ -128,6 +131,19 @@ def _apply_sqlite_patches() -> None:
             conn.execute(
                 text("ALTER TABLE reminders ADD COLUMN description_match_anchors TEXT")
             )
+        # Phase A.0 — link bank transactions to holdings (e.g. dividend → equity position).
+        if not _column_exists(conn, "transactions", "holding_id"):
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN holding_id INTEGER"))
+
+
+def _chmod_owner_rw_only(path: Path) -> None:
+    """Best-effort ``0o600`` (owner read/write only). No-op if missing or OS rejects chmod."""
+    try:
+        if path.is_file():
+            os.chmod(path, 0o600)
+    except OSError:
+        # Windows / exotic FS may ignore or reject mode bits — DB still works.
+        pass
 
 
 def init_db() -> None:
@@ -142,6 +158,9 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(_engine)
     _apply_sqlite_patches()
+    # Phase A.5 — limit exposure of local secrets (SQLite file + Gmail OAuth token).
+    _chmod_owner_rw_only(DB_PATH)
+    _chmod_owner_rw_only(REPO_ROOT / "data" / "gmail_token.json")
 
 
 def get_session():

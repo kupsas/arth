@@ -1,0 +1,5 @@
+Product: Sample secured vehicle loan
+Loan amount: 150000
+Tenure: 48 months
+EMI: 3500
+Interest rate: 10.5
