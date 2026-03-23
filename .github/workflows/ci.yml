@@ -82,7 +82,7 @@ jobs:
       # Stored as a build artifact so you can download and inspect it.
       # Visit: Actions → this run → Artifacts → coverage-report
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage.xml
