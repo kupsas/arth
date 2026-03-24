@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import datetime
 import logging
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from sqlalchemy.sql.elements import ColumnElement
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, col, select
 
@@ -84,7 +86,12 @@ def list_investment_transactions(
     uid = user_id.strip() if user_id and user_id.strip() else None
     if uid is not None:
         # Inner join: only transactions tied to a holding for this user (excludes orphans).
-        q = q.join(Holding, InvestmentTransaction.holding_id == Holding.id).where(Holding.user_id == uid)
+        # SQLModel column `==` is a SQL expression at runtime; stubs type it as bool — satisfy mypy for .join().
+        on_holding = cast(
+            ColumnElement[Any],
+            InvestmentTransaction.holding_id == Holding.id,
+        )
+        q = q.join(Holding, on_holding).where(Holding.user_id == uid)
     if holding_id is not None:
         q = q.where(InvestmentTransaction.holding_id == holding_id)
     if txn_type is not None:
@@ -103,15 +110,21 @@ def list_investment_transactions(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date_to")
         q = q.where(InvestmentTransaction.txn_date <= d1)
-    q = q.order_by(col(InvestmentTransaction.txn_date).desc(), col(InvestmentTransaction.id).desc())
+    q = q.order_by(
+        col(InvestmentTransaction.txn_date).desc(), col(InvestmentTransaction.id).desc()
+    )
     q = q.offset(offset).limit(limit)
     return list(session.exec(q).all())
 
 
 @router.post("/", response_model=InvestmentTransactionOut, status_code=201)
-def create_investment_transaction(body: InvestmentTransactionCreate, *, session: Session = Depends(get_session)):
+def create_investment_transaction(
+    body: InvestmentTransactionCreate, *, session: Session = Depends(get_session)
+):
     if body.txn_type not in _VALID_TXN:
-        raise HTTPException(status_code=400, detail=f"Invalid txn_type: {body.txn_type!r}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid txn_type: {body.txn_type!r}"
+        )
     today = datetime.datetime.now(datetime.UTC).date()
     if body.txn_date > today:
         raise HTTPException(status_code=400, detail="txn_date cannot be in the future")
