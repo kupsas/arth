@@ -16,6 +16,7 @@
 
 import type {
   AccountSummary,
+  AuthStatus,
   BarDrilldownChart,
   BulkUpdateRequest,
   BulkUpdateResponse,
@@ -32,17 +33,29 @@ import type {
   GoalProgressResponse,
   GoalTree,
   GoalUpdate,
+  Holding,
+  HoldingDetail,
+  HoldingValueUpdate,
+  HoldingsListFilters,
+  HoldingsSummary,
+  InvestmentTxn,
+  InvestmentTransactionFilters,
+  InvestmentTrendRow,
+  Liability,
+  LiabilitySummary,
   LifeEvent,
   LifeEventUpdate,
-  InvestmentTrendRow,
   MetricsSummary,
   MonthlyTrend,
+  NetWorthGranularity,
+  NetWorthHistory,
   NegativeSurplusResponse,
   PaginatedResponse,
   RecurringPattern,
   RecurringSummary,
   Reminder,
   ReminderCreate,
+  RefreshPricesResult,
   ReminderUpdate,
   RemindersStatusResponse,
   DeriveReminderAnchorsResponse,
@@ -120,8 +133,12 @@ async function get<T>(path: string, params?: QueryParams): Promise<T> {
  * Throws ApiError on non-2xx responses.
  * Redirects to /login on 401.
  */
-async function patch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(buildApiUrl(path), {
+async function patch<T>(
+  path: string,
+  body: unknown,
+  params?: QueryParams,
+): Promise<T> {
+  const res = await fetch(buildApiUrl(path, params), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -146,8 +163,12 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
  * Throws ApiError on non-2xx responses.
  * Redirects to /login on 401.
  */
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(buildApiUrl(path), {
+async function post<T>(
+  path: string,
+  body: unknown,
+  params?: QueryParams,
+): Promise<T> {
+  const res = await fetch(buildApiUrl(path, params), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -358,6 +379,15 @@ export async function logout(): Promise<void> {
   });
   // Redirect to login page regardless of the response
   window.location.href = "/login";
+}
+
+/**
+ * GET /api/auth/me
+ * Returns who is logged in (username matches ``user_id`` on holdings / goals).
+ * Uses the same ``get()`` helper as the rest of the app (401 → redirect to login).
+ */
+export function fetchAuthMe(): Promise<AuthStatus> {
+  return get<AuthStatus>("/api/auth/me");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -643,4 +673,96 @@ export async function uploadStatement(
   }
 
   return res.json() as Promise<UploadResponse>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Portfolio / asset layer  →  holdings, investment-transactions, liabilities, prices (F2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** GET /api/holdings — optional filters match FastAPI list_holdings. */
+export function fetchHoldings(
+  filters: HoldingsListFilters = {},
+): Promise<Holding[]> {
+  return get<Holding[]>("/api/holdings", filters as QueryParams);
+}
+
+/** GET /api/holdings/summary — net worth, allocation %, concentration. */
+export function fetchHoldingsSummary(params?: {
+  user_id?: string;
+  as_of?: string;
+}): Promise<HoldingsSummary> {
+  return get<HoldingsSummary>("/api/holdings/summary", params as QueryParams);
+}
+
+/** GET /api/holdings/history — time series for charts (start/end required). */
+export function fetchNetWorthHistory(
+  startDate: string,
+  endDate: string,
+  params?: {
+    user_id?: string;
+    granularity?: NetWorthGranularity;
+  },
+): Promise<NetWorthHistory> {
+  return get<NetWorthHistory>("/api/holdings/history", {
+    start_date: startDate,
+    end_date: endDate,
+    granularity: params?.granularity ?? "monthly",
+    user_id: params?.user_id,
+  } as QueryParams);
+}
+
+/** GET /api/holdings/{id} — single row plus returns dict. */
+export function fetchHoldingDetail(
+  id: number,
+  params?: { user_id?: string },
+): Promise<HoldingDetail> {
+  return get<HoldingDetail>(`/api/holdings/${id}`, params as QueryParams);
+}
+
+/** PATCH /api/holdings/{id} — server allows only MANUAL valuation_method holdings. */
+export function updateHoldingValue(
+  id: number,
+  update: HoldingValueUpdate,
+  params?: { user_id?: string },
+): Promise<Holding> {
+  return patch<Holding>(`/api/holdings/${id}`, update, params as QueryParams);
+}
+
+/**
+ * GET /api/investment-transactions
+ * Pass ``user_id`` in filters so results are scoped to that user's holdings (F2.0).
+ */
+export function fetchInvestmentTransactions(
+  filters: InvestmentTransactionFilters = {},
+): Promise<InvestmentTxn[]> {
+  return get<InvestmentTxn[]>(
+    "/api/investment-transactions",
+    filters as QueryParams,
+  );
+}
+
+/** GET /api/liabilities */
+export function fetchLiabilities(params?: {
+  user_id?: string;
+  is_active?: boolean;
+}): Promise<Liability[]> {
+  return get<Liability[]>("/api/liabilities", params as QueryParams);
+}
+
+/** GET /api/liabilities/summary */
+export function fetchLiabilitySummary(params?: {
+  user_id?: string;
+}): Promise<LiabilitySummary> {
+  return get<LiabilitySummary>("/api/liabilities/summary", params as QueryParams);
+}
+
+/** POST /api/prices/refresh — optional user_id limits which holdings are refreshed. */
+export function refreshPrices(params?: {
+  user_id?: string;
+}): Promise<RefreshPricesResult> {
+  return post<RefreshPricesResult>(
+    "/api/prices/refresh",
+    {},
+    params as QueryParams,
+  );
 }

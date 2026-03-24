@@ -207,7 +207,9 @@ def fetch_equity_closes_from_nse_bhav(
     try:
         path = nse.equityBhavcopy(dt)
     except Exception as exc:
-        logger.warning("NSE bhavcopy failed for %s: %s", trade_date, exc)
+        # Expected often: holiday/weekend, file not published yet, or NSE hiccup.
+        # Default server log level is INFO — avoid one line per date on every refresh/backfill.
+        logger.debug("NSE bhavcopy failed for %s: %s", trade_date, exc)
         return {}
     closes = _bhav_symbol_to_close(Path(path))
     norm = [normalize_equity_symbol(s) for s in symbols]
@@ -221,7 +223,7 @@ def fetch_equity_prices_nse(
 ) -> list[Price]:
     """Historical closes: one bhavcopy per calendar day (weekends skipped).
 
-    Holidays produce no file — those days are skipped with a log line.
+    Holidays produce no file — those days are skipped (see debug log in fetch helper).
     """
     out: list[Price] = []
     if start_date > end_date:
@@ -397,7 +399,9 @@ def run_startup_price_sync(session: Session) -> dict[str, object]:
     Safe when there are no market-priced holdings (no-op). Caller should ``commit()`` the session.
     """
     if not has_market_priced_holdings(session):
-        logger.info("Startup price sync skipped — no market-priced holdings")
+        logger.info(
+            "Startup price sync skipped — no market-priced holdings (no NSE/AMFI/yfinance calls)"
+        )
         return {"skipped": True, "reason": "no_market_holdings"}
 
     bf = backfill_nse_portfolio_gaps(session)

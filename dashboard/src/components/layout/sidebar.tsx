@@ -27,6 +27,7 @@ import {
   ArrowLeftRight,
   Wallet,
   Target,
+  PieChart,
   Settings,
 } from "lucide-react";
 
@@ -48,6 +49,11 @@ const NAV_ITEMS = [
     label: "Goals",
     href: "/goals",
     icon: Target,
+  },
+  {
+    label: "Portfolio",
+    href: "/portfolio",
+    icon: PieChart,
   },
   {
     label: "Review Queue",

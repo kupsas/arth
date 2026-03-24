@@ -41,24 +41,13 @@ from sqlmodel import Session
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup and shutdown lifecycle for the Arth API server.
+async def _run_startup_prices_in_thread() -> None:
+    """NSE/AMFI/yfinance work — must not block ASGI startup (see lifespan)."""
 
-    Startup:
-      1. Configure structured logging (stdout INFO + rotating file DEBUG).
-      2. Ensure all DB tables exist (init_db is idempotent — safe to call every boot).
-      3. Phase A.4.2 — If there are market-priced holdings, backfill stale NSE ``prices``
-         rows then refresh marks (runs in a worker thread so bind stays responsive).
-      4. Start APScheduler: daily price job at 18:30 IST always; Gmail poll only
-         if ``gmail_token.json`` exists (or after OAuth adds the email job).
-
-    Shutdown:
-      5. Clean up the APScheduler background thread so the process exits cleanly.
-    """
-    setup_logging()
-    logger.info("Arth API starting up...")
-    init_db()
+    # One line on stdout right away — the heavy work has no per-request INFO (NSE misses are DEBUG).
+    logger.info(
+        "Startup price sync: background job started (NSE bhavcopy / AMFI / yfinance as needed)"
+    )
 
     def _sync_startup_prices() -> None:
         try:
@@ -68,9 +57,37 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Startup price backfill/refresh failed — will retry at next scheduled run")
 
-    await asyncio.to_thread(_sync_startup_prices)
+    try:
+        await asyncio.to_thread(_sync_startup_prices)
+    except asyncio.CancelledError:
+        raise
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown lifecycle for the Arth API server.
+
+    Startup:
+      1. Configure structured logging (stdout INFO + rotating file DEBUG).
+      2. Ensure all DB tables exist (init_db is idempotent — safe to call every boot).
+      3. Start APScheduler: daily price job at 18:30 IST always; Gmail poll only
+         if ``gmail_token.json`` exists (or after OAuth adds the email job).
+      4. Phase A.4.2 — If there are market-priced holdings, backfill stale NSE ``prices``
+         then refresh marks **in the background**. Uvicorn used to await this before
+         ``yield``, which left "Waiting for application startup" for minutes when NSE
+         or AMFI was slow or unreachable.
+
+    Shutdown:
+      5. Clean up the APScheduler background thread so the process exits cleanly.
+    """
+    setup_logging()
+    logger.info("Arth API starting up...")
+    init_db()
     start_scheduler()
-    logger.info("Arth API ready")
+    # Schedule price sync without awaiting — server becomes ready immediately.
+    # Keep a reference on app.state so the task is not GC'd before it runs (asyncio footgun).
+    app.state.startup_price_sync_task = asyncio.create_task(_run_startup_prices_in_thread())
+    logger.info("Arth API ready (startup price sync runs in background)")
     yield
     logger.info("Arth API shutting down...")
     shutdown_scheduler()

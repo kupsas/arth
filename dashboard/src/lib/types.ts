@@ -171,6 +171,16 @@ export interface BulkUpdateResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Auth — mirrors AuthStatusResponse in api/routes/auth.py
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** GET /api/auth/me — session check without reading the httpOnly cookie in JS. */
+export interface AuthStatus {
+  authenticated: boolean;
+  username: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Query filter types (used by the API client and hooks)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -668,3 +678,229 @@ export interface UploadResponse {
   source_key: string;
   message: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Portfolio / asset layer (Phase F2) — mirrors holdings, investment txns,
+// liabilities, and prices routes in api/routes/*.py
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Same string values as ``pipeline.models.AssetClass`` (holdings API). */
+export type PortfolioAssetClass =
+  | "EQUITY"
+  | "MUTUAL_FUND"
+  | "FD"
+  | "PPF"
+  | "NPS"
+  | "SAVINGS"
+  | "GOLD"
+  | "SOVEREIGN_GOLD_BOND"
+  | "REAL_ESTATE"
+  | "ESOP"
+  | "OTHER";
+
+/** How a holding's mark is produced — mirrors ``ValuationMethod`` on the API. */
+export type HoldingValuationMethod = "MARKET_PRICE" | "FIXED_RETURN" | "MANUAL";
+
+/** Time-to-liquidity bucket for a holding. */
+export type HoldingLiquidityClass =
+  | "INSTANT"
+  | "T_PLUS_1"
+  | "T_PLUS_3"
+  | "WEEKS"
+  | "ILLIQUID";
+
+/** Investment ledger line type — mirrors ``InvestmentTxnType`` in the pipeline. */
+export type InvestmentLedgerTxnType =
+  | "BUY"
+  | "SELL"
+  | "DIVIDEND"
+  | "SIP"
+  | "SWITCH_IN"
+  | "SWITCH_OUT";
+
+/**
+ * One portfolio row — mirrors ``HoldingOut`` in api/routes/holdings.py.
+ * PII (folio / account identifiers) is never included in JSON responses.
+ */
+export interface Holding {
+  id: number | null;
+  symbol: string | null;
+  name: string;
+  quantity: number | null;
+  asset_class: PortfolioAssetClass | string;
+  account_platform: string;
+  valuation_method: HoldingValuationMethod | string;
+  current_value: number | null;
+  last_valued_date: string | null;
+  liquidity_class: HoldingLiquidityClass | string;
+  currency: string;
+  average_cost_per_unit: number | null;
+  current_price_per_unit: number | null;
+  principal_amount: number | null;
+  interest_rate: number | null;
+  maturity_date: string | null;
+  compounding_frequency: string | null;
+  face_value: number | null;
+  coupon_rate: number | null;
+  coupon_frequency: string | null;
+  fund_type: string | null;
+  user_id: string;
+  is_active: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Return metrics for one holding — shape varies by ``valuation_method``
+ * (manual vs fixed_return vs xirr, etc.). See ``compute_returns`` in the API.
+ */
+export interface HoldingReturns {
+  method: string;
+  annualized_return?: number | null;
+  [key: string]: unknown;
+}
+
+/** GET /api/holdings/{id} — holding plus returns breakdown. */
+export interface HoldingDetail {
+  holding: Holding;
+  returns: HoldingReturns;
+}
+
+/** Allowed fields for PATCH /api/holdings/{id} (MANUAL valuation only on server). */
+export interface HoldingValueUpdate {
+  current_value?: number | null;
+  last_valued_date?: string | null;
+  notes?: string | null;
+}
+
+/** Snapshot inside GET /api/holdings/summary → ``net_worth``. */
+export interface NetWorthSnapshot {
+  total_assets: number;
+  total_liabilities: number;
+  net_worth: number;
+  as_of: string | null;
+}
+
+/** Three percentage maps (0–100 of gross assets) from the summary endpoint. */
+export interface HoldingsAllocation {
+  by_asset_class: Record<string, number>;
+  by_liquidity_class: Record<string, number>;
+  by_account_platform: Record<string, number>;
+}
+
+/** GET /api/holdings/summary */
+export interface HoldingsSummary {
+  net_worth: NetWorthSnapshot;
+  allocation: HoldingsAllocation;
+  /** e.g. largest_holding_pct, esop_pct — backend uses float | str | null. */
+  concentration: Record<string, number | string | null>;
+}
+
+/** One point from GET /api/holdings/history. */
+export interface NetWorthHistoryPoint {
+  date: string;
+  net_worth: number;
+  total_assets: number;
+  total_liabilities: number;
+}
+
+export interface NetWorthHistory {
+  points: NetWorthHistoryPoint[];
+  granularity: string;
+}
+
+/** GET /api/investment-transactions — mirrors ``InvestmentTransactionOut``. */
+export interface InvestmentTxn {
+  id: number | null;
+  txn_date: string;
+  symbol: string | null;
+  txn_type: InvestmentLedgerTxnType | string;
+  quantity: number;
+  price_per_unit: number;
+  total_amount: number;
+  account_platform: string;
+  holding_id: number | null;
+  bank_transaction_id: number | null;
+  notes: string | null;
+  created_at: string;
+}
+
+/** GET /api/liabilities/summary */
+export interface LiabilitySummary {
+  principal_outstanding: number;
+  monthly_emi_burden: number;
+  debt_to_asset_ratio: number;
+  active_count: number;
+}
+
+/** GET /api/liabilities — mirrors ``LiabilityOut``. */
+export interface Liability {
+  id: number | null;
+  name: string;
+  liability_type: string;
+  principal_outstanding: number;
+  interest_rate: number;
+  emi_amount: number | null;
+  tenure_remaining_months: number | null;
+  emi_start_date: string | null;
+  emi_end_date: string | null;
+  user_id: string;
+  is_active: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET /api/prices/{symbol}/history rows and ``PricePointOut``. */
+export interface PricePoint {
+  symbol: string;
+  date: string;
+  close_price: number;
+  source: string;
+}
+
+/** POST /api/prices/refresh response. */
+export interface RefreshPricesResult {
+  as_of: string;
+  price_rows_upserted: number;
+  holdings_updated: number;
+  nse_symbols: string[];
+  mf_codes: string[];
+  international_yfinance_symbols: string[];
+}
+
+/** Query params for GET /api/holdings (matches FastAPI ``list_holdings``). */
+export interface HoldingsListFilters {
+  user_id?: string;
+  asset_class?: string;
+  account_platform?: string;
+  liquidity_class?: string;
+  is_active?: boolean;
+}
+
+export type NetWorthGranularity = "daily" | "weekly" | "monthly";
+
+/**
+ * Query params for GET /api/investment-transactions.
+ * Pass ``user_id`` so the API scopes rows via holding ownership (F2.0 security fix).
+ */
+export interface InvestmentTransactionFilters {
+  user_id?: string;
+  holding_id?: number;
+  txn_type?: string;
+  symbol?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Plan F2.1 naming — same as ``PortfolioAssetClass``. */
+export type AssetClass = PortfolioAssetClass;
+/** Plan F2.1 naming — same as ``HoldingValuationMethod``. */
+export type ValuationMethod = HoldingValuationMethod;
+/** Plan F2.1 naming — same as ``HoldingLiquidityClass``. */
+export type LiquidityClass = HoldingLiquidityClass;
+/** Plan F2.1 naming — same as ``InvestmentLedgerTxnType``. */
+export type InvestmentTxnType = InvestmentLedgerTxnType;

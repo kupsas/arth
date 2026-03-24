@@ -22,7 +22,7 @@ os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode("ascii"))
 from api.auth import get_current_user  # noqa: E402
 from api.database import get_session  # noqa: E402
 from api.main import app  # noqa: E402
-from api.models import Holding, Price  # noqa: E402
+from api.models import Holding, InvestmentTransaction, Price  # noqa: E402
 from pipeline.models import (  # noqa: E402
     AssetClass,
     InvestmentTxnType,
@@ -176,6 +176,91 @@ def test_investment_transaction_create_and_list(client: TestClient, engine):
     lst = client.get("/api/investment-transactions", params={"holding_id": hid})
     assert lst.status_code == 200
     assert len(lst.json()) == 1
+
+
+def test_investment_transactions_user_scoped_via_holding(client: TestClient, engine):
+    """Rows for another user's holdings must not appear when user_id is set (F2.0)."""
+    with Session(engine) as s:
+        h_sash = Holding(
+            name="Sash Equity",
+            symbol="SASH1",
+            quantity=1.0,
+            asset_class=AssetClass.EQUITY.value,
+            account_platform="Test",
+            valuation_method=ValuationMethod.MANUAL.value,
+            liquidity_class=LiquidityClass.T_PLUS_1.value,
+            current_value=1000.0,
+            user_id="sashank",
+        )
+        h_other = Holding(
+            name="Partner Equity",
+            symbol="PART1",
+            quantity=1.0,
+            asset_class=AssetClass.EQUITY.value,
+            account_platform="Test",
+            valuation_method=ValuationMethod.MANUAL.value,
+            liquidity_class=LiquidityClass.T_PLUS_1.value,
+            current_value=2000.0,
+            user_id="partner",
+        )
+        s.add(h_sash)
+        s.add(h_other)
+        s.commit()
+        s.refresh(h_sash)
+        s.refresh(h_other)
+
+    for hid, sym in [(h_sash.id, "SASH1"), (h_other.id, "PART1")]:
+        r = client.post(
+            "/api/investment-transactions/",
+            json={
+                "txn_date": "2025-02-01",
+                "symbol": sym,
+                "txn_type": InvestmentTxnType.BUY.value,
+                "quantity": 1.0,
+                "price_per_unit": 100.0,
+                "total_amount": 100.0,
+                "account_platform": "Test",
+                "holding_id": hid,
+            },
+        )
+        assert r.status_code == 201
+
+    scoped = client.get("/api/investment-transactions", params={"user_id": "sashank"})
+    assert scoped.status_code == 200
+    rows = scoped.json()
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "SASH1"
+
+    scoped_p = client.get("/api/investment-transactions", params={"user_id": "partner"})
+    assert scoped_p.status_code == 200
+    assert len(scoped_p.json()) == 1
+    assert scoped_p.json()[0]["symbol"] == "PART1"
+
+
+def test_investment_transactions_orphan_only_when_unscoped(client: TestClient, engine):
+    """Rows with holding_id NULL are listed only when user_id filter is omitted."""
+    with Session(engine) as s:
+        s.add(
+            InvestmentTransaction(
+                txn_date=datetime.date(2025, 3, 1),
+                symbol="ORPH",
+                txn_type=InvestmentTxnType.BUY.value,
+                quantity=1.0,
+                price_per_unit=1.0,
+                total_amount=1.0,
+                account_platform="Test",
+                holding_id=None,
+            )
+        )
+        s.commit()
+
+    unscoped = client.get("/api/investment-transactions")
+    assert unscoped.status_code == 200
+    assert any(r["symbol"] == "ORPH" for r in unscoped.json())
+
+    scoped = client.get("/api/investment-transactions", params={"user_id": "sashank"})
+    assert scoped.status_code == 200
+    assert not any(r["symbol"] == "ORPH" for r in scoped.json())
 
 
 @patch("api.routes.prices.refresh_all_prices")

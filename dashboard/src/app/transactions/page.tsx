@@ -20,10 +20,12 @@
 "use client"
 
 import * as React from "react"
+import { useSearchParams } from "next/navigation"
 import { CheckCircle2 } from "lucide-react"
 import type { RowSelectionState } from "@tanstack/react-table"
 
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { TransactionTable } from "@/components/transactions/transaction-table"
 import { TransactionFiltersBar } from "@/components/transactions/transaction-filters"
 import { TransactionEditSheet } from "@/components/transactions/transaction-edit-sheet"
@@ -66,10 +68,13 @@ function countActiveFilters(filters: TransactionFilters, datePreset: Preset): nu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Page component
+// Page component (inner — uses useSearchParams; wrapped in Suspense below)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function TransactionsPage() {
+function TransactionsPageInner() {
+  const searchParams = useSearchParams()
+  const txnIdParam = searchParams.get("txn_id")
+
   // ── Filter state — lazy init so `new Date()` runs in the browser, not at build time
   const [filters, setFilters] = React.useState<TransactionFilters>(makeDefaultFilters)
 
@@ -83,6 +88,15 @@ export default function TransactionsPage() {
   // ── Edit sheet state ──────────────────────────────────────────────────────
   const [editTxnId, setEditTxnId] = React.useState<number | null>(null)
   const [editSheetOpen, setEditSheetOpen] = React.useState(false)
+
+  // Deep link from Portfolio investment row: /transactions?txn_id=123
+  React.useEffect(() => {
+    if (!txnIdParam) return
+    const id = Number.parseInt(txnIdParam, 10)
+    if (!Number.isFinite(id)) return
+    setEditTxnId(id)
+    setEditSheetOpen(true)
+  }, [txnIdParam])
 
   // ── Data fetching ─────────────────────────────────────────────────────────
   const { data, isLoading } = useTransactions(filters)
@@ -219,5 +233,21 @@ export default function TransactionsPage() {
       />
 
     </div>
+  )
+}
+
+export default function TransactionsPage() {
+  return (
+    <React.Suspense
+      fallback={
+        <div className="flex flex-col gap-4">
+          <Skeleton className="h-8 w-48" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-64 w-full" />
+        </div>
+      }
+    >
+      <TransactionsPageInner />
+    </React.Suspense>
   )
 }
