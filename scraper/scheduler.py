@@ -51,6 +51,9 @@ logger = logging.getLogger(__name__)
 
 # India session — NSE equity cash close; bhavcopy is typically ready by then.
 _DAILY_PRICE_TZ = ZoneInfo("Asia/Kolkata")
+# If the machine sleeps past 18:30 IST, APScheduler still runs the job within this
+# window (default grace is tiny, so a late wake used to skip the whole day).
+_DAILY_PRICE_MISFIRE_GRACE_SEC = 6 * 60 * 60
 
 
 # ─── Module-level state ────────────────────────────────────────────────────────
@@ -165,8 +168,8 @@ def _run_daily_price_job() -> None:
     try:
         logger.info("Daily price job starting...")
         with Session(get_engine()) as session:
-            backfill_nse_portfolio_gaps(session)
-            refresh_all_prices(session)
+            backfill_summary = backfill_nse_portfolio_gaps(session)
+            refresh_summary = refresh_all_prices(session)
             session.commit()
 
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -174,7 +177,16 @@ def _run_daily_price_job() -> None:
             _price_last_run_at = now
             _price_last_success_at = now
             _price_last_error = None
-        logger.info("Daily price job finished successfully")
+        # One-line outcome: download+parse live inside refresh/backfill; DB writes commit above.
+        n_bf = len(backfill_summary.get("details", [])) if isinstance(backfill_summary.get("details"), list) else 0
+        logger.info(
+            "Daily price job finished — backfill symbols touched: %d, "
+            "price rows upserted: %s, holdings mark updated: %s, as_of=%s",
+            n_bf,
+            refresh_summary.get("price_rows_upserted"),
+            refresh_summary.get("holdings_updated"),
+            refresh_summary.get("as_of"),
+        )
     except Exception as exc:
         err = str(exc)
         logger.exception("Daily price job failed: %s", err)
@@ -230,6 +242,8 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
         trigger=CronTrigger(hour=18, minute=30, timezone=_DAILY_PRICE_TZ),
         id="daily_prices",
         replace_existing=True,
+        misfire_grace_time=_DAILY_PRICE_MISFIRE_GRACE_SEC,
+        coalesce=True,
     )
 
     if GMAIL_TOKEN_PATH.exists():
