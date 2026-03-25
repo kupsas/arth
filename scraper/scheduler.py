@@ -178,7 +178,8 @@ def _run_daily_price_job() -> None:
             _price_last_success_at = now
             _price_last_error = None
         # One-line outcome: download+parse live inside refresh/backfill; DB writes commit above.
-        n_bf = len(backfill_summary.get("details", [])) if isinstance(backfill_summary.get("details"), list) else 0
+        _details = backfill_summary.get("details")
+        n_bf = len(_details) if isinstance(_details, list) else 0
         logger.info(
             "Daily price job finished — backfill symbols touched: %d, "
             "price rows upserted: %s, holdings mark updated: %s, as_of=%s",

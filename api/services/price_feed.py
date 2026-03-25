@@ -329,6 +329,40 @@ def nse_normalised_symbols_for_holdings(holdings: list[Holding]) -> list[str]:
     return sorted({normalize_equity_symbol(s) for s in raw})
 
 
+def mf_scheme_codes_for_holdings(holdings: list[Holding]) -> list[str]:
+    """AMFI scheme codes (digits on ``holding.symbol``) for active MF rows — backfill NAV history."""
+    raw: list[str] = []
+    for h in holdings:
+        if h.asset_class != AssetClass.MUTUAL_FUND.value:
+            continue
+        sym = (h.symbol or "").strip()
+        if _is_amfi_scheme_code(sym):
+            raw.append(sym)
+    return sorted(dict.fromkeys(raw))
+
+
+def market_priced_holdings(session: Session, *, user_id: str | None = None) -> list[Holding]:
+    """Same filter as :func:`refresh_all_prices` (NSE + MF + intl gold tickers)."""
+    return _select_market_priced_holdings(session, user_id=user_id)
+
+
+def calendar_start_for_forced_nse_depth(
+    latest_session: datetime.date,
+    *,
+    depth_calendar_days: int,
+    weekend_holiday_buffer_days: int = 14,
+) -> datetime.date:
+    """Calendar start date when forcing ~``depth_calendar_days`` of NSE bhav history.
+
+    Weekends and exchange holidays have no bhav file; the buffer pulls extra calendar
+    days so the walk from ``start`` → ``latest_session`` still covers about a year of
+    trading sessions.  Used by the one-shot backfill script, not by startup sync.
+    """
+    return latest_session - datetime.timedelta(
+        days=depth_calendar_days + weekend_holiday_buffer_days
+    )
+
+
 def has_market_priced_holdings(session: Session, *, user_id: str | None = None) -> bool:
     """True if any row would be picked up by :func:`refresh_all_prices`."""
     q = select(Holding.id).where(
@@ -349,8 +383,8 @@ def backfill_nse_portfolio_gaps(
 ) -> dict[str, object]:
     """Insert missing NSE ``prices`` rows when any portfolio symbol is behind the latest weekday session.
 
-    Mutual funds and international Yahoo symbols are **not** backfilled here (AMFI has no cheap
-    historical API in this module; yfinance is refresh-only). After this, call
+    Mutual funds and international Yahoo symbols are **not** backfilled here (use
+    ``scripts/backfill_price_history.py`` for MF history; yfinance is refresh-only). After this, call
     :func:`refresh_all_prices` to update MF / intl and push marks onto ``Holding`` rows.
 
     ``max_calendar_lookback_if_empty`` caps how far we walk back when a symbol has **no** ``prices``

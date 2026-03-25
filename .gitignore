@@ -21,6 +21,7 @@ dist/
 # Test and coverage artifacts
 .pytest_cache/
 .coverage*
+coverage.xml
 htmlcov/
 
 # Environment secrets (API keys — never commit)
@@ -45,6 +46,9 @@ docs/private/
 # Re-generate with: python3 scripts/export_benchmark.py
 data/test/benchmark_*.csv
 
+# Local AMFI/NAV demo extracts — not for version control
+data/samples/
+
 # Generated pipeline output and LLM cache
 data/output/
 data/.llm_cache/
@@ -64,6 +68,9 @@ data/*.db
 # WAL mode creates these alongside the main .db file — machine-local, do not commit
 data/*.db-wal
 data/*.db-shm
+
+# Manual / timestamped DB copies (e.g. arth.db.bak.YYYYMMDD_* and WAL/SHM siblings) — same sensitivity as *.db
+data/*bak*
 
 # Gmail OAuth credentials and token (never commit — contains secrets)
 data/gmail_credentials.json
