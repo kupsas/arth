@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 from api.database import get_session
 from api.models import Holding
 from api.routes.ingest_utils import parser_input_path, saved_upload_directory
+from api.services.holding_enrichment import enrich_holdings
 from api.services.net_worth import (
     compute_asset_allocation,
     compute_concentration,
@@ -126,6 +127,18 @@ class NetWorthHistoryOut(BaseModel):
     granularity: str
 
 
+class HoldingsEnrichOut(BaseModel):
+    """Result of POST /enrich — classification backfill from AMFI + NSE."""
+
+    ok: bool = True
+    mutual_funds_updated: int
+    mutual_funds_skipped_no_meta: int
+    equities_sector_updated: int
+    equities_sector_failed: int
+    equities_cap_updated: int
+    equities_cap_unknown_symbol: int
+
+
 class ImportResultOut(BaseModel):
     source: str
     holdings_stats: dict[str, int]
@@ -207,6 +220,21 @@ def holdings_history(
         raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
     pts = compute_net_worth_history(session, sd, ed, granularity=granularity, user_id=user_id)  # type: ignore[arg-type]
     return NetWorthHistoryOut(points=pts, granularity=granularity)
+
+
+@router.post("/enrich", response_model=HoldingsEnrichOut)
+def enrich_holdings_endpoint(
+    *,
+    session: Session = Depends(get_session),
+    user_id: str = Query(default="sashank"),
+):
+    """Backfill ``sector``, ``market_cap_class``, ``fund_category``, ``fund_house`` (Phase B).
+
+    Downloads AMFI NAVAll once, calls NSE meta per equity (throttled). Safe to re-run.
+    """
+    report = enrich_holdings(session, user_id=user_id.strip() or None)
+    d = report.as_dict()
+    return HoldingsEnrichOut(**d)
 
 
 @router.get("/{holding_id}", response_model=HoldingDetailOut)

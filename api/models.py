@@ -502,6 +502,12 @@ class Holding(SQLModel, table=True):
     )
     fund_type: str | None = None
 
+    # Holdings page classification (enriched from NSE / AMFI; all optional).
+    sector: str | None = None  # NSE industry, e.g. "COMPUTERS - SOFTWARE"
+    market_cap_class: str | None = None  # LARGE_CAP | MID_CAP | SMALL_CAP
+    fund_category: str | None = None  # SEBI / AMFI bucket, e.g. "Equity Scheme - Large Cap Fund"
+    fund_house: str | None = None  # AMC name, e.g. "SBI Mutual Fund"
+
     user_id: str = Field(default="sashank", index=True)
     is_active: bool = Field(default=True, index=True)
     notes: str | None = None

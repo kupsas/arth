@@ -181,6 +181,16 @@ def _apply_sqlite_patches() -> None:
                 )
             )
 
+        # Holdings page — classification columns (B1); nullable, backfilled by enrichment.
+        if not _column_exists(conn, "holdings", "sector"):
+            conn.execute(text("ALTER TABLE holdings ADD COLUMN sector TEXT"))
+        if not _column_exists(conn, "holdings", "market_cap_class"):
+            conn.execute(text("ALTER TABLE holdings ADD COLUMN market_cap_class TEXT"))
+        if not _column_exists(conn, "holdings", "fund_category"):
+            conn.execute(text("ALTER TABLE holdings ADD COLUMN fund_category TEXT"))
+        if not _column_exists(conn, "holdings", "fund_house"):
+            conn.execute(text("ALTER TABLE holdings ADD COLUMN fund_house TEXT"))
+
 
 def _chmod_owner_rw_only(path: Path) -> None:
     """Best-effort ``0o600`` (owner read/write only). No-op if missing or OS rejects chmod."""
