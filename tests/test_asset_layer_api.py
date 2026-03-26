@@ -102,12 +102,80 @@ def test_list_and_get_holding(client: TestClient, engine):
     rows = r.json()
     assert len(rows) == 1
     assert rows[0]["name"] == "API Test Equity"
+    # B3 — computed fields present (no avg cost on seed row → gain unknown).
+    assert rows[0]["weight_pct"] == pytest.approx(100.0)
+    assert rows[0]["overall_gain"] is None
+    assert rows[0]["overall_gain_pct"] is None
 
     r2 = client.get(f"/api/holdings/{hid}?user_id=sashank")
     assert r2.status_code == 200
     body = r2.json()
     assert body["holding"]["id"] == hid
     assert "returns" in body
+    assert body["holding"]["weight_pct"] == pytest.approx(100.0)
+
+
+def test_holdings_b3_summary_batch_returns_and_trend(client: TestClient, engine):
+    """B3 — extended summary, batch XIRR payload, portfolio value trend (total_assets)."""
+    with Session(engine) as s:
+        s.add(
+            Holding(
+                name="B3 Equity A",
+                symbol="B3A",
+                quantity=10.0,
+                average_cost_per_unit=100.0,
+                asset_class=AssetClass.EQUITY.value,
+                account_platform="Test",
+                valuation_method=ValuationMethod.MANUAL.value,
+                liquidity_class=LiquidityClass.T_PLUS_1.value,
+                current_value=1200.0,
+                user_id="sashank",
+            )
+        )
+        s.add(
+            Holding(
+                name="B3 Equity B",
+                symbol="B3B",
+                quantity=1.0,
+                average_cost_per_unit=100.0,
+                asset_class=AssetClass.EQUITY.value,
+                account_platform="Test",
+                valuation_method=ValuationMethod.MANUAL.value,
+                liquidity_class=LiquidityClass.T_PLUS_1.value,
+                current_value=80.0,
+                user_id="sashank",
+            )
+        )
+        s.commit()
+
+    summ = client.get("/api/holdings/summary?user_id=sashank")
+    assert summ.status_code == 200
+    sj = summ.json()
+    assert sj["total_portfolio_value"] == pytest.approx(1280.0)
+    assert sj["total_cost_basis"] == pytest.approx(1100.0)
+    assert sj["total_overall_gain"] == pytest.approx(180.0)
+    assert sj["total_overall_gain_pct"] == pytest.approx(100.0 * 180.0 / 1100.0, rel=1e-3)
+    ac = sj["asset_class_breakdown"][AssetClass.EQUITY.value]
+    assert ac["investment"] == pytest.approx(1100.0)
+    assert ac["current_value"] == pytest.approx(1280.0)
+    assert ac["overall_gain"] == pytest.approx(180.0)
+
+    br = client.get("/api/holdings/batch-returns?user_id=sashank")
+    assert br.status_code == 200
+    bj = br.json()["returns"]
+    assert len(bj) == 2
+    for _hid, payload in bj.items():
+        assert "method" in payload
+
+    tr = client.get("/api/holdings/portfolio-value-trend?user_id=sashank&range=12M")
+    assert tr.status_code == 200
+    tj = tr.json()
+    assert tj["granularity"] == "monthly"
+    assert tj["range"] == "12M"
+    assert len(tj["points"]) >= 1
+    assert "total_portfolio_value" in tj["points"][0]
+    # First month has no prior point → no % change.
+    assert tj["points"][0]["pct_change_vs_prior_month"] is None
 
 
 def test_create_holding_validation_rejects_bad_rate(client: TestClient):

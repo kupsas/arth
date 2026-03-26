@@ -744,11 +744,21 @@ export interface Holding {
   coupon_rate: number | null;
   coupon_frequency: string | null;
   fund_type: string | null;
+  /** Enriched labels (optional until POST /api/holdings/enrich). */
+  sector?: string | null;
+  market_cap_class?: string | null;
+  fund_category?: string | null;
+  fund_house?: string | null;
   user_id: string;
   is_active: boolean;
   notes: string | null;
   created_at: string;
   updated_at: string;
+  /** B3 — current_value − cost basis when cost is known from the row. */
+  overall_gain?: number | null;
+  overall_gain_pct?: number | null;
+  /** B3 — weight vs full user portfolio (all active holdings). */
+  weight_pct?: number | null;
 }
 
 /**
@@ -789,13 +799,43 @@ export interface HoldingsAllocation {
   by_account_platform: Record<string, number>;
 }
 
+/** Per asset class — investments table (B3). */
+export interface AssetClassPortfolioRow {
+  investment: number;
+  current_value: number;
+  overall_gain: number | null;
+  overall_gain_pct: number | null;
+}
+
 /** GET /api/holdings/summary */
 export interface HoldingsSummary {
   net_worth: NetWorthSnapshot;
   allocation: HoldingsAllocation;
   /** e.g. largest_holding_pct, esop_pct — backend uses float | str | null. */
   concentration: Record<string, number | string | null>;
+  /** B3 — sum of holding economic values (Layer 1). */
+  total_portfolio_value: number;
+  total_cost_basis: number;
+  total_overall_gain: number | null;
+  total_overall_gain_pct: number | null;
+  asset_class_breakdown: Record<string, AssetClassPortfolioRow>;
 }
+
+/** GET /api/holdings/portfolio-value-trend */
+export interface PortfolioValueTrendPoint {
+  date: string;
+  total_portfolio_value: number;
+  pct_change_vs_prior_month: number | null;
+}
+
+export interface PortfolioValueTrend {
+  range: string;
+  granularity: string;
+  points: PortfolioValueTrendPoint[];
+}
+
+/** GET /api/holdings/batch-returns */
+export type BatchHoldingReturnsMap = Record<string, Record<string, unknown>>;
 
 /** One point from GET /api/holdings/history. */
 export interface NetWorthHistoryPoint {

@@ -19,11 +19,20 @@ from api.database import get_session
 from api.models import Holding
 from api.routes.ingest_utils import parser_input_path, saved_upload_directory
 from api.services.holding_enrichment import enrich_holdings
+from api.services.holdings_metrics import (
+    asset_class_breakdown_and_totals,
+    compute_batch_returns,
+    earliest_user_holding_date,
+    overall_gain_for_holding,
+    portfolio_trend_start_date,
+    total_portfolio_value,
+)
 from api.services.net_worth import (
     compute_asset_allocation,
     compute_concentration,
     compute_net_worth,
     compute_net_worth_history,
+    holding_value,
 )
 from api.services.returns_calculator import compute_returns
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY
@@ -66,11 +75,20 @@ class HoldingOut(BaseModel):
     coupon_rate: float | None
     coupon_frequency: str | None
     fund_type: str | None
+    # Enriched classification (NSE / AMFI); optional until POST …/enrich.
+    sector: str | None = None
+    market_cap_class: str | None = None
+    fund_category: str | None = None
+    fund_house: str | None = None
     user_id: str
     is_active: bool
     notes: str | None
     created_at: datetime.datetime
     updated_at: datetime.datetime
+    # Computed for the holdings page (B3); filled by list/detail/create/patch.
+    overall_gain: float | None = None
+    overall_gain_pct: float | None = None
+    weight_pct: float | None = None
 
 
 class HoldingDetailOut(BaseModel):
@@ -120,11 +138,37 @@ class HoldingsSummaryOut(BaseModel):
     net_worth: dict[str, Any]
     allocation: dict[str, dict[str, float]]
     concentration: dict[str, float | str | None]
+    # Portfolio-only metrics (Layer 1 holdings); not net of liabilities.
+    total_portfolio_value: float
+    total_cost_basis: float
+    total_overall_gain: float | None
+    total_overall_gain_pct: float | None
+    asset_class_breakdown: dict[str, dict[str, float | None]]
 
 
 class NetWorthHistoryOut(BaseModel):
     points: list[dict[str, Any]]
     granularity: str
+
+
+class PortfolioValueTrendPoint(BaseModel):
+    date: str
+    total_portfolio_value: float
+    pct_change_vs_prior_month: float | None
+
+
+class PortfolioValueTrendOut(BaseModel):
+    """Total assets over time (holdings only), monthly anchors — for area chart."""
+
+    range: str
+    granularity: str = "monthly"
+    points: list[PortfolioValueTrendPoint]
+
+
+class BatchReturnsOut(BaseModel):
+    """Holding id (string key) → same shape as ``compute_returns`` per holding."""
+
+    returns: dict[str, dict[str, Any]]
 
 
 class HoldingsEnrichOut(BaseModel):
@@ -165,6 +209,15 @@ def _parse_opt_date(s: str | None) -> datetime.date | None:
         raise HTTPException(status_code=400, detail=f"Invalid date (use YYYY-MM-DD): {s!r}")
 
 
+def _holding_out_with_metrics(session: Session, h: Holding, portfolio_total_value: float) -> HoldingOut:
+    """ORM row → API model with overall gain and weight vs full portfolio."""
+    base = HoldingOut.model_validate(h)
+    og, ogp = overall_gain_for_holding(session, h)
+    cv = holding_value(session, h, None)
+    wp = round(100.0 * cv / portfolio_total_value, 2) if portfolio_total_value > 0 else None
+    return base.model_copy(update={"overall_gain": og, "overall_gain_pct": ogp, "weight_pct": wp})
+
+
 @router.get("", response_model=list[HoldingOut])
 def list_holdings(
     *,
@@ -185,7 +238,10 @@ def list_holdings(
     if is_active is not None:
         q = q.where(Holding.is_active == is_active)
     q = q.order_by(Holding.name)
-    return list(session.exec(q).all())
+    uid = user_id.strip() or "sashank"
+    total_v = total_portfolio_value(session, uid)
+    rows = list(session.exec(q).all())
+    return [_holding_out_with_metrics(session, h, total_v) for h in rows]
 
 
 @router.get("/summary", response_model=HoldingsSummaryOut)
@@ -196,10 +252,17 @@ def holdings_summary(
     as_of: str | None = Query(default=None, description="YYYY-MM-DD; optional historical snapshot"),
 ):
     as_of_d = _parse_opt_date(as_of)
+    uid = user_id.strip() or "sashank"
+    tpv, tcb, tog, togp, breakdown = asset_class_breakdown_and_totals(session, uid)
     return HoldingsSummaryOut(
-        net_worth=compute_net_worth(session, as_of_date=as_of_d, user_id=user_id),
-        allocation=compute_asset_allocation(session, as_of_date=as_of_d, user_id=user_id),
-        concentration=compute_concentration(session, as_of_date=as_of_d, user_id=user_id),
+        net_worth=compute_net_worth(session, as_of_date=as_of_d, user_id=uid),
+        allocation=compute_asset_allocation(session, as_of_date=as_of_d, user_id=uid),
+        concentration=compute_concentration(session, as_of_date=as_of_d, user_id=uid),
+        total_portfolio_value=tpv,
+        total_cost_basis=tcb,
+        total_overall_gain=tog,
+        total_overall_gain_pct=togp,
+        asset_class_breakdown=breakdown,
     )
 
 
@@ -220,6 +283,60 @@ def holdings_history(
         raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
     pts = compute_net_worth_history(session, sd, ed, granularity=granularity, user_id=user_id)  # type: ignore[arg-type]
     return NetWorthHistoryOut(points=pts, granularity=granularity)
+
+
+@router.get("/batch-returns", response_model=BatchReturnsOut)
+def holdings_batch_returns(
+    *,
+    session: Session = Depends(get_session),
+    user_id: str = Query(default="sashank"),
+):
+    """Returns metrics for every active holding in one round-trip (cached until holdings change)."""
+    uid = user_id.strip() or "sashank"
+    raw = compute_batch_returns(session, uid)
+    return BatchReturnsOut(returns={str(k): v for k, v in raw.items()})
+
+
+@router.get("/portfolio-value-trend", response_model=PortfolioValueTrendOut)
+def portfolio_value_trend(
+    *,
+    session: Session = Depends(get_session),
+    user_id: str = Query(default="sashank"),
+    range_: str = Query(
+        default="12M",
+        alias="range",
+        description="Window: 3M, 6M, 12M (default), or all",
+        pattern="^(3M|6M|12M|all)$",
+    ),
+):
+    """Monthly total portfolio value (assets only) for the holdings area chart."""
+    uid = user_id.strip() or "sashank"
+    end = datetime.datetime.now(datetime.UTC).date()
+    start = portfolio_trend_start_date(end, range_)
+    if range_ == "all":
+        first = earliest_user_holding_date(session, uid)
+        if first is not None:
+            start = max(start, first)
+    start = max(start, datetime.date(2000, 1, 1))
+    if start > end:
+        start = end - datetime.timedelta(days=30)
+    raw = compute_net_worth_history(session, start, end, granularity="monthly", user_id=uid)
+    points: list[PortfolioValueTrendPoint] = []
+    prev_val: float | None = None
+    for p in raw:
+        v = float(p["total_assets"])
+        pct: float | None = None
+        if prev_val is not None and prev_val > 0:
+            pct = round(100.0 * (v - prev_val) / prev_val, 2)
+        points.append(
+            PortfolioValueTrendPoint(
+                date=str(p["date"]),
+                total_portfolio_value=round(v, 2),
+                pct_change_vs_prior_month=pct,
+            )
+        )
+        prev_val = v
+    return PortfolioValueTrendOut(range=range_, granularity="monthly", points=points)
 
 
 @router.post("/enrich", response_model=HoldingsEnrichOut)
@@ -244,11 +361,13 @@ def get_holding(
     session: Session = Depends(get_session),
     user_id: str = Query(default="sashank"),
 ):
+    uid = user_id.strip() or "sashank"
     h = session.get(Holding, holding_id)
-    if not h or h.user_id != user_id:
+    if not h or h.user_id != uid:
         raise HTTPException(status_code=404, detail="Holding not found")
+    total_v = total_portfolio_value(session, uid)
     ret = compute_returns(holding_id, session)
-    return HoldingDetailOut(holding=HoldingOut.model_validate(h), returns=ret)
+    return HoldingDetailOut(holding=_holding_out_with_metrics(session, h, total_v), returns=ret)
 
 
 @router.post("", response_model=HoldingOut, status_code=201)
@@ -289,7 +408,9 @@ def create_holding(body: HoldingCreate, *, session: Session = Depends(get_sessio
     session.add(h)
     session.commit()
     session.refresh(h)
-    return h
+    uid = body.user_id.strip() or "sashank"
+    total_v = total_portfolio_value(session, uid)
+    return _holding_out_with_metrics(session, h, total_v)
 
 
 @router.patch("/{holding_id}", response_model=HoldingOut)
@@ -321,7 +442,9 @@ def patch_holding(
     session.add(h)
     session.commit()
     session.refresh(h)
-    return h
+    uid = user_id.strip() or "sashank"
+    total_v = total_portfolio_value(session, uid)
+    return _holding_out_with_metrics(session, h, total_v)
 
 
 @router.post("/import", response_model=ImportResultOut)

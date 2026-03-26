@@ -59,6 +59,15 @@ def _latest_price_on_or_before(
     return float(row) if row is not None else None
 
 
+def holding_value(
+    session: Session,
+    h: Holding,
+    as_of_date: datetime.date | None = None,
+) -> float:
+    """Public: economic value of one holding (same rules as net worth snapshots)."""
+    return _holding_value(session, h, as_of_date)
+
+
 def _holding_value(
     session: Session,
     h: Holding,
