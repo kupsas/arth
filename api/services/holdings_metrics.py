@@ -15,6 +15,7 @@ from typing import Any
 from sqlmodel import Session, col, select
 
 from api.models import Holding
+from api.services.historical_portfolio import earliest_user_history_date
 from api.services.net_worth import holding_value
 from api.services.returns_calculator import compute_returns
 
@@ -194,17 +195,5 @@ def portfolio_trend_start_date(end: datetime.date, range_key: str) -> datetime.d
 
 
 def earliest_user_holding_date(session: Session, user_id: str) -> datetime.date | None:
-    """Date of the oldest holding row for this user (for 'all' range start)."""
-    q = (
-        select(Holding)
-        .where(Holding.user_id == user_id)
-        .order_by(col(Holding.created_at).asc())
-        .limit(1)
-    )
-    h = session.exec(q).first()
-    if h is None:
-        return None
-    ca = h.created_at
-    if isinstance(ca, datetime.datetime):
-        return ca.date()
-    return ca if isinstance(ca, datetime.date) else None
+    """Best available start date for the user's historical portfolio timeline."""
+    return earliest_user_history_date(session, user_id)

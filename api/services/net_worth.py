@@ -5,10 +5,14 @@ Net worth and portfolio structure helpers (Phase A.1.3).
 principal (what you still owe).  Cash in bank accounts is *not* in the Holding
 table yet unless you model it — so this is "Layer 1" investable / tracked assets.
 
-When you pass ``as_of_date``, we try to rebuild market-valued rows from the
-``prices`` table (last close on or before that date). Fixed-return and manual
-rows still use the numbers stored on the ``Holding`` row — if you need true
-historical PPF balances, import or backfill that separately.
+When you pass ``as_of_date``, historical valuation is asset-class specific:
+
+- market-priced sleeves replay quantities from linked ``investment_transactions``
+  and mark them with the latest ``prices`` row on or before the anchor date
+- PPF uses linked ledger rows (contribution / interest / withdrawal)
+- NPS uses dated statement snapshots imported from CRA files
+- unsupported sleeves still fall back to the stored holding row, gated by the
+  holding's creation date so we do not show obvious pre-creation value
 """
 
 from __future__ import annotations
@@ -20,6 +24,15 @@ from typing import Literal
 from sqlmodel import Session, col, select
 
 from api.models import Holding, Liability, Price
+from api.services.historical_portfolio import (
+    historical_market_assets_value,
+    historical_market_holding_value,
+    historical_nps_holding_value,
+    historical_ppf_holding_value,
+    holding_created_on_or_before,
+    is_excluded_historical_symbol,
+    is_market_replay_holding,
+)
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.models import AssetClass, ValuationMethod
 
@@ -77,6 +90,21 @@ def _holding_value(
     if as_of is None:
         return float(h.current_value or 0.0)
 
+    if is_excluded_historical_symbol(h.symbol):
+        return 0.0
+
+    if not holding_created_on_or_before(h, as_of):
+        return 0.0
+
+    if h.asset_class == AssetClass.PPF.value:
+        return historical_ppf_holding_value(session, h, as_of=as_of)
+
+    if h.asset_class == AssetClass.NPS.value:
+        return historical_nps_holding_value(session, h, as_of=as_of)
+
+    if is_market_replay_holding(h):
+        return historical_market_holding_value(session, h, as_of=as_of)
+
     # Manual / fixed snapshots: we do not time-travel without extra history.
     if h.valuation_method in (
         ValuationMethod.MANUAL.value,
@@ -105,6 +133,30 @@ def _holding_value(
     return float(h.quantity) * px
 
 
+def _historical_total_assets(
+    session: Session,
+    *,
+    as_of_date: datetime.date,
+    user_id: str | None,
+) -> float:
+    """Historical gross assets for the trend chart and net-worth history.
+
+    Market-priced replayable sleeves are handled in one aggregate pass so sold
+    historical positions still appear before exit, even if their holding row is
+    inactive today.
+    """
+    uid = user_id.strip() if user_id and user_id.strip() else None
+    total = 0.0
+    if uid:
+        total += historical_market_assets_value(session, user_id=uid, as_of=as_of_date)
+
+    for h in _active_holdings(session, user_id):
+        if is_market_replay_holding(h):
+            continue
+        total += _holding_value(session, h, as_of_date)
+    return round(total, 2)
+
+
 def compute_net_worth(
     session: Session,
     *,
@@ -112,10 +164,12 @@ def compute_net_worth(
     user_id: str | None = None,
 ) -> dict[str, float | str | None]:
     """Total assets, liabilities, and net (assets − debt)."""
-    holdings = _active_holdings(session, user_id)
     liabilities = _active_liabilities(session, user_id)
-
-    assets = sum(_holding_value(session, h, as_of_date) for h in holdings)
+    if as_of_date is None:
+        holdings = _active_holdings(session, user_id)
+        assets = sum(_holding_value(session, h, as_of_date) for h in holdings)
+    else:
+        assets = _historical_total_assets(session, as_of_date=as_of_date, user_id=user_id)
     debt = sum(float(x.principal_outstanding) for x in liabilities)
     net = assets - debt
 

@@ -383,7 +383,12 @@ def parse_nps_statement(
                 principal_amount=total_principal,
                 liquidity_class=LiquidityClass.ILLIQUID.value,
                 folio_number=pran,
-                metadata={"source_file": path.name, "pran": pran or ""},
+                metadata={
+                    "source_file": path.name,
+                    "pran": pran or "",
+                    "value_as_of_date": as_of_max.isoformat() if as_of_max is not None else "",
+                    "snapshot_value": round(total_cv, 2),
+                },
             )
         )
 

@@ -13,6 +13,7 @@ Workflow (from plan):
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import os
 import sys
@@ -21,7 +22,7 @@ from pathlib import Path
 from sqlmodel import Session, select
 
 from api.database import get_engine, init_db
-from api.models import Holding, InvestmentTransaction, Liability
+from api.models import Holding, HoldingValueSnapshot, InvestmentTransaction, Liability
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY, parse_bike_loan_txt, parse_term_insurance_pdf
 from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn, ParsedLiability
 from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME, PLATFORM as NPS_CRA_PLATFORM
@@ -155,6 +156,40 @@ def _apply_parsed_holding_to_row(h: Holding, ph: ParsedHolding, user_id: str) ->
         h.notes = f"{h.notes or ''}\n{extra}".strip()
 
 
+def _upsert_holding_value_snapshot(
+    session: Session,
+    *,
+    holding_id: int,
+    snapshot_date: str | None,
+    value: float | None,
+    source_file: str | None,
+) -> None:
+    if not snapshot_date or value is None:
+        return
+    try:
+        d = datetime.date.fromisoformat(snapshot_date[:10])
+    except ValueError:
+        return
+    row = session.exec(
+        select(HoldingValueSnapshot).where(
+            HoldingValueSnapshot.holding_id == holding_id,
+            HoldingValueSnapshot.snapshot_date == d,
+        )
+    ).first()
+    if row is None:
+        row = HoldingValueSnapshot(
+            holding_id=holding_id,
+            snapshot_date=d,
+            value=float(value),
+            source="statement",
+            notes=source_file,
+        )
+    else:
+        row.value = float(value)
+        row.notes = source_file
+    session.add(row)
+
+
 def investment_txn_exists(session: Session, t: ParsedInvestmentTxn) -> bool:
     """Dedup: date + platform + type + amounts + symbol (or notes when symbol is null)."""
     stmt = select(InvestmentTransaction).where(
@@ -205,6 +240,7 @@ def ingest_holdings(
             _apply_parsed_holding_to_row(existing, ph, user_id)
             session.add(existing)
             updated += 1
+            target_row = existing
         else:
             h = Holding(
                 symbol=ph.symbol,
@@ -237,9 +273,22 @@ def ingest_holdings(
                 h.notes = f"{ph.notes or ''}\nISIN {ph.isin}".strip()
             session.add(h)
             inserted += 1
+            target_row = h
         # So the next row in this batch can ``SELECT`` what we just attached (NPS: same scheme × FY files).
         if not dry_run:
             session.flush()
+            if target_row.id is not None:
+                _upsert_holding_value_snapshot(
+                    session,
+                    holding_id=target_row.id,
+                    snapshot_date=str(ph.metadata.get("value_as_of_date") or "").strip() or None,
+                    value=(
+                        float(ph.metadata["snapshot_value"])
+                        if ph.metadata.get("snapshot_value") is not None
+                        else None
+                    ),
+                    source_file=str(ph.metadata.get("source_file") or "").strip() or None,
+                )
     if not dry_run:
         session.commit()
     return {"inserted": inserted, "updated": updated, "errors": errors}

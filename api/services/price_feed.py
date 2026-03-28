@@ -88,11 +88,34 @@ def normalize_equity_symbol(symbol: str) -> str:
 # Keep in sync with ``ICICI_SHORT_TO_NSE`` in ``pipeline.holding_parsers.icici_direct_equity``.
 _ICICI_BROKER_TO_NSE: dict[str, str] = {
     "APOTYR": "APOLLOTYRE",
+    "BAFINS": "BAJAJFINSV",
+    "BANMAH": "MAHABANK",
+    "BHAWIR": "BHARTIARTL",
+    "COCSHI": "COCHINSHIP",
+    "ENGIND": "ENGINERSIN",
+    "HDFAMC": "HDFCAMC",
+    "ICINIF": "NIFTYIETF",
     "INDOIL": "IOC",
+    "INTBUI": "INTERARCH",
+    "INTDES": "INTELLECT",
     "KANNER": "KANSAINER",
     "LARTOU": "LT",
+    "MAHGAS": "MGL",
+    "NAGCON": "NCC",
+    "NRBBEA": "NRBBEARING",
+    "PHOMIL": "PHOENIXLTD",
+    "PRAIN": "PRAJIND",
+    "PVRLIM": "PVRINOX",
     "RELIND": "RELIANCE",
+    "SANEN": "SANSERA",
+    "SHRTRA": "SHRIRAMFIN",
+    "SKFIND": "SKFINDIA",
+    # Tata Motors transactions in this DB are from Jun/Sep 2025 and fetch correctly
+    # under the legacy bhav symbol ``TATAMOTORS`` for those dates.
+    "TATMOT": "TATAMOTORS",
     "TATPOW": "TATAPOWER",
+    "VEDLIM": "VEDL",
+    "WHIIND": "WHIRLPOOL",
 }
 
 
@@ -331,10 +354,26 @@ def fetch_equity_prices_nse(
 
 def upsert_prices(session: Session, rows: Iterable[Price]) -> int:
     """Insert or update ``prices`` rows (unique on symbol+date). Returns count touched."""
+    rows_list = list(rows)
+    if not rows_list:
+        return 0
+
+    want_keys = {(p.symbol, p.date) for p in rows_list}
+    want_symbols = sorted({p.symbol for p in rows_list})
+    existing_rows = list(
+        session.exec(
+            select(Price).where(col(Price.symbol).in_(want_symbols))
+        ).all()
+    )
+    existing_by_key = {
+        (row.symbol, row.date): row
+        for row in existing_rows
+        if (row.symbol, row.date) in want_keys
+    }
+
     n = 0
-    for p in rows:
-        q = select(Price).where(Price.symbol == p.symbol, Price.date == p.date)
-        existing = session.exec(q).first()
+    for p in rows_list:
+        existing = existing_by_key.get((p.symbol, p.date))
         if existing:
             existing.close_price = p.close_price
             existing.source = p.source

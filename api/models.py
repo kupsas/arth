@@ -544,6 +544,28 @@ class InvestmentTransaction(SQLModel, table=True):
 
 
 # ───────────────────────────────────────────────────────────────────────────
+# HoldingValueSnapshot — dated statement / balance snapshots (historical Layer 1)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class HoldingValueSnapshot(SQLModel, table=True):
+    __tablename__ = "holding_value_snapshots"
+    __table_args__ = (
+        Index("ix_holding_value_snapshot_holding_date", "holding_id", "snapshot_date", unique=True),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    holding_id: int = Field(foreign_key="holdings.id", index=True)
+    snapshot_date: datetime.date = Field(index=True)
+    value: float
+    source: str = "statement"
+    notes: str | None = None
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
 # Liability — loans, EMIs, recurring premiums (Phase A.0)
 # ───────────────────────────────────────────────────────────────────────────
 

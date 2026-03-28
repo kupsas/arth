@@ -24,7 +24,7 @@ from pipeline.config import DB_PATH, REPO_ROOT
 _engine = create_engine(
     f"sqlite:///{DB_PATH}",
     echo=False,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 60},
 )
 
 
