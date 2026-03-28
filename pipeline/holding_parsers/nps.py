@@ -131,33 +131,75 @@ def _fallback_investment_summary_ab(lines: list[str]) -> tuple[float | None, flo
     return None, None
 
 
-def _statement_as_of_max(lines: list[str]) -> date | None:
+def _parse_month_first_statement_date(m: re.Match[str]) -> date | None:
+    """Parse ``Month D[,] YYYY`` groups from a month-first regex match."""
+    mon, d_s, y_s = m.group(1), int(m.group(2)), m.group(3)
+    for fmt in ("%B %d %Y", "%b %d %Y"):
+        try:
+            return datetime.strptime(f"{mon} {d_s} {y_s}", fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_dmy_after_phrase(m: re.Match[str]) -> date | None:
+    """Parse ``D-Mon-YYYY`` groups from a DMY regex match."""
+    d_s, mon, y_s = int(m.group(1)), m.group(2), m.group(3)
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+        try:
+            return datetime.strptime(f"{d_s}-{mon}-{y_s}", fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _statement_as_on_max(lines: list[str]) -> date | None:
+    """Latest CRA statement date from the header.
+
+    CRA CSVs use phrases like **\"as on March 23 2026\"** (sometimes glued to the
+    previous cell, e.g. ``...)as on March 23 2026``). A few exports say **\"as of\"**
+    instead — we accept both so the snapshot date is never dropped.
+
+    We scan a **joined blob** of the first ~220 lines so the phrase still matches
+    if line breaks fall between words (rare) or the row is one long CSV line.
+    """
     found: list[date] = []
-    pat_month_first = re.compile(
+    # Month-first: "as on March 23 2026" / "as of Mar 23, 2026"
+    pat_on_mf = re.compile(
         r"as\s+on\s+([A-Za-z]{3,})\s+(\d{1,2})[,]?\s+(\d{4})",
         re.I,
     )
-    pat_dmy = re.compile(
+    pat_of_mf = re.compile(
+        r"as\s+of\s+([A-Za-z]{3,})\s+(\d{1,2})[,]?\s+(\d{4})",
+        re.I,
+    )
+    pat_dmy_on = re.compile(
         r"as\s+on\s+(\d{1,2})[-/]([A-Za-z]{3,})[-/](\d{4})",
         re.I,
     )
-    for line in lines[:220]:
-        for m in pat_month_first.finditer(line):
-            mon, d_s, y_s = m.group(1), int(m.group(2)), m.group(3)
-            for fmt in ("%B %d %Y", "%b %d %Y"):
-                try:
-                    found.append(datetime.strptime(f"{mon} {d_s} {y_s}", fmt).date())
-                    break
-                except ValueError:
-                    continue
-        for m in pat_dmy.finditer(line):
-            d_s, mon, y_s = int(m.group(1)), m.group(2), m.group(3)
-            for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
-                try:
-                    found.append(datetime.strptime(f"{d_s}-{mon}-{y_s}", fmt).date())
-                    break
-                except ValueError:
-                    continue
+    pat_dmy_of = re.compile(
+        r"as\s+of\s+(\d{1,2})[-/]([A-Za-z]{3,})[-/](\d{4})",
+        re.I,
+    )
+
+    blob = "\n".join(lines[:220])
+    for m in pat_on_mf.finditer(blob):
+        d = _parse_month_first_statement_date(m)
+        if d is not None:
+            found.append(d)
+    for m in pat_of_mf.finditer(blob):
+        d = _parse_month_first_statement_date(m)
+        if d is not None:
+            found.append(d)
+    for m in pat_dmy_on.finditer(blob):
+        d = _parse_dmy_after_phrase(m)
+        if d is not None:
+            found.append(d)
+    for m in pat_dmy_of.finditer(blob):
+        d = _parse_dmy_after_phrase(m)
+        if d is not None:
+            found.append(d)
+
     return max(found) if found else None
 
 
@@ -342,7 +384,7 @@ def parse_nps_statement(
     head = "\n".join(lines[:40])
     pran = _clean_pran_from_text(head)
 
-    as_of_max = _statement_as_of_max(lines)
+    as_of_max = _statement_as_on_max(lines)
     skip_holdings = as_of_max is not None and as_of_max > ref_date
 
     summary_a, summary_b = _parse_nps_summary_totals(lines)

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
@@ -321,7 +321,11 @@ def portfolio_value_trend(
         pattern="^(3M|6M|12M|all)$",
     ),
 ):
-    """Monthly total portfolio value (assets only) for the holdings area chart."""
+    """Monthly total portfolio value (assets only) for the holdings area chart.
+
+    Each point is valued as of the **last calendar day** of that month; for the
+    current month, the anchor is **today** (so it matches the live portfolio total).
+    """
     uid = user_id.strip() or "sashank"
     end = datetime.datetime.now(datetime.UTC).date()
     start = portfolio_trend_start_date(end, range_)
@@ -336,7 +340,7 @@ def portfolio_value_trend(
     points: list[PortfolioValueTrendPoint] = []
     prev_val: float | None = None
     for p in raw:
-        v = float(p["total_assets"])
+        v = float(cast(float | int, p["total_assets"]))
         pct: float | None = None
         if prev_val is not None and prev_val > 0:
             pct = round(100.0 * (v - prev_val) / prev_val, 2)

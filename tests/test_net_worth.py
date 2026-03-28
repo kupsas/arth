@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from api.models import Holding, Liability, Price
+from api.models import Holding, InvestmentTransaction, Liability, Price
 from api.services import net_worth as nw
-from pipeline.models import AssetClass, LiquidityClass, ValuationMethod
+from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
 
 
 @pytest.fixture(name="engine")
@@ -134,6 +134,8 @@ def test_historical_mark_uses_price_table(session: Session) -> None:
             liquidity_class=LiquidityClass.T_PLUS_1.value,
             current_value=999.0,
             user_id="sashank",
+            # Historical replay rejects marks before the holding existed.
+            created_at=datetime.datetime(2024, 1, 1, tzinfo=datetime.UTC),
         )
     )
     session.add(
@@ -143,6 +145,21 @@ def test_historical_mark_uses_price_table(session: Session) -> None:
 
     h = session.exec(select(Holding)).first()
     assert h is not None
+    # Market-replay equity needs at least one BUY in the ledger; quantity × price as-of.
+    session.add(
+        InvestmentTransaction(
+            txn_date=datetime.date(2025, 1, 5),
+            symbol="TESTNSE",
+            txn_type=InvestmentTxnType.BUY.value,
+            quantity=10.0,
+            price_per_unit=100.0,
+            total_amount=1000.0,
+            account_platform="Z",
+            holding_id=h.id,
+        )
+    )
+    session.commit()
+
     v = nw._holding_value(session, h, datetime.date(2025, 1, 15))
     assert v == pytest.approx(1000.0)
 

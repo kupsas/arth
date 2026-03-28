@@ -113,6 +113,28 @@ def test_nps_contribution_section_employee_buy() -> None:
     assert holdings[0].principal_amount == pytest.approx(50228.60)
 
 
+def test_nps_as_of_phrase_also_sets_snapshot_metadata() -> None:
+    """Some CRA exports say 'as of' instead of 'as on' — same date pattern."""
+    from pipeline.holding_parsers.nps import _statement_as_on_max
+
+    lines = [
+        "Header",
+        "Value of your Holdings as of March 15 2025 (in Rs).",
+        "E,100000.00,500.00,200.00",
+    ]
+    assert _statement_as_on_max(lines) == date(2025, 3, 15)
+
+
+def test_nps_glued_as_on_row_sets_snapshot_metadata() -> None:
+    """CRA often glues ')as on Month D YYYY' to the previous field with no space."""
+    path = FIXTURES / "nps_glued_as_on.csv"
+    holdings, txns = parse_nps_statement(path, reference_date=date(2027, 1, 1))
+    assert len(holdings) == 1
+    assert not txns
+    assert holdings[0].metadata.get("value_as_of_date") == "2026-03-23"
+    assert holdings[0].current_value == pytest.approx(150_000.0)
+
+
 def test_nps_skips_holdings_when_statement_as_of_is_in_the_future() -> None:
     path = FIXTURES / "nps_future_asof.csv"
     holdings, txns = parse_nps_statement(path, reference_date=date(2026, 1, 1))

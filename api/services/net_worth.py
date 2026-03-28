@@ -17,6 +17,7 @@ When you pass ``as_of_date``, historical valuation is asset-class specific:
 
 from __future__ import annotations
 
+import calendar
 import datetime
 from collections import defaultdict
 from typing import Literal
@@ -242,6 +243,12 @@ def compute_concentration(
     }
 
 
+def _last_day_of_month(year: int, month: int) -> datetime.date:
+    """Calendar last day (handles leap years)."""
+    last = calendar.monthrange(year, month)[1]
+    return datetime.date(year, month, last)
+
+
 def _iter_period_starts(start: datetime.date, end: datetime.date, g: Granularity) -> list[datetime.date]:
     """Generate anchor dates for history (inclusive of range endpoints)."""
     out: list[datetime.date] = []
@@ -261,21 +268,21 @@ def _iter_period_starts(start: datetime.date, end: datetime.date, g: Granularity
         if out and out[-1] != end:
             out.append(end)
         return out
-    # monthly — 1st of each month overlapping the window, plus end
+    # monthly — last calendar day of each month in range; for the month containing
+    # `end`, use `end` (typically today) so the current month is "latest day so far".
     y, m = start.year, start.month
-    while True:
-        d = datetime.date(y, m, 1)
-        if d > end:
-            break
-        if d >= start:
-            out.append(d)
+    end_ym = (end.year, end.month)
+    while (y, m) <= end_ym:
+        if (y, m) == end_ym:
+            anchor = end
+        else:
+            anchor = _last_day_of_month(y, m)
+        if anchor >= start and anchor <= end:
+            out.append(anchor)
         if m == 12:
-            y += 1
-            m = 1
+            y, m = y + 1, 1
         else:
             m += 1
-    if end not in out:
-        out.append(end)
     out.sort()
     return out
 

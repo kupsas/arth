@@ -236,13 +236,13 @@ def test_compute_net_worth_history_replays_positions_and_balances(session: Sessi
         user_id="sashank",
     )
 
+    # Monthly anchors are month-end (or `end` for the last month); not month-start.
     assert [point["date"] for point in series] == [
-        "2024-04-01",
-        "2024-05-01",
-        "2024-06-01",
+        "2024-04-30",
+        "2024-05-31",
         "2024-06-30",
     ]
-    assert [point["total_assets"] for point in series] == [2400.0, 3070.0, 3590.0, 4250.0]
+    assert [point["total_assets"] for point in series] == [2900.0, 3070.0, 4250.0]
 
 
 def test_historical_price_universe_uses_old_txns_and_excludes_stoone(session: Session) -> None:
