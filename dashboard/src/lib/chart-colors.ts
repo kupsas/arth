@@ -18,6 +18,21 @@ export const CHART_WANT = "var(--chart-want)"
 /** Goal / reference line. */
 export const CHART_GOAL_LINE = "var(--chart-goal-line)"
 
+/**
+ * Pie slices and other ordinal series — hues spaced for contrast (see globals.css
+ * --chart-1 … --chart-8). Use `i % CHART_SERIES_COLORS.length` when mapping cells.
+ */
+export const CHART_SERIES_COLORS = [
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+  "var(--chart-6)",
+  "var(--chart-7)",
+  "var(--chart-8)",
+] as const
+
 /** Distinct hue per category mini-chart (light + .dark overrides in globals.css). */
 export const CATEGORY_SERIES_COLOR: Record<DashboardCategorySeries, string> = {
   swiggy_instamart: "var(--chart-cat-1)",

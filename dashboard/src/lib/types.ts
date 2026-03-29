@@ -719,6 +719,18 @@ export type InvestmentLedgerTxnType =
   | "SWITCH_OUT";
 
 /**
+ * India listed-equity LT/ST split at CMP — FIFO lots, >12 calendar months = long-term.
+ * Mirrors ``EquityHoldingPeriodSplitOut`` in api/routes/holdings.py.
+ */
+export interface EquityHoldingPeriodSplit {
+  long_term_value_inr: number;
+  short_term_value_inr: number;
+  unallocated_value_inr: number;
+  fifo_quantity_after_txns: number;
+  basis_note: string;
+}
+
+/**
  * One portfolio row — mirrors ``HoldingOut`` in api/routes/holdings.py.
  * PII (folio / account identifiers) is never included in JSON responses.
  */
@@ -759,6 +771,22 @@ export interface Holding {
   overall_gain_pct?: number | null;
   /** B3 — weight vs full user portfolio (all active holdings). */
   weight_pct?: number | null;
+  /** PPF — earliest BUY on linked ledger (drives statutory maturity). */
+  ppf_first_contribution_date?: string | null;
+  /** PPF — illustrative balance at maturity if no further deposits (see API note). */
+  ppf_projected_value_at_maturity?: number | null;
+  /** PPF — annual % used for that illustration (live Wikipedia sentence or fallback). */
+  ppf_projection_annual_rate_pct?: number | null;
+  /** PPF — where the rate came from (always verify vs GOI notification). */
+  ppf_projection_rate_note?: string | null;
+  /** NPS — illustrative balance at normal exit (60th birthday) when API env has ``DOB``. */
+  nps_projected_value_at_normal_exit?: number | null;
+  /** NPS — nominal annual % used for that illustration (``NPS_PROJECTION_ANNUAL_RATE_PCT`` or default). */
+  nps_projection_annual_rate_pct?: number | null;
+  /** NPS — short disclaimer string from the API. */
+  nps_projection_note?: string | null;
+  /** EQUITY + MARKET_PRICE — ledger FIFO split for LTCG-style buckets. */
+  equity_holding_period?: EquityHoldingPeriodSplit | null;
 }
 
 /**
@@ -826,6 +854,8 @@ export interface PortfolioValueTrendPoint {
   date: string;
   total_portfolio_value: number;
   pct_change_vs_prior_month: number | null;
+  /** INR per asset class key (e.g. EQUITY); sums to ~total_portfolio_value */
+  by_asset_class: Record<string, number>;
 }
 
 export interface PortfolioValueTrend {

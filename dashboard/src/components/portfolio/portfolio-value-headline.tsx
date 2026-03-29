@@ -10,7 +10,12 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePortfolioSummary, useRefreshPrices } from "@/hooks/use-portfolio";
-import { cn, formatCurrency, formatDate, formatPercent } from "@/lib/utils";
+import {
+  cn,
+  formatCalendarDate,
+  formatCurrency,
+  formatPercent,
+} from "@/lib/utils";
 
 export interface PortfolioValueHeadlineProps {
   userId: string;
@@ -79,7 +84,7 @@ export function PortfolioValueHeadline({ userId }: PortfolioValueHeadlineProps) 
           </span>
         )}
         <span className="text-muted-foreground">
-          as on {formatDate(asOf ?? null)}
+          as on {formatCalendarDate(asOf ?? null)}
         </span>
       </div>
     </div>

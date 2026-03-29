@@ -22,6 +22,7 @@ import datetime
 from collections import defaultdict
 from typing import Literal
 
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from api.models import Holding, Liability, Price
@@ -33,6 +34,7 @@ from api.services.historical_portfolio import (
     holding_created_on_or_before,
     is_excluded_historical_symbol,
     is_market_replay_holding,
+    market_position_quantities_as_of,
 )
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.models import AssetClass, ValuationMethod
@@ -94,9 +96,8 @@ def _holding_value(
     if is_excluded_historical_symbol(h.symbol):
         return 0.0
 
-    if not holding_created_on_or_before(h, as_of):
-        return 0.0
-
+    # PPF, NPS, and market-replay have transaction/snapshot-level dates that
+    # naturally handle "does this holding exist as of X?" — no created_at gate.
     if h.asset_class == AssetClass.PPF.value:
         return historical_ppf_holding_value(session, h, as_of=as_of)
 
@@ -106,7 +107,11 @@ def _holding_value(
     if is_market_replay_holding(h):
         return historical_market_holding_value(session, h, as_of=as_of)
 
-    # Manual / fixed snapshots: we do not time-travel without extra history.
+    # For remaining holdings (manual / fixed-return) we have no historical txn
+    # data, so gate on created_at to avoid projecting current_value into the past.
+    if not holding_created_on_or_before(h, as_of):
+        return 0.0
+
     if h.valuation_method in (
         ValuationMethod.MANUAL.value,
         ValuationMethod.FIXED_RETURN.value,
@@ -158,6 +163,58 @@ def _historical_total_assets(
     return round(total, 2)
 
 
+def historical_asset_class_values(
+    session: Session,
+    *,
+    as_of_date: datetime.date,
+    user_id: str | None,
+) -> dict[str, float]:
+    """Same valuation rules as ``_historical_total_assets``, split by ``asset_class``.
+
+    Market replay positions are bucketed by the asset class on the position key;
+    PPF / NPS / manual / etc. use each holding's ``asset_class``.
+    """
+    uid = user_id.strip() if user_id and user_id.strip() else None
+    by_ac: dict[str, float] = defaultdict(float)
+    if uid:
+        positions = market_position_quantities_as_of(session, user_id=uid, as_of=as_of_date)
+        for (asset_class, symbol), qty in positions.items():
+            px = _latest_price_on_or_before(session, symbol, as_of_date)
+            if px is None:
+                continue
+            by_ac[asset_class] += qty * px
+
+    for h in _active_holdings(session, user_id):
+        if is_market_replay_holding(h):
+            continue
+        v = _holding_value(session, h, as_of_date)
+        by_ac[h.asset_class] += v
+
+    return {k: round(v, 2) for k, v in by_ac.items() if v > 1e-9}
+
+
+def portfolio_live_as_of_date(
+    session: Session,
+    *,
+    user_id: str | None = None,
+) -> datetime.date | None:
+    """Latest ``last_valued_date`` among active market-priced holdings.
+
+    After POST /prices/refresh, marks are written with the NAV/bhav row date — so
+    this stays on e.g. 27 Mar until the next refresh moves it forward, even if the
+    user opens the app days later without refreshing.
+    """
+    clauses: list = [
+        Holding.is_active == True,  # noqa: E712
+        col(Holding.last_valued_date).isnot(None),
+        Holding.valuation_method == ValuationMethod.MARKET_PRICE.value,
+    ]
+    if user_id:
+        clauses.append(Holding.user_id == user_id)
+    q = select(func.max(Holding.last_valued_date)).where(*clauses)
+    return session.exec(q).first()
+
+
 def compute_net_worth(
     session: Session,
     *,
@@ -174,11 +231,17 @@ def compute_net_worth(
     debt = sum(float(x.principal_outstanding) for x in liabilities)
     net = assets - debt
 
+    if as_of_date is not None:
+        as_of_out = as_of_date.isoformat()
+    else:
+        live = portfolio_live_as_of_date(session, user_id=user_id)
+        as_of_out = live.isoformat() if live is not None else None
+
     return {
         "total_assets": round(assets, 2),
         "total_liabilities": round(debt, 2),
         "net_worth": round(net, 2),
-        "as_of": as_of_date.isoformat() if as_of_date else None,
+        "as_of": as_of_out,
     }
 
 
@@ -285,6 +348,15 @@ def _iter_period_starts(start: datetime.date, end: datetime.date, g: Granularity
             m += 1
     out.sort()
     return out
+
+
+def net_worth_history_anchor_dates(
+    start_date: datetime.date,
+    end_date: datetime.date,
+    granularity: Granularity = "monthly",
+) -> list[datetime.date]:
+    """Public wrapper for monthly/daily/weekly anchor dates used by history APIs."""
+    return _iter_period_starts(start_date, end_date, granularity)
 
 
 def compute_net_worth_history(

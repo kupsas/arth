@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime
 import io
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -93,6 +93,106 @@ def _seed_holding(session: Session) -> int:
     return h.id
 
 
+@patch(
+    "api.routes.holdings.get_ppf_reference_rate_for_projection",
+    return_value=(7.1, "stub — not calling Wikipedia in test"),
+)
+def test_list_ppf_holding_includes_ppf_projection_fields(_mock_rate: MagicMock, client: TestClient, engine):
+    with Session(engine) as s:
+        h = Holding(
+            name="Public Provident Fund (PPF)",
+            asset_class=AssetClass.PPF.value,
+            account_platform="ICICI PPF",
+            valuation_method=ValuationMethod.FIXED_RETURN.value,
+            liquidity_class=LiquidityClass.ILLIQUID.value,
+            current_value=701_830.0,
+            principal_amount=577_500.0,
+            user_id="sashank",
+        )
+        s.add(h)
+        s.commit()
+        s.refresh(h)
+        s.add(
+            InvestmentTransaction(
+                txn_date=datetime.date(2015, 4, 10),
+                txn_type=InvestmentTxnType.BUY.value,
+                quantity=1.0,
+                price_per_unit=50_000.0,
+                total_amount=50_000.0,
+                account_platform="ICICI PPF",
+                holding_id=h.id,
+            )
+        )
+        s.commit()
+
+    r = client.get("/api/holdings?user_id=sashank")
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["asset_class"] == AssetClass.PPF.value
+    assert row["ppf_first_contribution_date"] == "2015-04-10"
+    assert row["ppf_projection_annual_rate_pct"] == pytest.approx(7.1)
+    assert row["ppf_projected_value_at_maturity"] is not None
+    assert row["ppf_projected_value_at_maturity"] > row["current_value"]
+    assert row["maturity_date"] == "2031-03-31"
+
+
+def test_list_nps_holding_includes_exit_projection_when_dob_in_env(
+    client: TestClient, engine, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("DOB", "1990-06-15")
+    monkeypatch.setenv("NPS_PROJECTION_ANNUAL_RATE_PCT", "10")
+    with Session(engine) as s:
+        h = Holding(
+            name="National Pension System (NPS)",
+            asset_class=AssetClass.NPS.value,
+            account_platform="NPS (CRA)",
+            valuation_method=ValuationMethod.MANUAL.value,
+            liquidity_class=LiquidityClass.ILLIQUID.value,
+            current_value=100_000.0,
+            user_id="sashank",
+        )
+        s.add(h)
+        s.commit()
+
+    r = client.get("/api/holdings?user_id=sashank")
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["asset_class"] == AssetClass.NPS.value
+    assert row["maturity_date"] == "2050-06-15"
+    assert row["nps_projection_annual_rate_pct"] == pytest.approx(10.0)
+    assert row["nps_projected_value_at_normal_exit"] is not None
+    assert row["nps_projected_value_at_normal_exit"] > row["current_value"]
+    assert row["nps_projection_note"]
+
+
+def test_list_nps_holding_skips_projection_when_dob_missing(
+    client: TestClient, engine, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("DOB", raising=False)
+    with Session(engine) as s:
+        h = Holding(
+            name="National Pension System (NPS)",
+            asset_class=AssetClass.NPS.value,
+            account_platform="NPS (CRA)",
+            valuation_method=ValuationMethod.MANUAL.value,
+            liquidity_class=LiquidityClass.ILLIQUID.value,
+            current_value=50_000.0,
+            user_id="sashank",
+        )
+        s.add(h)
+        s.commit()
+
+    r = client.get("/api/holdings?user_id=sashank")
+    assert r.status_code == 200
+    row = r.json()[0]
+    assert row["nps_projected_value_at_normal_exit"] is None
+    assert row["nps_projection_annual_rate_pct"] is None
+
+
 def test_list_and_get_holding(client: TestClient, engine):
     with Session(engine) as s:
         hid = _seed_holding(s)
@@ -113,6 +213,51 @@ def test_list_and_get_holding(client: TestClient, engine):
     assert body["holding"]["id"] == hid
     assert "returns" in body
     assert body["holding"]["weight_pct"] == pytest.approx(100.0)
+
+
+def test_list_equity_market_price_includes_holding_period_split(
+    client: TestClient, engine
+):
+    """GET /holdings attaches FIFO LT/ST CMP split for MARKET_PRICE equities."""
+    with Session(engine) as s:
+        h = Holding(
+            name="Split Demo",
+            symbol="SPLIT1",
+            quantity=10.0,
+            asset_class=AssetClass.EQUITY.value,
+            account_platform="ICICI Direct",
+            valuation_method=ValuationMethod.MARKET_PRICE.value,
+            liquidity_class=LiquidityClass.T_PLUS_1.value,
+            current_value=5000.0,
+            current_price_per_unit=500.0,
+            user_id="sashank",
+        )
+        s.add(h)
+        s.commit()
+        s.refresh(h)
+        s.add(
+            InvestmentTransaction(
+                txn_date=datetime.date(2023, 1, 1),
+                symbol="SPLIT1",
+                txn_type=InvestmentTxnType.BUY.value,
+                quantity=10.0,
+                price_per_unit=400.0,
+                total_amount=4000.0,
+                account_platform="ICICI Direct",
+                holding_id=h.id,
+            )
+        )
+        s.commit()
+
+    r = client.get("/api/holdings?user_id=sashank")
+    assert r.status_code == 200
+    row = next(x for x in r.json() if x.get("symbol") == "SPLIT1")
+    p = row.get("equity_holding_period")
+    assert p is not None
+    assert p["basis_note"] == "fifo_12m_india_listed_equity_cmp"
+    assert p["long_term_value_inr"] == pytest.approx(5000.0)
+    assert p["short_term_value_inr"] == pytest.approx(0.0)
+    assert p["unallocated_value_inr"] == pytest.approx(0.0)
 
 
 def test_list_holdings_defaults_to_active_only(client: TestClient, engine):
@@ -215,6 +360,8 @@ def test_holdings_b3_summary_batch_returns_and_trend(client: TestClient, engine)
     assert tj["range"] == "12M"
     assert len(tj["points"]) >= 1
     assert "total_portfolio_value" in tj["points"][0]
+    assert "by_asset_class" in tj["points"][0]
+    assert isinstance(tj["points"][0]["by_asset_class"], dict)
     # First month has no prior point → no % change.
     assert tj["points"][0]["pct_change_vs_prior_month"] is None
 

@@ -59,6 +59,27 @@ def test_compute_net_worth_assets_minus_liabilities(session: Session) -> None:
     assert out["total_assets"] == pytest.approx(500_000.0)
     assert out["total_liabilities"] == pytest.approx(100_000.0)
     assert out["net_worth"] == pytest.approx(400_000.0)
+    # No last_valued_date on the holding → live snapshot has no price anchor yet
+    assert out["as_of"] is None
+
+
+def test_compute_net_worth_live_as_of_uses_latest_mark_valuation_date(session: Session) -> None:
+    d = datetime.date(2026, 3, 27)
+    session.add(
+        Holding(
+            name="EQ",
+            asset_class=AssetClass.EQUITY.value,
+            account_platform="X",
+            valuation_method=ValuationMethod.MARKET_PRICE.value,
+            liquidity_class=LiquidityClass.T_PLUS_1.value,
+            current_value=100_000.0,
+            user_id="sashank",
+            last_valued_date=d,
+        )
+    )
+    session.commit()
+    out = nw.compute_net_worth(session, user_id="sashank")
+    assert out["as_of"] == d.isoformat()
 
 
 def test_compute_asset_allocation_percentages(session: Session) -> None:

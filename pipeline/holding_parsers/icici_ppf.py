@@ -27,6 +27,7 @@ from pipeline.holding_parsers.base import (
     strip_bom,
 )
 from pipeline.models import AssetClass, CompoundingFrequency, InvestmentTxnType, LiquidityClass, ValuationMethod
+from pipeline.ppf_maturity import ppf_statutory_maturity_date
 
 # Government PPF rate — update when statement shows a new rate (parser does not scrape RBI).
 PPF_RATE_ANNUAL_DEFAULT = 7.1
@@ -146,6 +147,12 @@ def parse_icici_ppf_csv(
     net_principal = round(buy_sum - sell_sum, 2)
     principal = net_principal if net_principal > 0 else None
 
+    first_buy = next(
+        (t.txn_date for t in txns if t.txn_type == InvestmentTxnType.BUY.value),
+        None,
+    )
+    ppf_maturity = ppf_statutory_maturity_date(first_buy) if first_buy else None
+
     holding = ParsedHolding(
         symbol=None,
         name="Public Provident Fund (PPF)",
@@ -158,6 +165,7 @@ def parse_icici_ppf_csv(
         principal_amount=principal,
         interest_rate=PPF_RATE_ANNUAL_DEFAULT,
         compounding_frequency=CompoundingFrequency.ANNUALLY.value,
+        maturity_date=ppf_maturity,
         metadata={"source_file": path.name},
     )
     return [holding], txns

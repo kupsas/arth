@@ -71,13 +71,20 @@ export function prettyMarketCapClass(raw: string | null | undefined): string {
 /**
  * Batch-returns payloads use ``annualized_return`` as a **decimal** for XIRR
  * (e.g. 0.12 = 12%). Some fixed-return paths may already be in percent; we
- * normalise for display.
+ * normalise to **percentage points** (12, not 0.12) for display and coloring.
  */
+export function annualizedReturnPercentPoints(
+  annualized: unknown,
+): number | null {
+  if (annualized == null || typeof annualized !== "number") return null;
+  if (Number.isNaN(annualized)) return null;
+  return Math.abs(annualized) <= 1 ? annualized * 100 : annualized;
+}
+
 export function formatAnnualizedReturnForDisplay(
   annualized: unknown,
 ): string | null {
-  if (annualized == null || typeof annualized !== "number") return null;
-  if (Number.isNaN(annualized)) return null;
-  const pct = Math.abs(annualized) <= 1 ? annualized * 100 : annualized;
+  const pct = annualizedReturnPercentPoints(annualized);
+  if (pct == null) return null;
   return `${pct.toFixed(1).replace(/\.0$/, "")}%`;
 }

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Any, cast
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,12 +27,28 @@ from api.services.holdings_metrics import (
     portfolio_trend_start_date,
     total_portfolio_value,
 )
+from api.services.nps_exit_projection import (
+    NPS_PROJECTION_STATIC_NOTE,
+    nps_normal_exit_date,
+    nps_projected_balance_at_normal_exit,
+    nps_projection_annual_rate_percent,
+    parse_subscriber_dob_from_env,
+)
+from api.services.ppf_maturity import earliest_ppf_contribution_date, effective_ppf_maturity_date
+from api.services.ppf_projection import ppf_projected_balance_at_maturity
+from api.services.ppf_reference_rate import get_ppf_reference_rate_for_projection
 from api.services.net_worth import (
     compute_asset_allocation,
     compute_concentration,
     compute_net_worth,
     compute_net_worth_history,
+    historical_asset_class_values,
     holding_value,
+    net_worth_history_anchor_dates,
+)
+from api.services.equity_holding_period import (
+    EquityHoldingPeriodSplit,
+    batch_equity_holding_period_splits,
 )
 from api.services.returns_calculator import compute_returns
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY
@@ -49,6 +65,16 @@ _VALID_LIQ = {e.value for e in LiquidityClass}
 _VALID_MF = {e.value for e in MFTypeEnum}
 
 IMPORT_SOURCES = frozenset(HOLDING_PARSER_REGISTRY.keys())
+
+
+class EquityHoldingPeriodSplitOut(BaseModel):
+    """FIFO + >12 calendar months (India listed equity) at holding CMP; see ``equity_holding_period`` service."""
+
+    long_term_value_inr: float = 0.0
+    short_term_value_inr: float = 0.0
+    unallocated_value_inr: float = 0.0
+    fifo_quantity_after_txns: float = 0.0
+    basis_note: str = ""
 
 
 class HoldingOut(BaseModel):
@@ -89,6 +115,17 @@ class HoldingOut(BaseModel):
     overall_gain: float | None = None
     overall_gain_pct: float | None = None
     weight_pct: float | None = None
+    # PPF only — ledger + illustrative maturity (see ``_holding_out_with_metrics``).
+    ppf_first_contribution_date: datetime.date | None = None
+    ppf_projected_value_at_maturity: float | None = None
+    ppf_projection_annual_rate_pct: float | None = None
+    ppf_projection_rate_note: str | None = None
+    # NPS — ``DOB`` in API env → 60th birthday exit + illustrative growth (see ``nps_exit_projection``).
+    nps_projected_value_at_normal_exit: float | None = None
+    nps_projection_annual_rate_pct: float | None = None
+    nps_projection_note: str | None = None
+    # EQUITY (MARKET_PRICE) — ledger FIFO split; null for other sleeves.
+    equity_holding_period: EquityHoldingPeriodSplitOut | None = None
 
 
 class HoldingDetailOut(BaseModel):
@@ -155,6 +192,8 @@ class PortfolioValueTrendPoint(BaseModel):
     date: str
     total_portfolio_value: float
     pct_change_vs_prior_month: float | None
+    # INR per AssetClass string; same valuation rules as total_portfolio_value.
+    by_asset_class: dict[str, float] = Field(default_factory=dict)
 
 
 class PortfolioValueTrendOut(BaseModel):
@@ -209,13 +248,103 @@ def _parse_opt_date(s: str | None) -> datetime.date | None:
         raise HTTPException(status_code=400, detail=f"Invalid date (use YYYY-MM-DD): {s!r}")
 
 
-def _holding_out_with_metrics(session: Session, h: Holding, portfolio_total_value: float) -> HoldingOut:
+def _holding_out_with_metrics(
+    session: Session,
+    h: Holding,
+    portfolio_total_value: float,
+    *,
+    equity_period_by_holding_id: dict[int, EquityHoldingPeriodSplit] | None = None,
+) -> HoldingOut:
     """ORM row → API model with overall gain and weight vs full portfolio."""
     base = HoldingOut.model_validate(h)
+    mat = effective_ppf_maturity_date(
+        session,
+        holding_id=h.id,
+        stored_maturity=base.maturity_date,
+        asset_class=h.asset_class,
+    )
+    extra: dict[str, Any] = {}
+    if mat != base.maturity_date:
+        extra["maturity_date"] = mat
+
+    if h.asset_class == AssetClass.PPF.value:
+        first_buy = earliest_ppf_contribution_date(session, h.id)
+        rate_pct, rate_note = get_ppf_reference_rate_for_projection()
+        balance = float(holding_value(session, h, None) or 0.0)
+        today = datetime.datetime.now(datetime.UTC).date()
+        projected: float | None = None
+        if mat is not None and balance > 0:
+            projected = ppf_projected_balance_at_maturity(
+                balance_today=balance,
+                maturity_date=mat,
+                today=today,
+                annual_rate_percent=rate_pct,
+            )
+        extra.update(
+            {
+                "ppf_first_contribution_date": first_buy,
+                "ppf_projected_value_at_maturity": projected,
+                "ppf_projection_annual_rate_pct": rate_pct,
+                "ppf_projection_rate_note": rate_note,
+            }
+        )
+
+    if h.asset_class == AssetClass.NPS.value:
+        dob = parse_subscriber_dob_from_env()
+        today = datetime.datetime.now(datetime.UTC).date()
+        balance = float(holding_value(session, h, None) or 0.0)
+        if dob is not None:
+            exit_dt = nps_normal_exit_date(dob)
+            extra["maturity_date"] = exit_dt
+            rate_nps = nps_projection_annual_rate_percent()
+            projected_nps = nps_projected_balance_at_normal_exit(
+                balance_today=balance,
+                exit_date=exit_dt,
+                today=today,
+                annual_rate_percent=rate_nps,
+            )
+            extra.update(
+                {
+                    "nps_projected_value_at_normal_exit": projected_nps,
+                    "nps_projection_annual_rate_pct": rate_nps,
+                    "nps_projection_note": NPS_PROJECTION_STATIC_NOTE,
+                }
+            )
+
     og, ogp = overall_gain_for_holding(session, h)
     cv = holding_value(session, h, None)
     wp = round(100.0 * cv / portfolio_total_value, 2) if portfolio_total_value > 0 else None
-    return base.model_copy(update={"overall_gain": og, "overall_gain_pct": ogp, "weight_pct": wp})
+
+    eq_period: EquityHoldingPeriodSplitOut | None = None
+    if (
+        h.asset_class == AssetClass.EQUITY.value
+        and h.valuation_method == ValuationMethod.MARKET_PRICE.value
+        and h.id is not None
+    ):
+        if equity_period_by_holding_id is not None:
+            raw = equity_period_by_holding_id.get(h.id)
+        else:
+            today = datetime.datetime.now(datetime.UTC).date()
+            m = batch_equity_holding_period_splits(session, [h], as_of=today)
+            raw = m.get(h.id)
+        if raw is not None:
+            eq_period = EquityHoldingPeriodSplitOut(
+                long_term_value_inr=raw.long_term_value_inr,
+                short_term_value_inr=raw.short_term_value_inr,
+                unallocated_value_inr=raw.unallocated_value_inr,
+                fifo_quantity_after_txns=raw.fifo_quantity_after_txns,
+                basis_note=raw.basis_note,
+            )
+
+    return base.model_copy(
+        update={
+            **extra,
+            "overall_gain": og,
+            "overall_gain_pct": ogp,
+            "weight_pct": wp,
+            "equity_holding_period": eq_period,
+        }
+    )
 
 
 @router.get("", response_model=list[HoldingOut])
@@ -253,7 +382,14 @@ def list_holdings(
             total_v = total_portfolio_value(session, uid)
     else:
         total_v = total_portfolio_value(session, uid)
-    return [_holding_out_with_metrics(session, h, total_v) for h in rows]
+    today = datetime.datetime.now(datetime.UTC).date()
+    eq_splits = batch_equity_holding_period_splits(session, rows, as_of=today)
+    return [
+        _holding_out_with_metrics(
+            session, h, total_v, equity_period_by_holding_id=eq_splits
+        )
+        for h in rows
+    ]
 
 
 @router.get("/summary", response_model=HoldingsSummaryOut)
@@ -336,19 +472,21 @@ def portfolio_value_trend(
     start = max(start, datetime.date(2000, 1, 1))
     if start > end:
         start = end - datetime.timedelta(days=30)
-    raw = compute_net_worth_history(session, start, end, granularity="monthly", user_id=uid)
+    anchors = net_worth_history_anchor_dates(start, end, "monthly")
     points: list[PortfolioValueTrendPoint] = []
     prev_val: float | None = None
-    for p in raw:
-        v = float(cast(float | int, p["total_assets"]))
+    for d in anchors:
+        by_ac = historical_asset_class_values(session, as_of_date=d, user_id=uid)
+        v = round(sum(by_ac.values()), 2)
         pct: float | None = None
         if prev_val is not None and prev_val > 0:
             pct = round(100.0 * (v - prev_val) / prev_val, 2)
         points.append(
             PortfolioValueTrendPoint(
-                date=str(p["date"]),
-                total_portfolio_value=round(v, 2),
+                date=d.isoformat(),
+                total_portfolio_value=v,
                 pct_change_vs_prior_month=pct,
+                by_asset_class=by_ac,
             )
         )
         prev_val = v
@@ -383,7 +521,14 @@ def get_holding(
         raise HTTPException(status_code=404, detail="Holding not found")
     total_v = total_portfolio_value(session, uid)
     ret = compute_returns(holding_id, session)
-    return HoldingDetailOut(holding=_holding_out_with_metrics(session, h, total_v), returns=ret)
+    today = datetime.datetime.now(datetime.UTC).date()
+    eq_splits = batch_equity_holding_period_splits(session, [h], as_of=today)
+    return HoldingDetailOut(
+        holding=_holding_out_with_metrics(
+            session, h, total_v, equity_period_by_holding_id=eq_splits
+        ),
+        returns=ret,
+    )
 
 
 @router.post("", response_model=HoldingOut, status_code=201)
@@ -425,8 +570,11 @@ def create_holding(body: HoldingCreate, *, session: Session = Depends(get_sessio
     session.commit()
     session.refresh(h)
     uid = body.user_id.strip() or "sashank"
+    eq_splits = batch_equity_holding_period_splits(session, [h], as_of=today)
     total_v = total_portfolio_value(session, uid)
-    return _holding_out_with_metrics(session, h, total_v)
+    return _holding_out_with_metrics(
+        session, h, total_v, equity_period_by_holding_id=eq_splits
+    )
 
 
 @router.patch("/{holding_id}", response_model=HoldingOut)

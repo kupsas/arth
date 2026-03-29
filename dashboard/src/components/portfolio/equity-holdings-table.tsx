@@ -37,7 +37,18 @@ export interface EquityHoldingsTableProps {
 function groupLabel(h: HoldingRow, mode: EquityGroupMode): string {
   if (mode === "sector") return h.sector?.trim() || "Unclassified";
   if (mode === "market_cap") return prettyMarketCapClass(h.market_cap_class);
-  return "All positions";
+  return "All scripts";
+}
+
+/** CMP value split from investment_transactions (API); zeros if missing. */
+function equityPeriodPart(h: HoldingRow) {
+  const p = h.equity_holding_period;
+  return {
+    lt: p?.long_term_value_inr ?? 0,
+    st: p?.short_term_value_inr ?? 0,
+    u: p?.unallocated_value_inr ?? 0,
+    note: p?.basis_note ?? null,
+  };
 }
 
 function gainClass(v: number | null | undefined) {
@@ -97,6 +108,7 @@ export function EquityHoldingsTable({
   groupMode,
 }: EquityHoldingsTableProps) {
   const [expanded, setExpanded] = React.useState<Set<number>>(() => new Set());
+  const hpMode = groupMode === "holding_period";
 
   const groups = React.useMemo(
     () => buildEquityGroups(holdings, groupMode),
@@ -106,6 +118,9 @@ export function EquityHoldingsTable({
   const grand = React.useMemo(() => {
     let sumCost = 0;
     let sumValue = 0;
+    let sumLt = 0;
+    let sumSt = 0;
+    let sumUn = 0;
     const gainParts: number[] = [];
     for (const h of holdings) {
       const c = holdingCostBasis(h);
@@ -113,16 +128,25 @@ export function EquityHoldingsTable({
       if (c != null) sumCost += c;
       sumValue += v;
       if (h.overall_gain != null) gainParts.push(h.overall_gain);
+      if (hpMode) {
+        const q = equityPeriodPart(h);
+        sumLt += q.lt;
+        sumSt += q.st;
+        sumUn += q.u;
+      }
     }
     return {
       sumCost,
       sumValue,
+      sumLt,
+      sumSt,
+      sumUn,
       sumGain:
         gainParts.length === holdings.length
           ? gainParts.reduce((a, b) => a + b, 0)
           : null,
     };
-  }, [holdings]);
+  }, [holdings, hpMode]);
 
   const toggle = (id: number) => {
     setExpanded((prev) => {
@@ -138,14 +162,17 @@ export function EquityHoldingsTable({
       ? (100 * grand.sumGain) / grand.sumCost
       : null;
 
+  const detailColSpan = hpMode ? 11 : 8;
+
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium">Equity holdings</CardTitle>
-        {groupMode === "holding_period" ? (
+        {hpMode ? (
           <p className="text-xs text-muted-foreground">
-            Tax-relevant holding period is deferred — rows are grouped together
-            until buy-history buckets ship.
+            Each row is one script. Long-term / short-term columns split that row&apos;s
+            CMP value using buy dates from linked investment transactions (FIFO).
+            Unallocated means missing ledger rows or quantity mismatch vs the holding.
           </p>
         ) : null}
       </CardHeader>
@@ -160,6 +187,13 @@ export function EquityHoldingsTable({
               <TableHead className="text-right">CMP</TableHead>
               <TableHead className="text-right">Value at cost</TableHead>
               <TableHead className="text-right">Value at CMP</TableHead>
+              {hpMode ? (
+                <>
+                  <TableHead className="text-right">CMP — LT</TableHead>
+                  <TableHead className="text-right">CMP — ST</TableHead>
+                  <TableHead className="text-right">Unallocated</TableHead>
+                </>
+              ) : null}
               <TableHead className="text-right">Unrealized P&amp;L</TableHead>
               <TableHead className="text-right">P/L %</TableHead>
             </TableRow>
@@ -178,6 +212,25 @@ export function EquityHoldingsTable({
                   <TableCell className="text-right tabular-nums font-medium">
                     {formatCurrency(g.sumValue)}
                   </TableCell>
+                  {hpMode ? (
+                    <>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {formatCurrency(
+                          g.rows.reduce((s, x) => s + equityPeriodPart(x).lt, 0),
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {formatCurrency(
+                          g.rows.reduce((s, x) => s + equityPeriodPart(x).st, 0),
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {formatCurrency(
+                          g.rows.reduce((s, x) => s + equityPeriodPart(x).u, 0),
+                        )}
+                      </TableCell>
+                    </>
+                  ) : null}
                   <TableCell
                     className={cn(
                       "text-right tabular-nums font-medium",
@@ -208,6 +261,7 @@ export function EquityHoldingsTable({
                   const cv = h.current_value;
                   const cmp = h.current_price_per_unit;
                   const open = expanded.has(h.id);
+                  const ep = equityPeriodPart(h);
                   return (
                     <React.Fragment key={h.id}>
                       <TableRow>
@@ -251,6 +305,19 @@ export function EquityHoldingsTable({
                         <TableCell className="text-right tabular-nums">
                           {cv != null ? formatCurrency(cv) : "—"}
                         </TableCell>
+                        {hpMode ? (
+                          <>
+                            <TableCell className="text-right tabular-nums">
+                              {ep.lt > 0 ? formatCurrency(ep.lt) : "—"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {ep.st > 0 ? formatCurrency(ep.st) : "—"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {ep.u > 0 ? formatCurrency(ep.u) : "—"}
+                            </TableCell>
+                          </>
+                        ) : null}
                         <TableCell
                           className={cn(
                             "text-right tabular-nums",
@@ -276,7 +343,7 @@ export function EquityHoldingsTable({
                         <TableRow className="bg-muted/30">
                           <TableCell />
                           <TableCell
-                            colSpan={8}
+                            colSpan={detailColSpan}
                             className="text-xs text-muted-foreground py-2"
                           >
                             <span className="mr-4">
@@ -286,10 +353,15 @@ export function EquityHoldingsTable({
                                 : "—"}{" "}
                               of portfolio
                             </span>
-                            <span>
+                            <span className="mr-4">
                               Market cap:{" "}
                               {prettyMarketCapClass(h.market_cap_class)}
                             </span>
+                            {hpMode && ep.note ? (
+                              <span className="block mt-1 text-[11px]">
+                                Holding-period basis: {ep.note}
+                              </span>
+                            ) : null}
                           </TableCell>
                         </TableRow>
                       ) : null}
@@ -307,6 +379,19 @@ export function EquityHoldingsTable({
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(grand.sumValue)}
               </TableCell>
+              {hpMode ? (
+                <>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(grand.sumLt)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(grand.sumSt)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(grand.sumUn)}
+                  </TableCell>
+                </>
+              ) : null}
               <TableCell
                 className={cn("text-right tabular-nums", gainClass(grand.sumGain))}
               >

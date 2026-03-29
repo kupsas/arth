@@ -10,17 +10,18 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { usePortfolioSummary } from "@/hooks/use-portfolio";
+import { CHART_SERIES_COLORS } from "@/lib/chart-colors";
 import { prettyAssetClassLabel } from "@/lib/holdings-display";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-
-const COLORS = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
-];
 
 export interface AssetAllocationDonutProps {
   userId: string;
@@ -58,43 +59,115 @@ export function AssetAllocationDonut({ userId }: AssetAllocationDonutProps) {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <Skeleton className="mx-auto aspect-square max-h-[240px] w-full max-w-[240px] rounded-full" />
+          <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+            <Skeleton className="size-[148px] shrink-0 rounded-full" />
+            <div className="w-full min-w-0 flex-1 space-y-2 sm:pt-1">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-4/5" />
+            </div>
+          </div>
         ) : pieData.length === 0 ? (
           <p className="text-sm text-muted-foreground py-8 text-center">
             No allocation data yet.
           </p>
         ) : (
-          <div className="h-[240px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={52}
-                  outerRadius={80}
-                  paddingAngle={1}
-                >
-                  {pieData.map((_, i) => (
-                    <Cell
-                      key={i}
-                      fill={COLORS[i % COLORS.length]}
-                      stroke="transparent"
-                    />
+          <div className="flex w-full flex-col items-center gap-4 sm:flex-row sm:items-start sm:gap-5">
+            {/* Left: compact donut so the card stays short; legend uses the rest. */}
+            <div className="h-[148px] w-[148px] shrink-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={40}
+                    outerRadius={62}
+                    paddingAngle={1}
+                  >
+                    {pieData.map((_, i) => (
+                      <Cell
+                        key={i}
+                        fill={
+                          CHART_SERIES_COLORS[
+                            i % CHART_SERIES_COLORS.length
+                          ]
+                        }
+                        stroke="transparent"
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value: number, _n, item) => {
+                      const row = item?.payload as { pct?: number };
+                      const p =
+                        row?.pct != null ? formatPercent(row.pct, 1) : "";
+                      return [`${formatCurrency(value)} (${p})`, "Value"];
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="min-w-0 w-full flex-1 overflow-auto sm:max-h-[200px]">
+              <Table
+                className="table-fixed text-xs"
+                aria-label="Allocation by asset class"
+              >
+                <colgroup>
+                  <col className="w-8" />
+                  <col />
+                  <col className="w-21" />
+                  <col className="w-13" />
+                </colgroup>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="h-8 w-8 px-1.5">
+                      <span className="sr-only">Color</span>
+                    </TableHead>
+                    <TableHead className="h-8 px-1.5 text-muted-foreground">
+                      Class
+                    </TableHead>
+                    <TableHead className="h-8 px-1.5 text-right text-muted-foreground">
+                      Value
+                    </TableHead>
+                    <TableHead className="h-8 px-1.5 text-right text-muted-foreground">
+                      Share
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pieData.map((d, i) => (
+                    <TableRow key={d.rawKey}>
+                      <TableCell className="w-8 px-1.5 py-1.5">
+                        <span
+                          className="mx-auto block h-2.5 w-2.5 rounded-full"
+                          style={{
+                            backgroundColor:
+                              CHART_SERIES_COLORS[
+                                i % CHART_SERIES_COLORS.length
+                              ],
+                          }}
+                          aria-hidden
+                        />
+                      </TableCell>
+                      <TableCell className="min-w-0 py-1.5 pl-0 pr-1.5">
+                        <div className="truncate font-medium" title={d.name}>
+                          {d.name}
+                        </div>
+                      </TableCell>
+                      <TableCell className="py-1.5 px-1.5 text-right tabular-nums text-muted-foreground">
+                        {formatCurrency(d.value)}
+                      </TableCell>
+                      <TableCell className="py-1.5 px-1.5 text-right tabular-nums text-muted-foreground">
+                        {formatPercent(d.pct, 1)}
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </Pie>
-                <Tooltip
-                  formatter={(value: number, _n, item) => {
-                    const row = item?.payload as { pct?: number };
-                    const p =
-                      row?.pct != null ? formatPercent(row.pct, 1) : "";
-                    return [`${formatCurrency(value)} (${p})`, "Value"];
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+                </TableBody>
+              </Table>
+            </div>
           </div>
         )}
       </CardContent>

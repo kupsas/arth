@@ -85,6 +85,8 @@ def test_icici_ppf_deposit_and_interest() -> None:
     holdings, txns = parse_icici_ppf_csv(path)
     assert len(holdings) == 1
     assert holdings[0].asset_class == AssetClass.PPF.value
+    # First BUY 05-Apr-2020 → FY end 31-Mar-2021 → statutory maturity +15y
+    assert holdings[0].maturity_date == date(2036, 3, 31)
     assert holdings[0].principal_amount == pytest.approx(50000.0)
     types = {t.txn_type for t in txns}
     assert InvestmentTxnType.BUY.value in types

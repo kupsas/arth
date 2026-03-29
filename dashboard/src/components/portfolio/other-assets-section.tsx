@@ -24,7 +24,13 @@ import {
   prettyAssetClassLabel,
 } from "@/lib/holdings-display";
 import type { Holding, PortfolioAssetClass } from "@/lib/types";
-import { cn, formatCurrency, formatDate, formatPercent } from "@/lib/utils";
+import {
+  cn,
+  formatCurrency,
+  formatDate,
+  formatPercent,
+  formatPpfMaturityRemaining,
+} from "@/lib/utils";
 
 export interface OtherAssetsSectionProps {
   userId: string;
@@ -52,14 +58,119 @@ const OTHER_CLASSES: PortfolioAssetClass[] = [
   "OTHER",
 ];
 
+/**
+ * PPF-only explainer: first ledger BUY used for maturity, plus “no more deposits” illustration.
+ * The rate is fetched server-side (Wikipedia API → “current interest rate” sentence) with fallback.
+ */
+/**
+ * NPS Tier I: maturity column shows normal exit (60th birthday) when the API reads ``DOB``
+ * from its environment; footnote shows an illustrative future balance (constant assumed return).
+ */
+function NpsHoldingFootnotes({ rows }: { rows: HoldingRow[] }) {
+  return (
+    <div className="border-t border-border/60 space-y-4 px-4 py-3">
+      {rows.map((h) => (
+        <div key={h.id} className="text-xs text-muted-foreground space-y-1.5 leading-relaxed">
+          <p>
+            <span className="text-foreground/80">Normal exit (Tier I) </span>
+            {h.maturity_date ? (
+              <>
+                is projected on <strong>{formatDate(h.maturity_date)}</strong> (60th birthday).
+              </>
+            ) : (
+              <>— set <code className="text-[11px]">DOB=YYYY-MM-DD</code> in the API{" "}
+                <code className="text-[11px]">.env</code> to show this date.</>
+            )}
+          </p>
+          <p>
+            <span className="text-foreground/80">
+              If the balance stays as today and grows at the assumed rate until that date, the
+              illustrative value is{" "}
+            </span>
+            {h.nps_projected_value_at_normal_exit != null ? (
+              <strong className="text-foreground tabular-nums">
+                {formatCurrency(h.nps_projected_value_at_normal_exit)}
+              </strong>
+            ) : (
+              "—"
+            )}
+            {h.nps_projection_annual_rate_pct != null ? (
+              <>
+                {" "}
+                (nominal <strong>{formatPercent(h.nps_projection_annual_rate_pct, 1)}</strong>{" "}
+                p.a., compounded like the PPF illustration).
+              </>
+            ) : null}
+          </p>
+          {h.nps_projection_note ? (
+            <p className="text-[11px] opacity-90">{h.nps_projection_note}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PpfHoldingFootnotes({ rows }: { rows: HoldingRow[] }) {
+  return (
+    <div className="border-t border-border/60 space-y-4 px-4 py-3">
+      {rows.map((h) => (
+        <div key={h.id} className="text-xs text-muted-foreground space-y-1.5 leading-relaxed">
+          <p>
+            <span className="text-foreground/80">First contribution made </span> :{" "}
+            {h.ppf_first_contribution_date
+              ? formatDate(h.ppf_first_contribution_date)
+              : "— (no linked contribution rows yet)"}
+            .
+          </p>
+          <p>
+            <span className="text-foreground/80">
+              If you add no more money, projected value at maturity{" "}
+            </span>
+            ({formatDate(h.maturity_date) ?? "—"}) will be:{" "}
+            {h.ppf_projected_value_at_maturity != null ? (
+              <strong className="text-foreground tabular-nums">
+                {formatCurrency(h.ppf_projected_value_at_maturity)}
+              </strong>
+            ) : (
+              "—"
+            )}
+            {h.ppf_projection_annual_rate_pct != null ? (
+              <>
+                {" "}
+                using <strong>{formatPercent(h.ppf_projection_annual_rate_pct, 1)}</strong> p.a.,
+                compounded once per year from today&apos;s balance (
+                {h.current_value != null ? formatCurrency(h.current_value) : "—"}).
+              </>
+            ) : null}
+          </p>
+          {/* <p className="text-[11px] opacity-90">
+            Real PPF credits interest annually with monthly balance rules, and the government can change the rate every quarter — treat
+            this as a rough guide, not a bank guarantee.
+          </p> */}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CompactHoldingTable({
   title,
   description,
   rows,
+  /** PPF: show "X yrs left" from API maturity; other classes: show the calendar date. */
+  maturityDisplay = "date",
+  /** PPF: show maturity / projection footnotes under the table. */
+  ppfFootnotes = false,
+  /** NPS: normal exit date + illustrative projection (API reads ``DOB``). */
+  npsFootnotes = false,
 }: {
   title: string;
   description?: string;
   rows: HoldingRow[];
+  maturityDisplay?: "date" | "ppf_remaining";
+  ppfFootnotes?: boolean;
+  npsFootnotes?: boolean;
 }) {
   if (rows.length === 0) return null;
 
@@ -120,13 +231,17 @@ function CompactHoldingTable({
                     ) : null}
                   </TableCell>
                   <TableCell className="text-right text-sm tabular-nums">
-                    {formatDate(h.maturity_date)}
+                    {maturityDisplay === "ppf_remaining"
+                      ? formatPpfMaturityRemaining(h.maturity_date)
+                      : formatDate(h.maturity_date)}
                   </TableCell>
                 </TableRow>
               );
             })}
           </TableBody>
         </Table>
+        {ppfFootnotes ? <PpfHoldingFootnotes rows={rows} /> : null}
+        {npsFootnotes ? <NpsHoldingFootnotes rows={rows} /> : null}
       </CardContent>
     </Card>
   );
@@ -202,6 +317,9 @@ export function OtherAssetsSection({ userId }: OtherAssetsSectionProps) {
             <CompactHoldingTable
               title={prettyAssetClassLabel(ac)}
               rows={byClass.get(ac) ?? []}
+              maturityDisplay={ac === "PPF" ? "ppf_remaining" : "date"}
+              ppfFootnotes={ac === "PPF"}
+              npsFootnotes={ac === "NPS"}
             />
           </div>
         ),

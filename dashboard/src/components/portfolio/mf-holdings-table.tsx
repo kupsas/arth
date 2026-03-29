@@ -17,26 +17,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { holdingCostBasis, formatAnnualizedReturnForDisplay } from "@/lib/holdings-display";
+import {
+  annualizedReturnPercentPoints,
+  formatAnnualizedReturnForDisplay,
+  holdingCostBasis,
+} from "@/lib/holdings-display";
 import type { Holding } from "@/lib/types";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
-
-export type MfGroupMode = "fund_category" | "fund_house";
 
 type HoldingRow = Holding & { id: number };
 
 export interface MfHoldingsTableProps {
   holdings: HoldingRow[];
-  groupMode: MfGroupMode;
   /** Map holding id string → compute_returns payload from GET /batch-returns. */
   returnsByHoldingId: Record<string, Record<string, unknown>>;
 }
 
-function groupLabel(h: HoldingRow, mode: MfGroupMode): string {
-  if (mode === "fund_category") {
-    return h.fund_category?.trim() || "Unclassified";
-  }
-  return h.fund_house?.trim() || "Unknown AMC";
+function groupLabel(h: HoldingRow): string {
+  return h.fund_category?.trim() || "Unclassified";
 }
 
 function gainClass(v: number | null | undefined) {
@@ -54,13 +52,10 @@ interface MfGroupBlock {
   sumGain: number | null;
 }
 
-export function buildMfGroups(
-  rows: HoldingRow[],
-  mode: MfGroupMode,
-): MfGroupBlock[] {
+export function buildMfGroups(rows: HoldingRow[]): MfGroupBlock[] {
   const map = new Map<string, HoldingRow[]>();
   for (const h of rows) {
-    const k = groupLabel(h, mode);
+    const k = groupLabel(h);
     const list = map.get(k) ?? [];
     list.push(h);
     map.set(k, list);
@@ -89,14 +84,13 @@ export function buildMfGroups(
 
 export function MfHoldingsTable({
   holdings,
-  groupMode,
   returnsByHoldingId,
 }: MfHoldingsTableProps) {
   const [expanded, setExpanded] = React.useState<Set<number>>(() => new Set());
 
   const groups = React.useMemo(
-    () => buildMfGroups(holdings, groupMode),
-    [holdings, groupMode],
+    () => buildMfGroups(holdings),
+    [holdings],
   );
 
   const grand = React.useMemo(() => {
@@ -147,14 +141,11 @@ export function MfHoldingsTable({
             <TableRow>
               <TableHead className="w-8" />
               <TableHead>Fund</TableHead>
-              <TableHead>Category</TableHead>
               <TableHead className="text-right">Invested</TableHead>
               <TableHead className="text-right">Current</TableHead>
               <TableHead className="text-right">XIRR</TableHead>
               <TableHead className="text-right">Overall gain</TableHead>
               <TableHead className="text-right">Gain %</TableHead>
-              <TableHead className="text-right">Units</TableHead>
-              <TableHead className="text-right">NAV</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -162,16 +153,18 @@ export function MfHoldingsTable({
               <React.Fragment key={g.key}>
                 <TableRow className="bg-muted/50 hover:bg-muted/50">
                   <TableCell />
-                  <TableCell colSpan={2} className="font-semibold">
-                    {g.key}
-                  </TableCell>
+                  <TableCell className="font-semibold">{g.key}</TableCell>
                   <TableCell className="text-right tabular-nums font-medium">
                     {formatCurrency(g.sumInvested)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums font-medium">
                     {formatCurrency(g.sumValue)}
                   </TableCell>
-                  <TableCell className="text-right">—</TableCell>
+                  <TableCell
+                    className={cn("text-right font-medium", gainClass(null))}
+                  >
+                    —
+                  </TableCell>
                   <TableCell
                     className={cn(
                       "text-right tabular-nums font-medium",
@@ -196,12 +189,14 @@ export function MfHoldingsTable({
                       ? `${g.sumGain > 0 ? "+" : ""}${formatPercent((100 * g.sumGain) / g.sumInvested, 1)}`
                       : "—"}
                   </TableCell>
-                  <TableCell colSpan={2} />
                 </TableRow>
                 {g.rows.map((h) => {
                   const invested = holdingCostBasis(h);
                   const cv = h.current_value;
                   const ret = returnsByHoldingId[String(h.id)] ?? {};
+                  const xirrPct = annualizedReturnPercentPoints(
+                    ret.annualized_return,
+                  );
                   const xirr = formatAnnualizedReturnForDisplay(
                     ret.annualized_return,
                   );
@@ -228,17 +223,21 @@ export function MfHoldingsTable({
                         <TableCell className="font-medium max-w-[200px] truncate">
                           {h.name}
                         </TableCell>
-                        <TableCell className="text-muted-foreground max-w-[140px] truncate text-sm">
-                          {h.fund_category?.trim() || "—"}
-                        </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {invested != null ? formatCurrency(invested) : "—"}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {cv != null ? formatCurrency(cv) : "—"}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums text-xs">
-                          {xirr ?? "—"}
+                        <TableCell
+                          className={cn(
+                            "text-right tabular-nums",
+                            gainClass(xirrPct),
+                          )}
+                        >
+                          {xirr != null
+                            ? `${xirrPct != null && xirrPct > 0 ? "+" : ""}${xirr}`
+                            : "—"}
                         </TableCell>
                         <TableCell
                           className={cn(
@@ -260,37 +259,17 @@ export function MfHoldingsTable({
                             ? `${h.overall_gain_pct > 0 ? "+" : ""}${formatPercent(h.overall_gain_pct, 1)}`
                             : "—"}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums text-sm">
-                          {h.quantity != null
-                            ? h.quantity.toLocaleString("en-IN", {
-                                maximumFractionDigits: 4,
-                              })
-                            : "—"}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-sm">
-                          {h.current_price_per_unit != null
-                            ? formatCurrency(h.current_price_per_unit, 4)
-                            : "—"}
-                        </TableCell>
                       </TableRow>
                       {open ? (
                         <TableRow className="bg-muted/30">
                           <TableCell />
                           <TableCell
-                            colSpan={9}
+                            colSpan={6}
                             className="text-xs text-muted-foreground py-2"
                           >
-                            {groupMode === "fund_category" ? (
-                              <span>
-                                AMC:{" "}
-                                {h.fund_house?.trim() || "—"}
-                              </span>
-                            ) : (
-                              <span>
-                                Category:{" "}
-                                {h.fund_category?.trim() || "—"}
-                              </span>
-                            )}
+                            <span>
+                              AMC: {h.fund_house?.trim() || "—"}
+                            </span>
                             <span className="ml-4">
                               Weight:{" "}
                               {h.weight_pct != null
@@ -307,14 +286,18 @@ export function MfHoldingsTable({
             ))}
             <TableRow className="border-t-2 font-semibold">
               <TableCell />
-              <TableCell colSpan={2}>Total</TableCell>
+              <TableCell>Total</TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(grand.sumInvested)}
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(grand.sumValue)}
               </TableCell>
-              <TableCell className="text-right">—</TableCell>
+              <TableCell
+                className={cn("text-right tabular-nums", gainClass(null))}
+              >
+                —
+              </TableCell>
               <TableCell
                 className={cn("text-right tabular-nums", gainClass(grand.sumGain))}
               >
@@ -332,7 +315,6 @@ export function MfHoldingsTable({
                   ? `${grandGainPct > 0 ? "+" : ""}${formatPercent(grandGainPct, 1)}`
                   : "—"}
               </TableCell>
-              <TableCell colSpan={2} />
             </TableRow>
           </TableBody>
         </Table>

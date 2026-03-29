@@ -271,8 +271,6 @@ def historical_ppf_holding_value(
 ) -> float:
     if h.id is None or h.asset_class != AssetClass.PPF.value:
         return 0.0
-    if not holding_created_on_or_before(h, as_of):
-        return 0.0
     rows = list(
         session.exec(
             select(InvestmentTransaction)
@@ -299,8 +297,6 @@ def historical_nps_holding_value(
     as_of: datetime.date,
 ) -> float:
     if h.id is None or h.asset_class != AssetClass.NPS.value:
-        return 0.0
-    if not holding_created_on_or_before(h, as_of):
         return 0.0
     row = session.exec(
         select(HoldingValueSnapshot)
