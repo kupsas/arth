@@ -40,7 +40,7 @@ from sqlmodel import Session
 from api.database import get_engine
 from pipeline.config import LLM_MODEL  # noqa: F401 — imported for context; not used directly here
 from scraper.config import GMAIL_TOKEN_PATH, POLL_INTERVAL_MINUTES
-from scraper.gmail_client import GmailClient
+from scraper.gmail_client import GmailClient, GmailReauthRequiredError
 from api.services.price_feed import (
     backfill_nse_portfolio_gaps,
     refresh_all_prices,
@@ -82,8 +82,37 @@ _price_last_success_at: datetime.datetime | None = None
 _price_last_error: str | None = None
 _is_price_job_running = False
 
+# Set True when Google returns invalid_grant / missing token in the scheduler
+# path — API can show a banner; cleared after a successful email scrape cycle.
+_gmail_reauth_required: bool = False
+
 
 # ─── Core job function ────────────────────────────────────────────────────────
+
+
+def note_gmail_reconnected() -> None:
+    """Clear the ``gmail_reauth_required`` API flag after a successful OAuth flow."""
+    global _gmail_reauth_required
+    with _status_lock:
+        _gmail_reauth_required = False
+
+
+def _remove_email_scraper_job() -> None:
+    """Stop interval polling until Gmail is re-authorized (avoids log spam).
+
+    After the user completes POST /api/scraper/oauth/init, ``resume_scheduler()``
+    calls ``_ensure_email_scrape_job()`` and polling resumes.
+    """
+    global _scheduler
+    if _scheduler is None or not _scheduler.running:
+        return
+    if _scheduler.get_job("email_scraper") is None:
+        return
+    _scheduler.remove_job("email_scraper")
+    logger.warning(
+        "Email scraper job removed until Gmail is reconnected "
+        "(POST /api/scraper/oauth/init)."
+    )
 
 def _run_scrape_job() -> ScrapeResult:
     """Execute one full scrape cycle.
@@ -96,6 +125,7 @@ def _run_scrape_job() -> ScrapeResult:
     clean unit of work with no session leakage between runs.
     """
     global _gmail_client, _last_run_at, _last_result, _last_error, _is_scraping
+    global _gmail_reauth_required
 
     # ── Concurrency guard ─────────────────────────────────────────────────────
     with _scraping_lock:
@@ -114,7 +144,9 @@ def _run_scrape_job() -> ScrapeResult:
         # subsequent calls (no browser re-prompt needed).
         if _gmail_client is None or not _gmail_client.is_authenticated:
             _gmail_client = GmailClient()
-            _gmail_client.authenticate()
+            # Background thread must not open a browser — revoked refresh tokens
+            # raise GmailReauthRequiredError instead (handled below).
+            _gmail_client.authenticate(allow_interactive_oauth=False)
 
         # ── Run the scrape ────────────────────────────────────────────────────
         with Session(get_engine()) as session:
@@ -125,6 +157,7 @@ def _run_scrape_job() -> ScrapeResult:
             _last_run_at = datetime.datetime.now(datetime.timezone.utc)
             _last_result = result
             _last_error = result.errors[0] if result.errors else None
+            _gmail_reauth_required = False
 
         logger.info(
             "Scrape cycle complete — processed: %d, skipped: %d, failed: %d, txns: %d",
@@ -134,6 +167,23 @@ def _run_scrape_job() -> ScrapeResult:
             result.txns_created,
         )
         return result
+
+    except GmailReauthRequiredError as exc:
+        # Refresh token dead — token file may already be deleted by GmailClient.
+        _gmail_client = None
+        error_msg = str(exc)
+        logger.critical(
+            "Gmail scraper stopped until you reconnect: %s",
+            error_msg,
+        )
+        _remove_email_scraper_job()
+        failed = ScrapeResult(errors=[error_msg])
+        with _status_lock:
+            _last_run_at = datetime.datetime.now(datetime.timezone.utc)
+            _last_error = error_msg
+            _last_result = failed
+            _gmail_reauth_required = True
+        return failed
 
     except Exception as exc:
         error_msg = str(exc)
@@ -380,6 +430,8 @@ def get_status() -> dict:
         last_emails_failed:    From the last ScrapeResult (or null).
         last_txns_created:     From the last ScrapeResult (or null).
         last_error:            First error message from the last run (or null).
+        gmail_reauth_required: True if Google rejected the refresh token — user
+                               must POST /api/scraper/oauth/init (browser on server).
     """
     with _status_lock:
         scheduler_running = _scheduler is not None and _scheduler.running
@@ -404,9 +456,12 @@ def get_status() -> dict:
             price_err = _price_last_error
             price_busy = _is_price_job_running
 
+        reauth = _gmail_reauth_required
+
         return {
             "is_running":             scheduler_running,
             "is_gmail_authenticated": GMAIL_TOKEN_PATH.exists(),
+            "gmail_reauth_required":  reauth,
             "is_scraping":            _is_scraping,
             "interval_minutes":       _interval_minutes,
             "last_run_at":            _last_run_at.isoformat() if _last_run_at else None,

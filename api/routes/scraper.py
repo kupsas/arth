@@ -32,6 +32,7 @@ from api.models import ProcessedEmail
 from scraper.config import BANK_SENDERS, GMAIL_TOKEN_PATH
 from scraper.scheduler import (
     get_status,
+    note_gmail_reconnected,
     reschedule,
     resume_scheduler,
     stop_scheduler,
@@ -90,6 +91,8 @@ def scraper_status():
       - last_emails_failed:    Emails that errored in the last run.
       - last_txns_created:     New DB rows inserted in the last run.
       - last_error:            First error message from the last run (or null).
+      - gmail_reauth_required: True if Google rejected the saved Gmail login —
+                               call POST /api/scraper/oauth/init to reconnect.
       - price_last_run_at:     When the daily price job last finished (attempt).
       - price_last_success_at: When it last completed without error (or null).
       - price_last_error:      Last price-job error message (or null).
@@ -274,6 +277,7 @@ def oauth_init():
             client = GmailClient()
             client.authenticate()
             logger.info("Gmail OAuth completed — token saved, activating scheduler")
+            note_gmail_reconnected()
             # Now that the token exists, activate the scheduler
             resume_scheduler()
         except Exception as exc:

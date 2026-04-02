@@ -8,9 +8,11 @@ Responsibilities:
 
 How OAuth works (plain English):
   - First run: opens your browser, you click "Allow", Google saves a token to
-    data/gmail_token.json.  You never have to do this again.
-  - Every subsequent run: the library reads the token file and refreshes it
-    silently if it's expired.  No browser needed.
+    data/gmail_token.json.
+  - Normal runs: the library refreshes the short-lived access token using the
+    saved refresh token — no browser.
+  - If Google revokes the refresh token (password change, idle timeout, you
+    removed app access): you must consent again via the same OAuth flow.
 
 Usage:
     import logging
@@ -35,6 +37,7 @@ import datetime
 import logging
 from dataclasses import dataclass
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -44,6 +47,16 @@ from googleapiclient.errors import HttpError
 from scraper.config import GMAIL_CREDENTIALS_PATH, GMAIL_SCOPES, GMAIL_TOKEN_PATH
 
 logger = logging.getLogger(__name__)
+
+
+class GmailReauthRequiredError(Exception):
+    """Raised when the saved refresh token is dead and OAuth must be done again.
+
+    Google's ``invalid_grant`` means the refresh token was revoked, expired under
+    policy, or the user changed their password — it cannot be silently renewed.
+    Callers that cannot open a browser (e.g. APScheduler) should catch this and
+    tell the user to visit ``POST /api/scraper/oauth/init``.
+    """
 
 
 # ─── Data class for a raw Gmail message (just the metadata we need) ────────────
@@ -74,15 +87,27 @@ class GmailClient:
 
     # ── Authentication ──────────────────────────────────────────────────────────
 
-    def authenticate(self) -> None:
+    def authenticate(self, *, allow_interactive_oauth: bool = True) -> None:
         """Authenticate with Gmail via OAuth2.
 
-        On first run: opens your browser for the Google consent screen.
-        On subsequent runs: loads the saved token and refreshes it if expired.
+        On first run (or after a revoked refresh token): opens the browser for
+        Google consent — unless ``allow_interactive_oauth=False`` (scheduler),
+        in which case :class:`GmailReauthRequiredError` is raised instead.
+
+        On normal subsequent runs: loads the saved token and refreshes the
+        short-lived access token without a browser.
+
+        Args:
+            allow_interactive_oauth: If False, never call ``run_local_server()``;
+                used by the background scheduler so it does not try to open a
+                browser on the server. Revoked refresh tokens then raise
+                ``GmailReauthRequiredError``.
 
         Raises:
             FileNotFoundError: if gmail_credentials.json doesn't exist yet.
-            Exception: if the OAuth flow fails for any reason.
+            GmailReauthRequiredError: if re-consent is needed but interactive
+                OAuth is disabled.
+            Exception: if the OAuth flow fails for other reasons.
         """
         if not GMAIL_CREDENTIALS_PATH.exists():
             raise FileNotFoundError(
@@ -100,30 +125,65 @@ class GmailClient:
             )
             logger.debug("Loaded existing Gmail token from %s", GMAIL_TOKEN_PATH)
 
-        # If there's no valid token (first run or expired + can't refresh), run the flow.
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                # Token exists but is expired — refresh silently without opening browser.
+        # Already usable (access token still valid).
+        if creds and creds.valid:
+            self._service = build("gmail", "v1", credentials=creds)
+            logger.info("Gmail API authenticated successfully.")
+            return
+
+        # Access token expired but we can ask Google for a new one using the
+        # long-lived refresh token — no browser.
+        if creds and creds.expired and creds.refresh_token:
+            try:
                 logger.info("Gmail token expired, refreshing...")
                 creds.refresh(Request())
-            else:
-                # No token at all — open browser for one-time consent.
+            except RefreshError as e:
+                # invalid_grant: refresh token revoked, app restricted, password
+                # change, etc. — cannot recover without a new consent screen.
+                logger.error(
+                    "Gmail refresh token rejected by Google (revoked or expired): %s",
+                    e,
+                )
+                try:
+                    GMAIL_TOKEN_PATH.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                creds = None
+                if not allow_interactive_oauth:
+                    raise GmailReauthRequiredError(
+                        "Gmail disconnected: Google rejected the saved login "
+                        "(token revoked or expired). Reconnect: POST "
+                        "/api/scraper/oauth/init on this machine (opens browser)."
+                    ) from e
                 logger.info(
-                    "No valid Gmail token found. Opening browser for OAuth consent..."
+                    "Removed invalid token file; opening browser for new consent..."
                 )
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(GMAIL_CREDENTIALS_PATH), GMAIL_SCOPES
-                )
-                # run_local_server() starts a tiny temporary HTTP server on a
-                # random local port, opens the browser, catches the callback,
-                # and returns the credentials.  No manual copy-paste needed.
-                creds = flow.run_local_server(port=0)
 
-            # Save the token so we don't need to re-authenticate next time.
+        # After a successful refresh, persist the updated access/refresh pair.
+        if creds and creds.valid:
             GMAIL_TOKEN_PATH.write_text(creds.to_json())
             logger.info("Gmail token saved to %s", GMAIL_TOKEN_PATH)
+            self._service = build("gmail", "v1", credentials=creds)
+            logger.info("Gmail API authenticated successfully.")
+            return
 
-        # Build the Gmail API service object — this is what we call methods on.
+        # No working credentials — need a browser consent flow, or fail clearly.
+        if not allow_interactive_oauth:
+            raise GmailReauthRequiredError(
+                "Gmail is not connected (no valid token). "
+                "Complete OAuth: POST /api/scraper/oauth/init."
+            )
+
+        logger.info(
+            "No valid Gmail token found. Opening browser for OAuth consent..."
+        )
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(GMAIL_CREDENTIALS_PATH), GMAIL_SCOPES
+        )
+        creds = flow.run_local_server(port=0)
+        GMAIL_TOKEN_PATH.write_text(creds.to_json())
+        logger.info("Gmail token saved to %s", GMAIL_TOKEN_PATH)
+
         self._service = build("gmail", "v1", credentials=creds)
         logger.info("Gmail API authenticated successfully.")
 
