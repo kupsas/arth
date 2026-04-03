@@ -72,6 +72,9 @@ data/*.db-shm
 # Manual / timestamped DB copies (e.g. arth.db.bak.YYYYMMDD_* and WAL/SHM siblings) — same sensitivity as *.db
 data/*bak*
 
+# Learned ICICI broker code → NSE ticker (machine-local; grows over time)
+data/icici_nse_symbol_overrides.json
+
 # Gmail OAuth credentials and token (never commit — contains secrets)
 data/gmail_credentials.json
 data/gmail_token.json

@@ -61,6 +61,7 @@ from api.database import get_engine, init_db  # noqa: E402
 from api.models import Transaction  # noqa: E402
 from pipeline.models import ParsedTransaction  # noqa: E402
 from pipeline.parsers.hdfc_cc_pdf import HDFCCreditCardPdfParser  # noqa: E402
+from pipeline.parsers.hdfc_savings_pdf import HDFCSavingsPdfParser  # noqa: E402
 from pipeline.parsers.icici_savings import ICICISavingsParser  # noqa: E402
 from scraper.gmail_client import GmailClient  # noqa: E402
 from scraper.pdf_utils import decrypt_pdf  # noqa: E402
@@ -97,6 +98,8 @@ def _parse_pdf_for_parser(
         return ICICISavingsParser().parse(pdf_path)
     if parser_name == "hdfc_cc_pdf":
         return HDFCCreditCardPdfParser().parse(pdf_path)
+    if parser_name == "hdfc_savings_pdf":
+        return HDFCSavingsPdfParser().parse(pdf_path)
     raise ValueError(f"Unknown --parser {parser_name!r}")
 
 
@@ -196,7 +199,7 @@ def main() -> None:
     ap.add_argument(
         "--parser",
         default="icici_savings",
-        choices=["icici_savings", "hdfc_cc_pdf"],
+        choices=["icici_savings", "hdfc_cc_pdf", "hdfc_savings_pdf"],
         help="Which pipeline parser reads the decrypted PDF (more choices as PDF parsers ship).",
     )
     ap.add_argument("--account-id", required=True, help="Must match Transaction.account_id in DB.")

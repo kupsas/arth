@@ -431,7 +431,9 @@ def test_investment_transaction_create_and_list(client: TestClient, engine):
 
     lst = client.get("/api/investment-transactions", params={"holding_id": hid})
     assert lst.status_code == 200
-    assert len(lst.json()) == 1
+    page = lst.json()
+    assert page["total"] == 1
+    assert len(page["items"]) == 1
 
 
 def test_investment_transactions_user_scoped_via_holding(client: TestClient, engine):
@@ -483,14 +485,14 @@ def test_investment_transactions_user_scoped_via_holding(client: TestClient, eng
 
     scoped = client.get("/api/investment-transactions", params={"user_id": "sashank"})
     assert scoped.status_code == 200
-    rows = scoped.json()
+    rows = scoped.json()["items"]
     assert len(rows) == 1
     assert rows[0]["symbol"] == "SASH1"
 
     scoped_p = client.get("/api/investment-transactions", params={"user_id": "partner"})
     assert scoped_p.status_code == 200
-    assert len(scoped_p.json()) == 1
-    assert scoped_p.json()[0]["symbol"] == "PART1"
+    assert len(scoped_p.json()["items"]) == 1
+    assert scoped_p.json()["items"][0]["symbol"] == "PART1"
 
 
 def test_investment_transactions_orphan_only_when_unscoped(client: TestClient, engine):
@@ -512,11 +514,107 @@ def test_investment_transactions_orphan_only_when_unscoped(client: TestClient, e
 
     unscoped = client.get("/api/investment-transactions")
     assert unscoped.status_code == 200
-    assert any(r["symbol"] == "ORPH" for r in unscoped.json())
+    assert any(r["symbol"] == "ORPH" for r in unscoped.json()["items"])
 
     scoped = client.get("/api/investment-transactions", params={"user_id": "sashank"})
     assert scoped.status_code == 200
-    assert not any(r["symbol"] == "ORPH" for r in scoped.json())
+    assert not any(r["symbol"] == "ORPH" for r in scoped.json()["items"])
+
+
+def test_investment_transaction_patch_and_is_reviewed_filter(client: TestClient, engine):
+    with Session(engine) as s:
+        hid = _seed_holding(s)
+        s.add(
+            InvestmentTransaction(
+                txn_date=datetime.date(2025, 6, 1),
+                symbol="PATCH1",
+                txn_type=InvestmentTxnType.BUY.value,
+                quantity=1.0,
+                price_per_unit=10.0,
+                total_amount=10.0,
+                account_platform="Unit",
+                holding_id=hid,
+                is_reviewed=False,
+                source_type="email",
+            )
+        )
+        s.commit()
+
+    r0 = client.get(
+        "/api/investment-transactions",
+        params={"holding_id": hid, "is_reviewed": False},
+    )
+    assert r0.status_code == 200
+    assert r0.json()["total"] == 1
+    tid = r0.json()["items"][0]["id"]
+
+    r1 = client.patch(
+        f"/api/investment-transactions/{tid}",
+        json={"is_reviewed": True, "notes": "ok"},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["is_reviewed"] is True
+    assert r1.json()["notes"] == "ok"
+
+    r2 = client.get(
+        "/api/investment-transactions",
+        params={"holding_id": hid, "is_reviewed": False},
+    )
+    assert r2.json()["total"] == 0
+
+
+def test_investment_transactions_search_platform_flow_filters(client: TestClient, engine):
+    """list_investment_transactions: search, account_platform, flow."""
+    with Session(engine) as s:
+        hid = _seed_holding(s)
+        s.add(
+            InvestmentTransaction(
+                txn_date=datetime.date(2025, 4, 1),
+                symbol="SRCH1",
+                txn_type=InvestmentTxnType.BUY.value,
+                quantity=1.0,
+                price_per_unit=50.0,
+                total_amount=50.0,
+                account_platform="ICICI_DIRECT",
+                holding_id=hid,
+                notes="special note xyzzy",
+            )
+        )
+        s.add(
+            InvestmentTransaction(
+                txn_date=datetime.date(2025, 4, 2),
+                symbol="SRCH2",
+                txn_type=InvestmentTxnType.SELL.value,
+                quantity=1.0,
+                price_per_unit=60.0,
+                total_amount=60.0,
+                account_platform="ZERODHA",
+                holding_id=hid,
+            )
+        )
+        s.commit()
+
+    base = {"holding_id": hid}
+
+    r_search = client.get("/api/investment-transactions", params={**base, "search": "xyzzy"})
+    assert r_search.status_code == 200
+    assert r_search.json()["total"] == 1
+    assert r_search.json()["items"][0]["symbol"] == "SRCH1"
+
+    r_plat = client.get(
+        "/api/investment-transactions",
+        params={**base, "account_platform": "ZERODHA"},
+    )
+    assert r_plat.json()["total"] == 1
+    assert r_plat.json()["items"][0]["symbol"] == "SRCH2"
+
+    r_in = client.get("/api/investment-transactions", params={**base, "flow": "INFLOW"})
+    assert r_in.json()["total"] == 1
+    assert r_in.json()["items"][0]["txn_type"] == InvestmentTxnType.BUY.value
+
+    r_out = client.get("/api/investment-transactions", params={**base, "flow": "OUTFLOW"})
+    assert r_out.json()["total"] == 1
+    assert r_out.json()["items"][0]["txn_type"] == InvestmentTxnType.SELL.value
 
 
 @patch("api.routes.prices.refresh_all_prices")

@@ -42,6 +42,7 @@ import type {
   LiabilitySummary,
   NetWorthGranularity,
   NetWorthHistory,
+  PaginatedResponse,
   PortfolioValueTrend,
   PortfolioValueTrendRange,
   RefreshPricesResult,
@@ -194,9 +195,9 @@ export function useHoldingDetail(
 
 export function useInvestmentTransactions(
   filters: InvestmentTransactionFilters = {},
-  options?: Partial<UseQueryOptions<InvestmentTxn[]>>,
+  options?: Partial<UseQueryOptions<PaginatedResponse<InvestmentTxn>>>,
 ) {
-  return useQuery<InvestmentTxn[]>({
+  return useQuery<PaginatedResponse<InvestmentTxn>>({
     queryKey: portfolioKeys.investmentTxns(filters),
     queryFn: () => fetchInvestmentTransactions(filters),
     staleTime: 60_000,

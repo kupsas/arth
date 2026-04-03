@@ -1,20 +1,13 @@
 /**
- * Transactions page — the workhorse data table with filtering, sorting,
- * pagination, bulk actions, and inline editing.
+ * Transactions page — bank ledger + investment ledger in two tabs.
  *
- * Layout (top → bottom):
- *   1. Page heading + bulk action bar (only visible when rows are selected)
- *   2. Filter bar (search, date range, account, direction, category, type, reviewed)
- *   3. Data table (sortable columns, server-side pagination, checkboxes)
- *   4. Edit Sheet (slide-in panel, opens on row click)
+ * **Bank tab** — filtering, sorting, pagination, bulk actions, inline editing.
  *
- * State owned by this page:
- *   - filters          TransactionFilters — drives the React Query data fetch
- *   - rowSelection     TanStack Table selection state { [rowId]: boolean }
- *   - editTxnId        which transaction is open in the edit sheet
- *   - editSheetOpen    whether the edit sheet is visible
+ * **Investment tab** — all investment_transactions in the DB (scoped by logged-in
+ * user), with filters aligned to the bank tab (search, dates, platform, flow,
+ * type, reviewed).
  *
- * Every filter change resets the page to 1 (implemented in handleFiltersChange).
+ * State is owned per tab (switching tabs does not reset the other tab’s filters).
  */
 
 "use client"
@@ -26,13 +19,23 @@ import type { RowSelectionState } from "@tanstack/react-table"
 
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { TransactionTable } from "@/components/transactions/transaction-table"
 import { TransactionFiltersBar } from "@/components/transactions/transaction-filters"
+import { InvestmentTransactionFiltersBar } from "@/components/transactions/investment-transaction-filters"
+import { InvestmentTransactionTable } from "@/components/transactions/investment-transaction-table"
 import { TransactionEditSheet } from "@/components/transactions/transaction-edit-sheet"
 import { getPresetRange, type Preset } from "@/components/dashboard/date-range-picker"
+import { useAuthMe } from "@/hooks/use-auth"
+import { useInvestmentTransactions } from "@/hooks/use-portfolio"
 import { useTransactions } from "@/hooks/use-transactions"
 import { useBulkUpdate } from "@/hooks/use-transactions"
-import type { Transaction, TransactionFilters, DateRange } from "@/lib/types"
+import type {
+  Transaction,
+  TransactionFilters,
+  DateRange,
+  InvestmentTransactionFilters,
+} from "@/lib/types"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Default filter state — factory so each reset gets fresh today-relative dates
@@ -46,6 +49,15 @@ function makeDefaultFilters(): TransactionFilters {
     page_size: 50,
     sort_by: "txn_date",
     sort_order: "desc",
+  }
+}
+
+function makeDefaultInvestmentFilters(): InvestmentTransactionFilters {
+  const thisMonth = getPresetRange("this-month")
+  return {
+    ...thisMonth,
+    page: 1,
+    page_size: 50,
   }
 }
 
@@ -65,6 +77,88 @@ function countActiveFilters(filters: TransactionFilters, datePreset: Preset): nu
   if (filters.txn_type)     count++
   if (filters.is_reviewed !== undefined) count++
   return count
+}
+
+function countActiveInvestmentFilters(
+  filters: InvestmentTransactionFilters,
+  datePreset: Preset,
+): number {
+  let count = 0
+  if (filters.search) count++
+  if (datePreset !== "this-month") count++
+  if (filters.account_platform) count++
+  if (filters.flow) count++
+  if (filters.txn_type) count++
+  if (filters.is_reviewed !== undefined) count++
+  return count
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Investment tab — scoped investment_transactions list
+// ─────────────────────────────────────────────────────────────────────────────
+
+function InvestmentTransactionsTabContent() {
+  const { data: auth } = useAuthMe()
+  const userId = auth?.username ?? null
+
+  const [filters, setFilters] = React.useState<InvestmentTransactionFilters>(
+    makeDefaultInvestmentFilters,
+  )
+  const [datePreset, setDatePreset] = React.useState<Preset>("this-month")
+
+  function handleFiltersChange(update: Partial<InvestmentTransactionFilters>) {
+    setFilters((prev) => ({ ...prev, ...update }))
+  }
+
+  function handleReset() {
+    setFilters(makeDefaultInvestmentFilters())
+    setDatePreset("this-month")
+  }
+
+  function handleDatePresetChange(preset: Preset, range: DateRange) {
+    setDatePreset(preset)
+    setFilters((prev) => ({
+      ...prev,
+      date_from: range.date_from,
+      date_to: range.date_to,
+      page: 1,
+    }))
+  }
+
+  const { data, isLoading } = useInvestmentTransactions(
+    { ...filters, user_id: userId ?? undefined },
+    { enabled: Boolean(userId) },
+  )
+
+  if (!userId) {
+    return (
+      <p className="text-sm text-muted-foreground py-8">
+        Sign in to load investment transactions scoped to your holdings.
+      </p>
+    )
+  }
+
+  const activeFilterCount = countActiveInvestmentFilters(filters, datePreset)
+
+  return (
+    <>
+      <InvestmentTransactionFiltersBar
+        filters={filters}
+        onFiltersChange={handleFiltersChange}
+        onReset={handleReset}
+        activeCount={activeFilterCount}
+        datePreset={datePreset}
+        onDatePresetChange={handleDatePresetChange}
+        userId={userId}
+      />
+      <InvestmentTransactionTable
+        data={data}
+        isLoading={isLoading}
+        filters={filters}
+        onFiltersChange={handleFiltersChange}
+      />
+    </>
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -167,70 +261,83 @@ function TransactionsPageInner() {
   return (
     <div className="flex flex-col gap-4">
 
-      {/* ── Page heading + bulk action bar ────────────────────────────── */}
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">Transactions</h1>
-          <p className="text-sm text-muted-foreground">
-            Browse, filter, and categorise your financial transactions.
-          </p>
-        </div>
-
-        {/* Bulk action bar — only visible when rows are checked */}
-        {selectedCount > 0 && (
-          <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2">
-            <span className="text-sm font-medium">
-              {selectedCount} selected
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleBulkMarkReviewed}
-              disabled={isBulkUpdating}
-              className="gap-1.5"
-            >
-              <CheckCircle2 className="size-4 text-emerald-500" />
-              {isBulkUpdating ? "Updating…" : "Mark as Reviewed"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setRowSelection({})}
-              className="text-muted-foreground"
-            >
-              Clear
-            </Button>
-          </div>
-        )}
+      {/* ── Page heading ────────────────────────────────────────────────── */}
+      <div>
+        <h1 className="text-xl font-semibold">Transactions</h1>
+        <p className="text-sm text-muted-foreground">
+          Browse bank activity and broker ledger lines — filter, review, and reconcile.
+        </p>
       </div>
 
-      {/* ── Filter bar ────────────────────────────────────────────────── */}
-      <TransactionFiltersBar
-        filters={filters}
-        onFiltersChange={handleFiltersChange}
-        onReset={handleReset}
-        activeCount={activeFilterCount}
-        datePreset={datePreset}
-        onDatePresetChange={handleDatePresetChange}
-      />
+      <Tabs defaultValue="bank" className="w-full">
+        <TabsList variant="line" className="mb-1 h-9 w-full min-w-0 justify-start">
+          <TabsTrigger value="bank" className="text-xs">
+            Bank transactions
+          </TabsTrigger>
+          <TabsTrigger value="investments" className="text-xs">
+            Investment transactions
+          </TabsTrigger>
+        </TabsList>
 
-      {/* ── Data table ────────────────────────────────────────────────── */}
-      <TransactionTable
-        data={data}
-        isLoading={isLoading}
-        filters={filters}
-        onFiltersChange={handleFiltersChange}
-        rowSelection={rowSelection}
-        onRowSelectionChange={setRowSelection}
-        onRowClick={handleRowClick}
-      />
+        <TabsContent value="bank" className="mt-4 flex flex-col gap-4">
+          {selectedCount > 0 && (
+            <div className="flex items-center justify-end">
+              <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2">
+                <span className="text-sm font-medium">
+                  {selectedCount} selected
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleBulkMarkReviewed}
+                  disabled={isBulkUpdating}
+                  className="gap-1.5"
+                >
+                  <CheckCircle2 className="size-4 text-emerald-500" />
+                  {isBulkUpdating ? "Updating…" : "Mark as Reviewed"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setRowSelection({})}
+                  className="text-muted-foreground"
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+          )}
 
-      {/* ── Edit sheet (slides in from the right) ─────────────────────── */}
-      <TransactionEditSheet
-        txnId={editTxnId}
-        open={editSheetOpen}
-        onOpenChange={setEditSheetOpen}
-      />
+          <TransactionFiltersBar
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            onReset={handleReset}
+            activeCount={activeFilterCount}
+            datePreset={datePreset}
+            onDatePresetChange={handleDatePresetChange}
+          />
+
+          <TransactionTable
+            data={data}
+            isLoading={isLoading}
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            rowSelection={rowSelection}
+            onRowSelectionChange={setRowSelection}
+            onRowClick={handleRowClick}
+          />
+
+          <TransactionEditSheet
+            txnId={editTxnId}
+            open={editSheetOpen}
+            onOpenChange={setEditSheetOpen}
+          />
+        </TabsContent>
+
+        <TabsContent value="investments" className="mt-4">
+          <InvestmentTransactionsTabContent />
+        </TabsContent>
+      </Tabs>
 
     </div>
   )

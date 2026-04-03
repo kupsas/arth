@@ -20,6 +20,8 @@ from scraper.email_parsers.hdfc_bank import (
 )
 from scraper.email_parsers.icici_bank import ICICINetBankingParser
 from scraper.email_parsers.hdfc_cc_statement import HDFCCCStatementEmailParser
+from scraper.email_parsers.hdfc_statement import HDFCCombinedStatementEmailParser
+from scraper.email_parsers.icici_direct_trade import ICICIDirectTradeEmailParser
 from scraper.email_parsers.icici_statement import ICICIStatementEmailParser
 
 
@@ -39,6 +41,10 @@ _icici_statement_accounts = BANK_SENDERS["estatement@icicibank.com"]["accounts"]
 _hdfc_cc_statement_accounts = BANK_SENDERS["emailstatements.cards@hdfcbank.net"][
     "accounts"
 ]
+_hdfc_combined_statement_accounts = BANK_SENDERS["hdfcbanksmartstatement@hdfcbank.net"][
+    "accounts"
+]
+_icici_direct_trade_accounts = BANK_SENDERS["nse-direct@nse.co.in"]["accounts"]
 
 EMAIL_PARSER_REGISTRY: dict[str, list[BaseEmailParser]] = {
     "alerts@hdfcbank.net": _hdfc_parser_list(_hdfc_accounts),
@@ -60,6 +66,21 @@ EMAIL_PARSER_REGISTRY: dict[str, list[BaseEmailParser]] = {
     ],
     "emailstatements.cards@hdfcbank.bank.in": [
         HDFCCCStatementEmailParser(_hdfc_cc_statement_accounts),
+    ],
+    "hdfcbanksmartstatement@hdfcbank.net": [
+        HDFCCombinedStatementEmailParser(_hdfc_combined_statement_accounts),
+    ],
+    "hdfcbanksmartstatement@hdfcbank.bank.in": [
+        HDFCCombinedStatementEmailParser(_hdfc_combined_statement_accounts),
+    ],
+    "ebix@nse.co.in": [
+        ICICIDirectTradeEmailParser(_icici_direct_trade_accounts),
+    ],
+    "nseinvest@nse.co.in": [
+        ICICIDirectTradeEmailParser(_icici_direct_trade_accounts),
+    ],
+    "nse-direct@nse.co.in": [
+        ICICIDirectTradeEmailParser(_icici_direct_trade_accounts),
     ],
 }
 

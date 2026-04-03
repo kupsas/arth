@@ -350,6 +350,17 @@ class GmailClient:
             received_at=received_at,
         )
 
+    def fetch_message_by_id(self, message_id: str) -> GmailMessage:
+        """Load :class:`GmailMessage` metadata (From, Subject, received time) by internal id."""
+        self._require_auth()
+        msg = (
+            self._service.users()
+            .messages()
+            .get(userId="me", id=message_id, format="metadata")
+            .execute()
+        )
+        return self._parse_metadata(msg)
+
     # ── Attachment extraction ───────────────────────────────────────────────────
 
     def get_attachments(self, message_id: str) -> list[tuple[str, bytes]]:

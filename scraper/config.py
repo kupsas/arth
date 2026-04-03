@@ -80,6 +80,14 @@ _HDFC_CC_STATEMENT_ACCOUNTS = {
     "5778": _HDFC_BANK_ACCOUNTS["5778"],
 }
 
+# ICICI Direct trade PDFs — ``last_4`` is not used by the parser (placeholder for config shape).
+_ICICI_DIRECT_TRADE_ACCOUNTS: dict[str, dict] = {
+    "0000": {
+        "account_id": "ICICI_DIRECT",
+        "source_key": "icici_direct_equity",
+    },
+}
+
 BANK_SENDERS: dict[str, dict] = {
     "alerts@hdfcbank.net": {
         "parser_key": "hdfc_bank",
@@ -116,6 +124,35 @@ BANK_SENDERS: dict[str, dict] = {
     "emailstatements.cards@hdfcbank.bank.in": {
         "parser_key": "hdfc_cc_statement",
         "accounts": _HDFC_CC_STATEMENT_ACCOUNTS,
+        "first_run_lookback_days": 45,
+    },
+    # HDFC combined monthly statement PDF (savings 3703) — same "Smart Statement" sender
+    # as pre-2024 "Email Account Statement"; we only parse **combined** subjects (see parser).
+    "hdfcbanksmartstatement@hdfcbank.net": {
+        "parser_key": "hdfc_combined_statement",
+        "accounts": {"3703": _HDFC_BANK_ACCOUNTS["3703"]},
+        "first_run_lookback_days": 45,
+    },
+    "hdfcbanksmartstatement@hdfcbank.bank.in": {
+        "parser_key": "hdfc_combined_statement",
+        "accounts": {"3703": _HDFC_BANK_ACCOUNTS["3703"]},
+        "first_run_lookback_days": 45,
+    },
+    # NSE — *Trades executed at NSE* PDF only (``NSE_TRADES_EXECUTED_PASSWORD``). Add your
+    # mailbox's From: here if it differs (router still requires that subject line).
+    "ebix@nse.co.in": {
+        "parser_key": "icici_direct_trade",
+        "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
+        "first_run_lookback_days": 45,
+    },
+    "nseinvest@nse.co.in": {
+        "parser_key": "icici_direct_trade",
+        "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
+        "first_run_lookback_days": 45,
+    },
+    "nse-direct@nse.co.in": {
+        "parser_key": "icici_direct_trade",
+        "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
         "first_run_lookback_days": 45,
     },
 }

@@ -38,8 +38,10 @@ import type {
   HoldingValueUpdate,
   HoldingsListFilters,
   HoldingsSummary,
+  BulkInvestmentUpdateRequest,
   InvestmentTxn,
   InvestmentTransactionFilters,
+  InvestmentTransactionUpdate,
   InvestmentTrendRow,
   Liability,
   LiabilitySummary,
@@ -750,15 +752,33 @@ export function updateHoldingValue(
 }
 
 /**
- * GET /api/investment-transactions
+ * GET /api/investment-transactions (paginated).
  * Pass ``user_id`` in filters so results are scoped to that user's holdings (F2.0).
  */
 export function fetchInvestmentTransactions(
   filters: InvestmentTransactionFilters = {},
-): Promise<InvestmentTxn[]> {
-  return get<InvestmentTxn[]>(
+): Promise<PaginatedResponse<InvestmentTxn>> {
+  return get<PaginatedResponse<InvestmentTxn>>(
     "/api/investment-transactions",
     filters as QueryParams,
+  );
+}
+
+/** PATCH /api/investment-transactions/{id} */
+export function updateInvestmentTransaction(
+  id: number,
+  update: InvestmentTransactionUpdate,
+): Promise<InvestmentTxn> {
+  return patch<InvestmentTxn>(`/api/investment-transactions/${id}`, update);
+}
+
+/** PATCH /api/investment-transactions/bulk */
+export function bulkUpdateInvestmentTransactions(
+  body: BulkInvestmentUpdateRequest,
+): Promise<{ updated: number[]; not_found: number[] }> {
+  return patch<{ updated: number[]; not_found: number[] }>(
+    "/api/investment-transactions/bulk",
+    body,
   );
 }
 

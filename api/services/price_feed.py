@@ -39,6 +39,8 @@ from sqlmodel import Session, col, func, select
 
 from api.models import Holding, Price
 from pipeline.config import REPO_ROOT
+from pipeline.holding_parsers.icici_direct_equity import ICICI_SHORT_TO_NSE
+from pipeline.icici_symbol_overrides import merge_with_disk
 from pipeline.models import AssetClass, ValuationMethod
 
 logger = logging.getLogger(__name__)
@@ -84,52 +86,15 @@ def normalize_equity_symbol(symbol: str) -> str:
     return s
 
 
-# ICICI Direct "Stock Symbol" values from portfolio CSV — not valid NSE bhav keys.
-# Keep in sync with ``ICICI_SHORT_TO_NSE`` in ``pipeline.holding_parsers.icici_direct_equity``.
-_ICICI_BROKER_TO_NSE: dict[str, str] = {
-    "APOTYR": "APOLLOTYRE",
-    "INTAVI": "INDIGO",
-    "HDFBAN": "HDFCBANK",
-    # ICICI uses BHAELE for Bharat Electronics (NSE BEL), not BHEL.
-    "BHAELE": "BEL",
-    "BAFINS": "BAJAJFINSV",
-    "BANMAH": "MAHABANK",
-    "BHAWIR": "BHARTIARTL",
-    "COCSHI": "COCHINSHIP",
-    "ENGIND": "ENGINERSIN",
-    "HDFAMC": "HDFCAMC",
-    "ICINIF": "NIFTYIETF",
-    "INDOIL": "IOC",
-    "INTBUI": "INTERARCH",
-    "INTDES": "INTELLECT",
-    "KANNER": "KANSAINER",
-    "LARTOU": "LT",
-    "MAHGAS": "MGL",
-    "NAGCON": "NCC",
-    "NRBBEA": "NRBBEARING",
-    "PHOMIL": "PHOENIXLTD",
-    "PRAIN": "PRAJIND",
-    "PVRLIM": "PVRINOX",
-    "RELIND": "RELIANCE",
-    "SANEN": "SANSERA",
-    "SHRTRA": "SHRIRAMFIN",
-    "SKFIND": "SKFINDIA",
-    # Tata Motors transactions in this DB are from Jun/Sep 2025 and fetch correctly
-    # under the legacy bhav symbol ``TATAMOTORS`` for those dates.
-    "TATMOT": "TATAMOTORS",
-    "TATPOW": "TATAPOWER",
-    "VEDLIM": "VEDL",
-    "WHIIND": "WHIRLPOOL",
-    "ZENSAR": "ZENSARTECH",
-    "MINDAC": "MINDACORP",
-    "STOONE": "STOONE",
-}
-
-
 def canonical_nse_symbol(symbol: str) -> str:
-    """NSE bhav / ``prices.symbol`` key: normalize then map legacy ICICI codes."""
+    """NSE bhav / ``prices.symbol`` key: normalize then map legacy ICICI codes.
+
+    Static map: ``ICICI_SHORT_TO_NSE`` in ``icici_direct_equity``; merged with
+    ``data/icici_nse_symbol_overrides.json`` (optional manual overrides).
+    """
     n = normalize_equity_symbol(symbol)
-    return _ICICI_BROKER_TO_NSE.get(n, n)
+    merged = merge_with_disk(ICICI_SHORT_TO_NSE, "icici_short_to_nse")
+    return merged.get(n, n)
 
 
 def _is_international_yfinance_symbol(symbol: str) -> bool:

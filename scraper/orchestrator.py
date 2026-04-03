@@ -203,6 +203,10 @@ def _process_email(
                 msg.id,
             )
             return "skipped", 0
+        # Multi-PDF emails: parsers may accumulate holdings / inv_txns per file — reset once per message.
+        reset_fn = getattr(parser, "reset_attachment_outputs", None)
+        if callable(reset_fn):
+            reset_fn()
         parsed_txns: list[ParsedTransaction] = []
         for _filename, pdf_bytes in attachments:
             parsed_txns.extend(
@@ -213,11 +217,13 @@ def _process_email(
                     email_subject=msg.subject or "",
                 )
             )
-            inv_fn = getattr(parser, "attachment_investment_outputs", None)
-            if callable(inv_fn):
-                h, t = inv_fn()
-                attachment_holdings.extend(h)
-                attachment_inv_txns.extend(t)
+        # Call once after all PDFs — parsers accumulate PPF / trade legs in ``parse_attachment``;
+        # calling :meth:`attachment_investment_outputs` inside the loop duplicated rows on multi-PDF emails.
+        inv_fn = getattr(parser, "attachment_investment_outputs", None)
+        if callable(inv_fn):
+            h, t = inv_fn()
+            attachment_holdings.extend(h)
+            attachment_inv_txns.extend(t)
     else:
         html_body = client.get_message_body(msg.id)
         parsed_txns = parser.parse(html_body, received_date)
@@ -289,7 +295,11 @@ def _process_email(
         uid = (os.environ.get("ARTH_USER_ID") or "sashank").strip() or "sashank"
         hr = ingest_holdings(session, attachment_holdings, user_id=uid)
         tr = ingest_investment_transactions(
-            session, attachment_inv_txns, user_id=uid
+            session,
+            attachment_inv_txns,
+            user_id=uid,
+            source_type="email",
+            gmail_message_id=msg.id,
         )
         total_new += int(hr.get("inserted", 0)) + int(tr.get("inserted", 0))
         logger.debug(

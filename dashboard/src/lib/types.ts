@@ -901,7 +901,29 @@ export interface InvestmentTxn {
   holding_id: number | null;
   bank_transaction_id: number | null;
   notes: string | null;
+  is_reviewed: boolean;
+  source_type: string | null;
+  gmail_message_id: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+/** PATCH /api/investment-transactions/{id} — mirrors InvestmentTransactionUpdate. */
+export interface InvestmentTransactionUpdate {
+  is_reviewed?: boolean;
+  notes?: string | null;
+  symbol?: string | null;
+  txn_type?: string | null;
+  quantity?: number;
+  price_per_unit?: number;
+  total_amount?: number;
+  txn_date?: string;
+}
+
+/** PATCH /api/investment-transactions/bulk */
+export interface BulkInvestmentUpdateRequest {
+  ids: number[];
+  update: InvestmentTransactionUpdate;
 }
 
 /** GET /api/liabilities/summary */
@@ -965,15 +987,25 @@ export type NetWorthGranularity = "daily" | "weekly" | "monthly";
  * Query params for GET /api/investment-transactions.
  * Pass ``user_id`` so the API scopes rows via holding ownership (F2.0 security fix).
  */
+/** GET /api/investment-transactions — optional ``flow`` matches server INFLOW/OUTFLOW buckets. */
+export type InvestmentFlowFilter = "INFLOW" | "OUTFLOW";
+
 export interface InvestmentTransactionFilters {
   user_id?: string;
   holding_id?: number;
   txn_type?: string;
   symbol?: string;
+  /** Substring match on symbol and notes (server-side). */
+  search?: string;
+  account_platform?: string;
+  /** Buy/sip/dividend vs sell/switch-out — see API ``flow`` query param. */
+  flow?: InvestmentFlowFilter;
   date_from?: string;
   date_to?: string;
-  limit?: number;
-  offset?: number;
+  /** When false, only rows pending human review (email-sourced ledger lines). */
+  is_reviewed?: boolean;
+  page?: number;
+  page_size?: number;
 }
 
 /** Plan F2.1 naming — same as ``PortfolioAssetClass``. */

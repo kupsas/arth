@@ -122,8 +122,13 @@ class ICICIStatementEmailParser(BaseStatementEmailParser):
     def attachment_investment_outputs(
         self,
     ) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
-        """PPF (and future) investment rows from the last :meth:`parse_attachment` call."""
+        """PPF (and future) investment rows accumulated for this email's PDF attachment(s)."""
         return (self._attachment_holdings, self._attachment_inv_txns)
+
+    def reset_attachment_outputs(self) -> None:
+        """Clear PPF side-channels before processing attachment(s) for a new Gmail message."""
+        self._attachment_holdings = []
+        self._attachment_inv_txns = []
 
     def parse_attachment(
         self,
@@ -162,9 +167,6 @@ class ICICIStatementEmailParser(BaseStatementEmailParser):
         if account_id == "UNKNOWN":
             return []
 
-        self._attachment_holdings = []
-        self._attachment_inv_txns = []
-
         decrypted = decrypt_pdf(pdf_bytes, password)
         try:
             raw_rows = ICICISavingsParser().parse(decrypted)
@@ -173,8 +175,8 @@ class ICICIStatementEmailParser(BaseStatementEmailParser):
                     decrypted,
                     source_label="icici_annual_statement_email",
                 )
-                self._attachment_holdings = ph
-                self._attachment_inv_txns = pt
+                self._attachment_holdings.extend(ph)
+                self._attachment_inv_txns.extend(pt)
         except Exception:
             logger.exception(
                 "ICICISavingsParser failed for ICICI statement (kind=%s)", kind

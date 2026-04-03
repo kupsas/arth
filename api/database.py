@@ -191,6 +191,40 @@ def _apply_sqlite_patches() -> None:
         if not _column_exists(conn, "holdings", "fund_house"):
             conn.execute(text("ALTER TABLE holdings ADD COLUMN fund_house TEXT"))
 
+        # Phase 5 — investment txn review queue (same semantics as Transaction.is_reviewed).
+        if not _column_exists(conn, "investment_transactions", "is_reviewed"):
+            conn.execute(
+                text(
+                    "ALTER TABLE investment_transactions ADD COLUMN is_reviewed "
+                    "INTEGER NOT NULL DEFAULT 1"
+                )
+            )
+        if not _column_exists(conn, "investment_transactions", "source_type"):
+            conn.execute(
+                text("ALTER TABLE investment_transactions ADD COLUMN source_type TEXT")
+            )
+        if not _column_exists(conn, "investment_transactions", "gmail_message_id"):
+            conn.execute(
+                text(
+                    "ALTER TABLE investment_transactions ADD COLUMN gmail_message_id TEXT"
+                )
+            )
+        if not _column_exists(conn, "investment_transactions", "updated_at"):
+            conn.execute(text("ALTER TABLE investment_transactions ADD COLUMN updated_at TEXT"))
+        conn.execute(
+            text(
+                "UPDATE investment_transactions SET updated_at = created_at "
+                "WHERE updated_at IS NULL"
+            )
+        )
+        if not _index_exists(conn, "ix_investment_transactions_is_reviewed"):
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_investment_transactions_is_reviewed "
+                    "ON investment_transactions (is_reviewed)"
+                )
+            )
+
 
 def _chmod_owner_rw_only(path: Path) -> None:
     """Best-effort ``0o600`` (owner read/write only). No-op if missing or OS rejects chmod."""

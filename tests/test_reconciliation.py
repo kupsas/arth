@@ -458,3 +458,112 @@ class TestContentHashDedup:
 
         row = session.exec(select(Transaction)).first()
         assert row.is_reviewed is False
+
+
+# ─── Path B2: exact txn_date vs ±1-day window (recurring same amount) ───────────
+
+class TestB2ExactDateBeforeWindow:
+    """Regression: two ``statement`` rows with the same amount on *consecutive* days.
+
+    Old B2 used only a ±1-day window.  For txn_date **Mar 9**, both Mar 9 and Mar 10
+    statement rows (e.g. ₹1,000 UPI-Lite each day) fell inside the window →
+    ``len(rows)==2`` → email PDF row was **inserted** (duplicate).  Fix: match **exact
+    date** first; use the window only when the exact date has no statement row.
+    """
+
+    def test_email_skipped_when_two_statement_rows_differ_only_by_calendar_day(
+        self, session
+    ):
+        d9 = datetime.date(2026, 3, 9)
+        d10 = datetime.date(2026, 3, 10)
+        stmt_9 = _txn(
+            txn_date=d9,
+            amount=Decimal("1000.00"),
+            raw_description="TXT-IMPORT-DAY9",
+        )
+        stmt_10 = _txn(
+            txn_date=d10,
+            amount=Decimal("1000.00"),
+            raw_description="TXT-IMPORT-DAY10",
+        )
+        write_to_db(
+            [stmt_9],
+            source_key="hdfc_savings",
+            llm_model="none",
+            session=session,
+            source_type="statement",
+        )
+        write_to_db(
+            [stmt_10],
+            source_key="hdfc_savings",
+            llm_model="none",
+            session=session,
+            source_type="statement",
+        )
+        assert len(session.exec(select(Transaction)).all()) == 2
+
+        pdf_9 = _txn(
+            txn_date=d9,
+            amount=Decimal("1000.00"),
+            raw_description="PDF-COMBINED-STATEMENT-LONG-NARRATION-DAY9",
+        )
+        pdf_10 = _txn(
+            txn_date=d10,
+            amount=Decimal("1000.00"),
+            raw_description="PDF-COMBINED-STATEMENT-LONG-NARRATION-DAY10",
+        )
+        run = write_to_db(
+            [pdf_9, pdf_10],
+            source_key="hdfc_savings",
+            llm_model="none",
+            session=session,
+            source_type="email",
+            gmail_message_id="combined_pdf_msg",
+        )
+        assert run.new_count == 0
+        assert len(session.exec(select(Transaction)).all()) == 2
+
+
+# ─── Path B2b: PDF statement email vs prior InstaAlert (same source_type=email) ─
+
+class TestB2bPdfSkipsWhenInstaAlertExists:
+    """Monthly PDF duplicates HTML alerts — both are ``source_type='email'``."""
+
+    def test_pdf_email_skipped_when_insta_alert_row_exists(self, session):
+        """InstaAlert inserted first; same spend from statement PDF must not insert."""
+        from api.models import Transaction
+
+        d = datetime.date(2026, 3, 28)
+        alert = Transaction(
+            txn_date=d,
+            account_id="HDFC_SAL_3703",
+            amount=2000.0,
+            direction="INFLOW",
+            raw_description="UPI: abhignya2410-1@okaxis BARU ABHIGNYA",
+            content_hash="dummy_alert_hash",
+            source_statement="hdfc_savings",
+            source_type="email",
+            gmail_message_id="alert_msg_insta_001",
+            currency="INR",
+        )
+        session.add(alert)
+        session.commit()
+
+        pdf_txn = _txn(
+            txn_date=d,
+            amount=Decimal("2000.00"),
+            raw_description="PDF LONG UPI-BARU ABHIGNYA-abhignya2410-1@ okaxis",
+            direction=Direction.INFLOW,
+        )
+        run = write_to_db(
+            [pdf_txn],
+            source_key="hdfc_savings",
+            llm_model="none",
+            session=session,
+            source_type="email",
+            gmail_message_id="combined_pdf_msg_march",
+        )
+        assert run.new_count == 0
+        rows = session.exec(select(Transaction)).all()
+        assert len(rows) == 1
+        assert rows[0].gmail_message_id == "alert_msg_insta_001"

@@ -525,6 +525,13 @@ class Holding(SQLModel, table=True):
 
 
 class InvestmentTransaction(SQLModel, table=True):
+    """Broker / fund ledger row.
+
+    ``is_reviewed`` / ``source_type`` / ``gmail_message_id`` mirror :class:`Transaction`
+    — email-sourced rows (scraper, statement PDFs) enter with ``source_type='email'``
+    and ``is_reviewed=False`` so they appear on the Review page until approved.
+    """
+
     __tablename__ = "investment_transactions"
 
     id: int | None = Field(default=None, primary_key=True)
@@ -538,7 +545,16 @@ class InvestmentTransaction(SQLModel, table=True):
     holding_id: int | None = Field(default=None, foreign_key="holdings.id")
     bank_transaction_id: int | None = Field(default=None, foreign_key="transactions.id")
     notes: str | None = None
+
+    is_reviewed: bool = Field(default=True, index=True)
+    # "statement" | "email" | None (legacy / file import — treated as reviewed pipeline)
+    source_type: str | None = Field(default=None, index=True)
+    gmail_message_id: str | None = Field(default=None, index=True)
+
     created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
 

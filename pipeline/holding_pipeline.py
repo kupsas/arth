@@ -300,8 +300,15 @@ def ingest_investment_transactions(
     *,
     user_id: str | None = None,
     dry_run: bool = False,
+    source_type: str | None = None,
+    gmail_message_id: str | None = None,
 ) -> dict[str, int]:
-    """Insert deduped ledger rows. When ``user_id`` is set, resolve ``holding_id`` (MF + equity)."""
+    """Insert deduped ledger rows. When ``user_id`` is set, resolve ``holding_id`` (MF + equity).
+
+    When ``source_type=\"email\"`` (Gmail scraper / statement PDF attachment path), new rows
+    get ``is_reviewed=False`` so they surface on the investment review queue — same rule as
+    :func:`pipeline.db_writer.write_to_db` for bank transactions.
+    """
     inserted = 0
     skipped = 0
     errors = 0
@@ -330,6 +337,8 @@ def ingest_investment_transactions(
             hid = find_holding_id_for_parsed_txn(session, uid, t)
             if hid is not None:
                 linked_inline += 1
+        # File/CLI imports omit source_type → reviewed. Email path passes source_type="email".
+        is_reviewed_default = source_type != "email"
         it = InvestmentTransaction(
             txn_date=t.txn_date,
             symbol=t.symbol,
@@ -340,6 +349,9 @@ def ingest_investment_transactions(
             account_platform=t.account_platform,
             holding_id=hid,
             notes="\n".join(notes_parts) if notes_parts else None,
+            is_reviewed=is_reviewed_default,
+            source_type=source_type,
+            gmail_message_id=gmail_message_id,
         )
         session.add(it)
         inserted += 1

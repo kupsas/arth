@@ -89,12 +89,40 @@ def _row_get(row: dict[str, str | None], *candidates: str) -> str:
 
 
 def _resolve_nse_symbol(*, isin: str | None, icici_short: str) -> str:
+    from pipeline.icici_symbol_overrides import merge_with_disk
+
+    iso_map = merge_with_disk(ISIN_TO_NSE_SYMBOL, "isin_to_nse")
+    short_map = merge_with_disk(ICICI_SHORT_TO_NSE, "icici_short_to_nse")
     u = icici_short.strip().upper()
     if isin:
         iso = isin.strip().upper()
-        if iso in ISIN_TO_NSE_SYMBOL:
-            return ISIN_TO_NSE_SYMBOL[iso]
-    return ICICI_SHORT_TO_NSE.get(u, u)
+        if iso in iso_map:
+            return iso_map[iso]
+    return short_map.get(u, u)
+
+
+def resolve_icici_direct_nse_symbol(
+    *,
+    isin: str | None = None,
+    icici_short: str = "",
+    nse_from_pdf: str | None = None,
+) -> str:
+    """Pick the DB/NSE bhav symbol for an equity leg (email PDFs + CSV ingest).
+
+    **Priority:** explicit NSE ticker from a PDF column (e.g. *Trades executed at NSE*)
+    wins; else ISIN → :data:`ISIN_TO_NSE_SYMBOL`; else ICICI stock code →
+    :data:`ICICI_SHORT_TO_NSE`; else pass through uppercased broker code.
+
+    Keeps holdings price refresh aligned with :func:`api.services.price_feed.canonical_nse_symbol`.
+    """
+    raw = (nse_from_pdf or "").strip().upper()
+    if raw:
+        for suf in (".NS", ".NSE", ".BO"):
+            if raw.endswith(suf):
+                raw = raw[: -len(suf)]
+                break
+        return raw
+    return _resolve_nse_symbol(isin=isin, icici_short=icici_short)
 
 
 def parse_portfolio_summary_csv(path: Path) -> tuple[list[ParsedHolding], dict[str, str]]:
@@ -189,9 +217,9 @@ def parse_annual_trade_csv(path: Path, isin_to_nse: dict[str, str]) -> list[Pars
             except ValueError:
                 continue
 
-        sym = ICICI_SHORT_TO_NSE.get(stock.upper(), stock.upper())
-        # If we ever add ISIN column to annual files, prefer it
         isin_key = _row_get(row, "ISIN Code", "ISIN").strip().upper()
+        sym = _resolve_nse_symbol(isin=isin_key if isin_key else None, icici_short=stock)
+        # Portfolio summary map (same folder) can add ISIN→NSE not yet on disk
         if isin_key and isin_key in isin_to_nse:
             sym = isin_to_nse[isin_key]
 

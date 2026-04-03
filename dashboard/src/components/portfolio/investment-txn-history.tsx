@@ -120,20 +120,19 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
     setPage(1);
   }, [txnType, debouncedSymbol, dateFrom, dateTo]);
 
-  const offset = (page - 1) * PAGE_SIZE;
-
   const { data, isLoading } = useInvestmentTransactions({
     user_id: userId,
     txn_type: txnType || undefined,
     symbol: debouncedSymbol || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
-    limit: PAGE_SIZE,
-    offset,
+    page,
+    page_size: PAGE_SIZE,
   });
 
-  const rows = data ?? [];
-  const hasMore = rows.length === PAGE_SIZE;
+  const rows = data?.items ?? [];
+  const totalPages = data?.total_pages ?? 1;
+  const hasMore = page < totalPages;
   const hasPrev = page > 1;
 
   const toggleSort = React.useCallback((columnId: string) => {
@@ -364,8 +363,10 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
 
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs text-muted-foreground">
-            Page {page}
-            {hasMore ? " · more rows may exist" : ""}
+            Page {page} of {totalPages}
+            {data?.total != null
+              ? ` · ${data.total.toLocaleString()} total`
+              : ""}
           </p>
           <div className="flex gap-2">
             <Button

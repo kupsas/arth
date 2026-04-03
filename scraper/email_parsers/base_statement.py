@@ -61,3 +61,12 @@ class BaseStatementEmailParser(BaseEmailParser):
             f"{type(self).__name__} uses PDF attachments only; "
             "the orchestrator should call parse_attachment(), not parse()."
         )
+
+    def reset_attachment_outputs(self) -> None:
+        """Optional: clear per-email attachment side-channels before processing PDFs.
+
+        The orchestrator calls this once per Gmail message when ``parse_type == "attachment"``
+        so parsers that :meth:`extend` PPF / investment rows across multiple attachments
+        do not leak state from the previous email.
+        """
+        pass
