@@ -27,15 +27,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHoldingsSummary } from "@/hooks/use-portfolio";
+import { CHART_SERIES_COLORS } from "@/lib/chart-colors";
 import { formatPercent } from "@/lib/utils";
-
-const PIE_COLORS = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
-];
 
 export interface AssetAllocationProps {
   userId: string;
@@ -135,7 +128,7 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                         {byClass.map((_, i) => (
                           <Cell
                             key={i}
-                            fill={PIE_COLORS[i % PIE_COLORS.length]}
+                            fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
                             stroke="transparent"
                           />
                         ))}
@@ -168,7 +161,7 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                           key={key}
                           dataKey={key}
                           stackId="a"
-                          fill={PIE_COLORS[i % PIE_COLORS.length]}
+                          fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
                           name={labelPretty(key)}
                         />
                       ))}
@@ -181,7 +174,7 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                         <span
                           className="size-2 rounded-sm"
                           style={{
-                            backgroundColor: PIE_COLORS[i % PIE_COLORS.length],
+                            backgroundColor: CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length],
                           }}
                         />
                         {labelPretty(key)} ({formatPercent(byLiq[key] ?? 0)})
@@ -212,7 +205,7 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                         {byPlatform.map((_, i) => (
                           <Cell
                             key={i}
-                            fill={PIE_COLORS[i % PIE_COLORS.length]}
+                            fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
                             stroke="transparent"
                           />
                         ))}

@@ -24,7 +24,7 @@ from pipeline.config import DB_PATH, REPO_ROOT
 _engine = create_engine(
     f"sqlite:///{DB_PATH}",
     echo=False,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 60},
 )
 
 
@@ -180,6 +180,16 @@ def _apply_sqlite_patches() -> None:
                     "ON goals (user_id, pyramid_id)"
                 )
             )
+
+        # Holdings page — classification columns (B1); nullable, backfilled by enrichment.
+        if not _column_exists(conn, "holdings", "sector"):
+            conn.execute(text("ALTER TABLE holdings ADD COLUMN sector TEXT"))
+        if not _column_exists(conn, "holdings", "market_cap_class"):
+            conn.execute(text("ALTER TABLE holdings ADD COLUMN market_cap_class TEXT"))
+        if not _column_exists(conn, "holdings", "fund_category"):
+            conn.execute(text("ALTER TABLE holdings ADD COLUMN fund_category TEXT"))
+        if not _column_exists(conn, "holdings", "fund_house"):
+            conn.execute(text("ALTER TABLE holdings ADD COLUMN fund_house TEXT"))
 
 
 def _chmod_owner_rw_only(path: Path) -> None:

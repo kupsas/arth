@@ -1,11 +1,22 @@
 """
 SBI PPF / ICICI PPF style CSV: skip metadata rows 1–10; header on row 11.
+
+Classification (matches bank CSV):
+- ``Int.Pd`` / interest in remarks → DIVIDEND (not your out-of-pocket principal).
+- Other deposits → BUY (your contributions).
+- Withdrawals → SELL.
+
+Rows dated after ``reference_date`` (default: today UTC) are skipped so we never
+book forward-dated ledger lines. ``principal_amount`` on the holding is net
+contributions from parsed txns: sum(BUY) − sum(SELL). Opening-balance rows stay
+excluded from txns (carry-forward); if you need that in principal, import a
+longer history or set ``principal_amount`` manually once.
 """
 
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from pipeline.holding_parsers.base import (
@@ -16,12 +27,22 @@ from pipeline.holding_parsers.base import (
     strip_bom,
 )
 from pipeline.models import AssetClass, CompoundingFrequency, InvestmentTxnType, LiquidityClass, ValuationMethod
+from pipeline.ppf_maturity import ppf_statutory_maturity_date
 
 # Government PPF rate — update when statement shows a new rate (parser does not scrape RBI).
 PPF_RATE_ANNUAL_DEFAULT = 7.1
 
 
-def parse_icici_ppf_csv(path: Path, *, account_platform: str = "ICICI PPF") -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
+def _utc_today() -> date:
+    return datetime.now(UTC).date()
+
+
+def parse_icici_ppf_csv(
+    path: Path,
+    *,
+    account_platform: str = "ICICI PPF",
+    reference_date: date | None = None,
+) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
     raw_lines = strip_bom(path.read_text(encoding="utf-8", errors="replace")).splitlines()
     # Data starts at line index 10 (row 11) per plan; find header row containing "Transaction Date"
     start_idx = 0
@@ -35,6 +56,7 @@ def parse_icici_ppf_csv(path: Path, *, account_platform: str = "ICICI PPF") -> t
     if not reader.fieldnames:
         return [], []
 
+    ref = reference_date if reference_date is not None else _utc_today()
     txns: list[ParsedInvestmentTxn] = []
     balance = 0.0
 
@@ -56,6 +78,10 @@ def parse_icici_ppf_csv(path: Path, *, account_platform: str = "ICICI PPF") -> t
                 dt = datetime.strptime(date_s, "%d/%m/%Y").date()
             except ValueError:
                 continue
+
+        if dt > ref:
+            # Do not import or roll forward balances from future-dated rows.
+            continue
 
         dep = parse_indian_amount(str(dep_s))
         wdr = parse_indian_amount(str(wdr_s))
@@ -114,6 +140,19 @@ def parse_icici_ppf_csv(path: Path, *, account_platform: str = "ICICI PPF") -> t
 
     txns.sort(key=lambda t: t.txn_date)
 
+    # Deployed principal (your money only): contributions minus withdrawals.
+    # DIVIDEND rows are bank interest — excluded from this sum.
+    buy_sum = sum(t.total_amount for t in txns if t.txn_type == InvestmentTxnType.BUY.value)
+    sell_sum = sum(t.total_amount for t in txns if t.txn_type == InvestmentTxnType.SELL.value)
+    net_principal = round(buy_sum - sell_sum, 2)
+    principal = net_principal if net_principal > 0 else None
+
+    first_buy = next(
+        (t.txn_date for t in txns if t.txn_type == InvestmentTxnType.BUY.value),
+        None,
+    )
+    ppf_maturity = ppf_statutory_maturity_date(first_buy) if first_buy else None
+
     holding = ParsedHolding(
         symbol=None,
         name="Public Provident Fund (PPF)",
@@ -123,8 +162,10 @@ def parse_icici_ppf_csv(path: Path, *, account_platform: str = "ICICI PPF") -> t
         account_platform=account_platform,
         current_value=balance if balance else None,
         liquidity_class=LiquidityClass.ILLIQUID.value,
+        principal_amount=principal,
         interest_rate=PPF_RATE_ANNUAL_DEFAULT,
         compounding_frequency=CompoundingFrequency.ANNUALLY.value,
+        maturity_date=ppf_maturity,
         metadata={"source_file": path.name},
     )
     return [holding], txns
@@ -137,6 +178,15 @@ class ICICIPPFParser(BaseHoldingParser):
 
     def parse_path(self, path: str | Path) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
         p = Path(path)
-        if not p.is_file():
-            return [], []
-        return parse_icici_ppf_csv(p)
+        if p.is_file():
+            return parse_icici_ppf_csv(p)
+        if p.is_dir():
+            all_h: list[ParsedHolding] = []
+            all_t: list[ParsedInvestmentTxn] = []
+            for f in sorted(p.iterdir()):
+                if f.suffix.lower() == ".csv":
+                    h, t = parse_icici_ppf_csv(f)
+                    all_h.extend(h)
+                    all_t.extend(t)
+            return all_h, all_t
+        return [], []

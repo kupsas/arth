@@ -49,7 +49,10 @@ import type {
   MonthlyTrend,
   NetWorthGranularity,
   NetWorthHistory,
+  BatchReturnsResponse,
   NegativeSurplusResponse,
+  PortfolioValueTrend,
+  PortfolioValueTrendRange,
   PaginatedResponse,
   RecurringPattern,
   RecurringSummary,
@@ -692,6 +695,24 @@ export function fetchHoldingsSummary(params?: {
   as_of?: string;
 }): Promise<HoldingsSummary> {
   return get<HoldingsSummary>("/api/holdings/summary", params as QueryParams);
+}
+
+/** GET /api/holdings/portfolio-value-trend — monthly total portfolio value (holdings only). */
+export function fetchPortfolioValueTrend(params?: {
+  user_id?: string;
+  range?: PortfolioValueTrendRange;
+}): Promise<PortfolioValueTrend> {
+  return get<PortfolioValueTrend>("/api/holdings/portfolio-value-trend", {
+    user_id: params?.user_id,
+    range: params?.range ?? "12M",
+  } as QueryParams);
+}
+
+/** GET /api/holdings/batch-returns — XIRR / return payload for every active holding. */
+export function fetchBatchReturns(params?: {
+  user_id?: string;
+}): Promise<BatchReturnsResponse> {
+  return get<BatchReturnsResponse>("/api/holdings/batch-returns", params as QueryParams);
 }
 
 /** GET /api/holdings/history — time series for charts (start/end required). */

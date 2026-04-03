@@ -21,6 +21,7 @@ from api.services.price_feed import (
     mf_scheme_codes_for_holdings,
     normalize_equity_symbol,
     parse_amfi_nav_rows,
+    parse_amfi_navall,
     refresh_all_prices,
     upsert_prices,
 )
@@ -60,6 +61,37 @@ Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net A
     nav, d = m["119551"]
     assert nav == pytest.approx(13.0)
     assert d == datetime.date(2025, 3, 18)
+
+
+def test_parse_amfi_navall_attaches_category_and_amc() -> None:
+    """Section headers in NAVAll apply to following scheme rows until the next header."""
+    text = """
+Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net Asset Value;Date
+
+Open Ended Schemes(Equity Scheme - Large Cap Fund)
+
+SBI Mutual Fund
+
+103024;INF200K01305;;SBI LARGE & MIDCAP FUND;100.5000;15-Mar-2025
+"""
+    latest, meta = parse_amfi_navall(text)
+    assert latest["103024"][0] == pytest.approx(100.5)
+    cat, house = meta["103024"]
+    assert cat is not None and "Large Cap" in cat
+    assert house == "SBI Mutual Fund"
+
+
+def test_parse_amfi_nav_rows_legacy_wide_row_date_in_last_column() -> None:
+    """Older NAVAll-style rows can have extra empty columns; date may sit at the end."""
+    text = """
+Scheme Code;Scheme Name;ISIN Div Payout;ISIN Reinvest;Net Asset Value;;Date
+103024;SBI FUND;INF200K01305;;538.9405;;;03-Mar-2025
+"""
+    m = parse_amfi_nav_rows(text)
+    assert "103024" in m
+    nav, d = m["103024"]
+    assert nav == pytest.approx(538.9405)
+    assert d == datetime.date(2025, 3, 3)
 
 
 def test_bhav_symbol_to_close_udiff_header(tmp_path: Path) -> None:

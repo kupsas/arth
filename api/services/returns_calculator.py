@@ -295,6 +295,21 @@ def compute_returns(
 
     # Manual marks (halted stocks, private assets): no automated IRR.
     if vm == ValuationMethod.MANUAL.value:
+        # Consolidated NPS row: principal_amount + current_value → simple P&L (matches holdings headline).
+        if (
+            ac == AssetClass.NPS.value
+            and holding.principal_amount is not None
+            and float(holding.principal_amount) > 0
+        ):
+            tval = float(terminal) if terminal else 0.0
+            if tval > 0:
+                p0 = float(holding.principal_amount)
+                return {
+                    "method": "nps_balance_sheet",
+                    "annualized_return": None,
+                    "absolute_return": tval - p0,
+                    "message": None,
+                }
         return {
             "method": "manual",
             "annualized_return": None,

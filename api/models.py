@@ -502,6 +502,12 @@ class Holding(SQLModel, table=True):
     )
     fund_type: str | None = None
 
+    # Holdings page classification (enriched from NSE / AMFI; all optional).
+    sector: str | None = None  # NSE industry, e.g. "COMPUTERS - SOFTWARE"
+    market_cap_class: str | None = None  # LARGE_CAP | MID_CAP | SMALL_CAP
+    fund_category: str | None = None  # SEBI / AMFI bucket, e.g. "Equity Scheme - Large Cap Fund"
+    fund_house: str | None = None  # AMC name, e.g. "SBI Mutual Fund"
+
     user_id: str = Field(default="sashank", index=True)
     is_active: bool = Field(default=True, index=True)
     notes: str | None = None
@@ -531,6 +537,28 @@ class InvestmentTransaction(SQLModel, table=True):
     account_platform: str
     holding_id: int | None = Field(default=None, foreign_key="holdings.id")
     bank_transaction_id: int | None = Field(default=None, foreign_key="transactions.id")
+    notes: str | None = None
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# HoldingValueSnapshot — dated statement / balance snapshots (historical Layer 1)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class HoldingValueSnapshot(SQLModel, table=True):
+    __tablename__ = "holding_value_snapshots"
+    __table_args__ = (
+        Index("ix_holding_value_snapshot_holding_date", "holding_id", "snapshot_date", unique=True),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    holding_id: int = Field(foreign_key="holdings.id", index=True)
+    snapshot_date: datetime.date = Field(index=True)
+    value: float
+    source: str = "statement"
     notes: str | None = None
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),

@@ -84,6 +84,57 @@ export function formatDate(isoDate: string | null | undefined): string {
   }).format(d)
 }
 
+/** e.g. "27 March 2026" — for portfolio "as on" and other human-facing anchors. */
+export function formatCalendarDate(isoDate: string | null | undefined): string {
+  if (!isoDate) return "—"
+  const d = new Date(isoDate + "T00:00:00")
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(d)
+}
+
+/**
+ * Human-readable **time left** until a statutory maturity date (PPF column).
+ * Compares **local calendar dates** to match what you see on a bank statement.
+ *
+ * - Before maturity: e.g. "4 yrs 2 mo left" or "12 days left"
+ * - On/after maturity: "Matured"
+ */
+export function formatPpfMaturityRemaining(isoDate: string | null | undefined): string {
+  if (!isoDate) return "—"
+  const end = new Date(isoDate + "T00:00:00")
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  end.setHours(0, 0, 0, 0)
+  if (end.getTime() < start.getTime()) return "Matured"
+  if (end.getTime() === start.getTime()) return "Matures today"
+
+  let years = end.getFullYear() - start.getFullYear()
+  let months = end.getMonth() - start.getMonth()
+  let days = end.getDate() - start.getDate()
+  if (days < 0) {
+    months -= 1
+    const prevMonth = new Date(end.getFullYear(), end.getMonth(), 0)
+    days += prevMonth.getDate()
+  }
+  if (months < 0) {
+    years -= 1
+    months += 12
+  }
+
+  const parts: string[] = []
+  if (years > 0) parts.push(`${years} yr${years === 1 ? "" : "s"}`)
+  if (months > 0) parts.push(`${months} mo`)
+  if (parts.length === 0) {
+    const msPerDay = 86_400_000
+    const rawDays = Math.round((end.getTime() - start.getTime()) / msPerDay)
+    return `${rawDays} day${rawDays === 1 ? "" : "s"} left`
+  }
+  return `${parts.join(" ")} left`
+}
+
 /**
  * Formats an ISO date string as short month + year.
  * e.g. "2025-03-15" → "Mar '25"

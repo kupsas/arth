@@ -719,6 +719,18 @@ export type InvestmentLedgerTxnType =
   | "SWITCH_OUT";
 
 /**
+ * India listed-equity LT/ST split at CMP — FIFO lots, >12 calendar months = long-term.
+ * Mirrors ``EquityHoldingPeriodSplitOut`` in api/routes/holdings.py.
+ */
+export interface EquityHoldingPeriodSplit {
+  long_term_value_inr: number;
+  short_term_value_inr: number;
+  unallocated_value_inr: number;
+  fifo_quantity_after_txns: number;
+  basis_note: string;
+}
+
+/**
  * One portfolio row — mirrors ``HoldingOut`` in api/routes/holdings.py.
  * PII (folio / account identifiers) is never included in JSON responses.
  */
@@ -744,11 +756,37 @@ export interface Holding {
   coupon_rate: number | null;
   coupon_frequency: string | null;
   fund_type: string | null;
+  /** Enriched labels (optional until POST /api/holdings/enrich). */
+  sector?: string | null;
+  market_cap_class?: string | null;
+  fund_category?: string | null;
+  fund_house?: string | null;
   user_id: string;
   is_active: boolean;
   notes: string | null;
   created_at: string;
   updated_at: string;
+  /** B3 — current_value − cost basis when cost is known from the row. */
+  overall_gain?: number | null;
+  overall_gain_pct?: number | null;
+  /** B3 — weight vs full user portfolio (all active holdings). */
+  weight_pct?: number | null;
+  /** PPF — earliest BUY on linked ledger (drives statutory maturity). */
+  ppf_first_contribution_date?: string | null;
+  /** PPF — illustrative balance at maturity if no further deposits (see API note). */
+  ppf_projected_value_at_maturity?: number | null;
+  /** PPF — annual % used for that illustration (live Wikipedia sentence or fallback). */
+  ppf_projection_annual_rate_pct?: number | null;
+  /** PPF — where the rate came from (always verify vs GOI notification). */
+  ppf_projection_rate_note?: string | null;
+  /** NPS — illustrative balance at normal exit (60th birthday) when API env has ``DOB``. */
+  nps_projected_value_at_normal_exit?: number | null;
+  /** NPS — nominal annual % used for that illustration (``NPS_PROJECTION_ANNUAL_RATE_PCT`` or default). */
+  nps_projection_annual_rate_pct?: number | null;
+  /** NPS — short disclaimer string from the API. */
+  nps_projection_note?: string | null;
+  /** EQUITY + MARKET_PRICE — ledger FIFO split for LTCG-style buckets. */
+  equity_holding_period?: EquityHoldingPeriodSplit | null;
 }
 
 /**
@@ -789,13 +827,53 @@ export interface HoldingsAllocation {
   by_account_platform: Record<string, number>;
 }
 
+/** Per asset class — investments table (B3). */
+export interface AssetClassPortfolioRow {
+  investment: number;
+  current_value: number;
+  overall_gain: number | null;
+  overall_gain_pct: number | null;
+}
+
 /** GET /api/holdings/summary */
 export interface HoldingsSummary {
   net_worth: NetWorthSnapshot;
   allocation: HoldingsAllocation;
   /** e.g. largest_holding_pct, esop_pct — backend uses float | str | null. */
   concentration: Record<string, number | string | null>;
+  /** B3 — sum of holding economic values (Layer 1). */
+  total_portfolio_value: number;
+  total_cost_basis: number;
+  total_overall_gain: number | null;
+  total_overall_gain_pct: number | null;
+  asset_class_breakdown: Record<string, AssetClassPortfolioRow>;
 }
+
+/** GET /api/holdings/portfolio-value-trend */
+export interface PortfolioValueTrendPoint {
+  date: string;
+  total_portfolio_value: number;
+  pct_change_vs_prior_month: number | null;
+  /** INR per asset class key (e.g. EQUITY); sums to ~total_portfolio_value */
+  by_asset_class: Record<string, number>;
+}
+
+export interface PortfolioValueTrend {
+  range: string;
+  granularity: string;
+  points: PortfolioValueTrendPoint[];
+}
+
+/** Query param for GET /api/holdings/portfolio-value-trend — matches FastAPI ``range``. */
+export type PortfolioValueTrendRange = "3M" | "6M" | "12M" | "all";
+
+/** GET /api/holdings/batch-returns — map keyed by holding id string. */
+export interface BatchReturnsResponse {
+  returns: Record<string, Record<string, unknown>>;
+}
+
+/** GET /api/holdings/batch-returns */
+export type BatchHoldingReturnsMap = Record<string, Record<string, unknown>>;
 
 /** One point from GET /api/holdings/history. */
 export interface NetWorthHistoryPoint {
@@ -877,6 +955,8 @@ export interface HoldingsListFilters {
   account_platform?: string;
   liquidity_class?: string;
   is_active?: boolean;
+  /** When true, API returns archived rows (is_active=false). Default false. */
+  include_inactive?: boolean;
 }
 
 export type NetWorthGranularity = "daily" | "weekly" | "monthly";

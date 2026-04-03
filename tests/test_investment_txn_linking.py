@@ -15,6 +15,7 @@ os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode("ascii"))
 
 from api.models import Holding, InvestmentTransaction  # noqa: E402
 from pipeline.holding_parsers.base import ParsedInvestmentTxn  # noqa: E402
+from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME  # noqa: E402
 from pipeline.investment_txn_linking import (  # noqa: E402
     find_holding_id_for_parsed_txn,
     find_holding_id_for_stored_txn,
@@ -143,6 +144,61 @@ def test_find_equity_parsed_txn_by_symbol(session: Session) -> None:
         total_amount=14_000.0,
         account_platform="ICICI Direct",
         metadata={},
+    )
+    assert find_holding_id_for_parsed_txn(session, "u1", t) == h.id
+
+
+def test_find_ppf_parsed_txn_single_holding(session: Session) -> None:
+    h = Holding(
+        name="Public Provident Fund (PPF)",
+        asset_class=AssetClass.PPF.value,
+        account_platform="ICICI PPF",
+        valuation_method=ValuationMethod.FIXED_RETURN.value,
+        liquidity_class=LiquidityClass.ILLIQUID.value,
+        user_id="u1",
+        current_value=51_500.0,
+    )
+    session.add(h)
+    session.commit()
+    session.refresh(h)
+
+    t = ParsedInvestmentTxn(
+        txn_date=datetime.date(2024, 4, 5),
+        name="PPF contribution",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=1.0,
+        price_per_unit=5000.0,
+        total_amount=5000.0,
+        account_platform="ICICI PPF",
+        metadata={},
+    )
+    assert find_holding_id_for_parsed_txn(session, "u1", t) == h.id
+
+
+def test_find_nps_parsed_txn_by_pran(session: Session) -> None:
+    h = Holding(
+        name=NPS_CANONICAL_HOLDING_NAME,
+        asset_class=AssetClass.NPS.value,
+        account_platform="NPS (CRA)",
+        valuation_method=ValuationMethod.MANUAL.value,
+        liquidity_class=LiquidityClass.ILLIQUID.value,
+        user_id="u1",
+        current_value=20_000.0,
+        account_identifier_encrypted="333333333333",
+    )
+    session.add(h)
+    session.commit()
+    session.refresh(h)
+
+    t = ParsedInvestmentTxn(
+        txn_date=datetime.date(2023, 2, 14),
+        name="NPS employee contribution",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=1.0,
+        price_per_unit=50_000.0,
+        total_amount=50_000.0,
+        account_platform="NPS (CRA)",
+        metadata={"pran": "333333333333"},
     )
     assert find_holding_id_for_parsed_txn(session, "u1", t) == h.id
 

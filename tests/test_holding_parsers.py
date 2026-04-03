@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,10 @@ from pipeline.holding_parsers.icici_direct_equity import (  # noqa: E402
 from pipeline.holding_parsers.icici_direct_mf import parse_icici_direct_mf_path  # noqa: E402
 from pipeline.holding_parsers.icici_ppf import parse_icici_ppf_csv  # noqa: E402
 from pipeline.holding_parsers.liabilities import parse_bike_loan_txt  # noqa: E402
-from pipeline.holding_parsers.nps import parse_nps_statement  # noqa: E402
+from pipeline.holding_parsers.nps import (  # noqa: E402
+    NPS_CANONICAL_HOLDING_NAME,
+    parse_nps_statement,
+)
 from pipeline.holding_pipeline import ingest_holdings, validate_parsed_holding  # noqa: E402
 from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod  # noqa: E402
 
@@ -81,6 +85,9 @@ def test_icici_ppf_deposit_and_interest() -> None:
     holdings, txns = parse_icici_ppf_csv(path)
     assert len(holdings) == 1
     assert holdings[0].asset_class == AssetClass.PPF.value
+    # First BUY 05-Apr-2020 → FY end 31-Mar-2021 → statutory maturity +15y
+    assert holdings[0].maturity_date == date(2036, 3, 31)
+    assert holdings[0].principal_amount == pytest.approx(50000.0)
     types = {t.txn_type for t in txns}
     assert InvestmentTxnType.BUY.value in types
     assert InvestmentTxnType.DIVIDEND.value in types
@@ -89,8 +96,52 @@ def test_icici_ppf_deposit_and_interest() -> None:
 def test_nps_pran_and_schemes() -> None:
     path = FIXTURES / "nps_min.csv"
     holdings, txns = parse_nps_statement(path)
-    assert any(h.name.startswith("NPS Scheme") for h in holdings)
-    assert any(t.txn_type == InvestmentTxnType.BUY.value for t in txns)
+    assert len(holdings) == 1
+    assert holdings[0].name == NPS_CANONICAL_HOLDING_NAME
+    assert holdings[0].valuation_method == ValuationMethod.MANUAL.value
+    assert holdings[0].current_value == pytest.approx(150_000.0)
+    assert not txns
+
+
+def test_nps_contribution_section_employee_buy() -> None:
+    path = FIXTURES / "nps_contribution_section.csv"
+    holdings, txns = parse_nps_statement(path, reference_date=date(2026, 12, 31))
+    contrib = [t for t in txns if t.name == "NPS employee contribution"]
+    assert len(contrib) == 2
+    assert sum(t.total_amount for t in contrib) == pytest.approx(50228.60)
+    assert len(holdings) == 1
+    assert holdings[0].name == NPS_CANONICAL_HOLDING_NAME
+    assert holdings[0].current_value == pytest.approx(100_000.0)
+    assert holdings[0].principal_amount == pytest.approx(50228.60)
+
+
+def test_nps_as_of_phrase_also_sets_snapshot_metadata() -> None:
+    """Some CRA exports say 'as of' instead of 'as on' — same date pattern."""
+    from pipeline.holding_parsers.nps import _statement_as_on_max
+
+    lines = [
+        "Header",
+        "Value of your Holdings as of March 15 2025 (in Rs).",
+        "E,100000.00,500.00,200.00",
+    ]
+    assert _statement_as_on_max(lines) == date(2025, 3, 15)
+
+
+def test_nps_glued_as_on_row_sets_snapshot_metadata() -> None:
+    """CRA often glues ')as on Month D YYYY' to the previous field with no space."""
+    path = FIXTURES / "nps_glued_as_on.csv"
+    holdings, txns = parse_nps_statement(path, reference_date=date(2027, 1, 1))
+    assert len(holdings) == 1
+    assert not txns
+    assert holdings[0].metadata.get("value_as_of_date") == "2026-03-23"
+    assert holdings[0].current_value == pytest.approx(150_000.0)
+
+
+def test_nps_skips_holdings_when_statement_as_of_is_in_the_future() -> None:
+    path = FIXTURES / "nps_future_asof.csv"
+    holdings, txns = parse_nps_statement(path, reference_date=date(2026, 1, 1))
+    assert len(holdings) == 0
+    assert not txns
 
 
 def test_bike_loan_txt() -> None:

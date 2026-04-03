@@ -17,6 +17,7 @@ import {
 } from "@tanstack/react-query";
 
 import {
+  fetchBatchReturns,
   fetchHoldings,
   fetchHoldingsSummary,
   fetchHoldingDetail,
@@ -24,10 +25,12 @@ import {
   fetchLiabilities,
   fetchLiabilitySummary,
   fetchNetWorthHistory,
+  fetchPortfolioValueTrend,
   refreshPrices,
   updateHoldingValue,
 } from "@/lib/api";
 import type {
+  BatchReturnsResponse,
   Holding,
   HoldingDetail,
   HoldingValueUpdate,
@@ -39,6 +42,8 @@ import type {
   LiabilitySummary,
   NetWorthGranularity,
   NetWorthHistory,
+  PortfolioValueTrend,
+  PortfolioValueTrendRange,
   RefreshPricesResult,
 } from "@/lib/types";
 
@@ -71,6 +76,14 @@ export const portfolioKeys = {
 
   liabilitySummary: (userId?: string) =>
     [...portfolioKeys.all, "liability-summary", userId ?? ""] as const,
+
+  /** Monthly portfolio value series for the holdings area chart (range + user). */
+  valueTrend: (range: PortfolioValueTrendRange, userId?: string) =>
+    [...portfolioKeys.all, "value-trend", range, userId ?? ""] as const,
+
+  /** Cached batch XIRR / returns map for all holdings. */
+  batchReturns: (userId?: string) =>
+    [...portfolioKeys.all, "batch-returns", userId ?? ""] as const,
 };
 
 export function useHoldings(
@@ -92,6 +105,49 @@ export function useHoldingsSummary(
   return useQuery<HoldingsSummary>({
     queryKey: portfolioKeys.summary(params?.as_of, params?.user_id),
     queryFn: () => fetchHoldingsSummary(params),
+    staleTime: 60_000,
+    ...options,
+  });
+}
+
+/**
+ * Same data as useHoldingsSummary — name matches the rebuilt holdings page spec (B3
+ * extended summary with asset_class_breakdown). Shares the React Query cache.
+ */
+export function usePortfolioSummary(
+  params?: { user_id?: string; as_of?: string },
+  options?: Partial<UseQueryOptions<HoldingsSummary>>,
+) {
+  return useHoldingsSummary(params, options);
+}
+
+/** Area chart: GET /api/holdings/portfolio-value-trend with rolling window. */
+export function usePortfolioValueTrend(
+  range: PortfolioValueTrendRange,
+  params?: { user_id?: string },
+  options?: Partial<UseQueryOptions<PortfolioValueTrend>>,
+) {
+  const uid = params?.user_id;
+  return useQuery<PortfolioValueTrend>({
+    queryKey: portfolioKeys.valueTrend(range, uid),
+    queryFn: () =>
+      fetchPortfolioValueTrend({ user_id: uid, range }),
+    enabled: Boolean(uid),
+    staleTime: 60_000,
+    ...options,
+  });
+}
+
+/** One round-trip XIRR / return dict for every active holding (server-cached). */
+export function useBatchReturns(
+  params?: { user_id?: string },
+  options?: Partial<UseQueryOptions<BatchReturnsResponse>>,
+) {
+  const uid = params?.user_id;
+  return useQuery<BatchReturnsResponse>({
+    queryKey: portfolioKeys.batchReturns(uid),
+    queryFn: () => fetchBatchReturns({ user_id: uid }),
+    enabled: Boolean(uid),
     staleTime: 60_000,
     ...options,
   });

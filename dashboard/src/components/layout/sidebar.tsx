@@ -51,7 +51,7 @@ const NAV_ITEMS = [
     icon: Target,
   },
   {
-    label: "Portfolio",
+    label: "Holdings",
     href: "/portfolio",
     icon: PieChart,
   },

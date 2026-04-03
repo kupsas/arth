@@ -88,11 +88,34 @@ def normalize_equity_symbol(symbol: str) -> str:
 # Keep in sync with ``ICICI_SHORT_TO_NSE`` in ``pipeline.holding_parsers.icici_direct_equity``.
 _ICICI_BROKER_TO_NSE: dict[str, str] = {
     "APOTYR": "APOLLOTYRE",
+    "BAFINS": "BAJAJFINSV",
+    "BANMAH": "MAHABANK",
+    "BHAWIR": "BHARTIARTL",
+    "COCSHI": "COCHINSHIP",
+    "ENGIND": "ENGINERSIN",
+    "HDFAMC": "HDFCAMC",
+    "ICINIF": "NIFTYIETF",
     "INDOIL": "IOC",
+    "INTBUI": "INTERARCH",
+    "INTDES": "INTELLECT",
     "KANNER": "KANSAINER",
     "LARTOU": "LT",
+    "MAHGAS": "MGL",
+    "NAGCON": "NCC",
+    "NRBBEA": "NRBBEARING",
+    "PHOMIL": "PHOENIXLTD",
+    "PRAIN": "PRAJIND",
+    "PVRLIM": "PVRINOX",
     "RELIND": "RELIANCE",
+    "SANEN": "SANSERA",
+    "SHRTRA": "SHRIRAMFIN",
+    "SKFIND": "SKFINDIA",
+    # Tata Motors transactions in this DB are from Jun/Sep 2025 and fetch correctly
+    # under the legacy bhav symbol ``TATAMOTORS`` for those dates.
+    "TATMOT": "TATAMOTORS",
     "TATPOW": "TATAPOWER",
+    "VEDLIM": "VEDL",
+    "WHIIND": "WHIRLPOOL",
 }
 
 
@@ -118,29 +141,84 @@ def _parse_amfi_nav_date(s: str) -> datetime.date | None:
     return None
 
 
-def parse_amfi_nav_rows(text: str) -> dict[str, tuple[float, datetime.date]]:
-    """Map AMFI scheme code → (nav, as_of_date) using the latest row per code."""
+def _amfi_line_is_category_header(line: str) -> bool:
+    """AMFI section titles, e.g. ``Open Ended Schemes(Debt Scheme - ...)``."""
+    s = line.strip()
+    return (
+        s.startswith("Open Ended Schemes")
+        or s.startswith("Close Ended Schemes")
+        or s.startswith("Interval Fund Schemes")
+    )
+
+
+def _amfi_line_is_column_header(line: str) -> bool:
+    return line.strip().startswith("Scheme Code")
+
+
+def _try_parse_amfi_nav_row(parts: list[str]) -> tuple[str, float, datetime.date] | None:
+    """One NAV data row: scheme code, NAV, published date (supports legacy wider rows)."""
+    if len(parts) < 6:
+        return None
+    code = parts[0].strip()
+    if not code.isdigit():
+        return None
+    nav_s = parts[4].strip()
+    d = _parse_amfi_nav_date(parts[5].strip())
+    if d is None:
+        d = _parse_amfi_nav_date(parts[-1].strip())
+    if d is None:
+        return None
+    try:
+        nav = float(nav_s)
+    except ValueError:
+        return None
+    return code, nav, d
+
+
+def parse_amfi_navall(
+    text: str,
+) -> tuple[dict[str, tuple[float, datetime.date]], dict[str, tuple[str | None, str | None]]]:
+    """Parse AMFI ``NAVAll.txt``: latest NAV per scheme + (fund_category, fund_house) per code.
+
+    Category lines set the SEBI-style bucket; the next non-empty line without ``;`` is
+    usually the AMC name. Data rows carry scheme codes until the next category header.
+    """
     latest: dict[str, tuple[float, datetime.date]] = {}
+    meta: dict[str, tuple[str | None, str | None]] = {}
+    current_category: str | None = None
+    current_house: str | None = None
+
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith("Scheme Code"):
+        if not line:
             continue
+        if _amfi_line_is_column_header(line):
+            continue
+        if _amfi_line_is_category_header(line):
+            current_category = line.strip()
+            current_house = None
+            continue
+        if ";" not in line:
+            # AMC banner line, e.g. "SBI Mutual Fund"
+            if len(line) >= 4:
+                current_house = line.strip()
+            continue
+
         parts = [p.strip() for p in line.split(";")]
-        if len(parts) < 6:
+        parsed = _try_parse_amfi_nav_row(parts)
+        if parsed is None:
             continue
-        code, _, _, _name, nav_s, date_s = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
-        if not code.isdigit():
-            continue
-        d = _parse_amfi_nav_date(date_s)
-        if d is None:
-            continue
-        try:
-            nav = float(nav_s)
-        except ValueError:
-            continue
+        code, nav, d = parsed
         prev = latest.get(code)
         if prev is None or d >= prev[1]:
             latest[code] = (nav, d)
+            meta[code] = (current_category, current_house)
+    return latest, meta
+
+
+def parse_amfi_nav_rows(text: str) -> dict[str, tuple[float, datetime.date]]:
+    """Map AMFI scheme code → (nav, as_of_date) using the latest row per code."""
+    latest, _meta = parse_amfi_navall(text)
     return latest
 
 
@@ -276,10 +354,26 @@ def fetch_equity_prices_nse(
 
 def upsert_prices(session: Session, rows: Iterable[Price]) -> int:
     """Insert or update ``prices`` rows (unique on symbol+date). Returns count touched."""
+    rows_list = list(rows)
+    if not rows_list:
+        return 0
+
+    want_keys = {(p.symbol, p.date) for p in rows_list}
+    want_symbols = sorted({p.symbol for p in rows_list})
+    existing_rows = list(
+        session.exec(
+            select(Price).where(col(Price.symbol).in_(want_symbols))
+        ).all()
+    )
+    existing_by_key = {
+        (row.symbol, row.date): row
+        for row in existing_rows
+        if (row.symbol, row.date) in want_keys
+    }
+
     n = 0
-    for p in rows:
-        q = select(Price).where(Price.symbol == p.symbol, Price.date == p.date)
-        existing = session.exec(q).first()
+    for p in rows_list:
+        existing = existing_by_key.get((p.symbol, p.date))
         if existing:
             existing.close_price = p.close_price
             existing.source = p.source

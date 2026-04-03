@@ -5,21 +5,37 @@ Net worth and portfolio structure helpers (Phase A.1.3).
 principal (what you still owe).  Cash in bank accounts is *not* in the Holding
 table yet unless you model it — so this is "Layer 1" investable / tracked assets.
 
-When you pass ``as_of_date``, we try to rebuild market-valued rows from the
-``prices`` table (last close on or before that date). Fixed-return and manual
-rows still use the numbers stored on the ``Holding`` row — if you need true
-historical PPF balances, import or backfill that separately.
+When you pass ``as_of_date``, historical valuation is asset-class specific:
+
+- market-priced sleeves replay quantities from linked ``investment_transactions``
+  and mark them with the latest ``prices`` row on or before the anchor date
+- PPF uses linked ledger rows (contribution / interest / withdrawal)
+- NPS uses dated statement snapshots imported from CRA files
+- unsupported sleeves still fall back to the stored holding row, gated by the
+  holding's creation date so we do not show obvious pre-creation value
 """
 
 from __future__ import annotations
 
+import calendar
 import datetime
 from collections import defaultdict
 from typing import Literal
 
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from api.models import Holding, Liability, Price
+from api.services.historical_portfolio import (
+    historical_market_assets_value,
+    historical_market_holding_value,
+    historical_nps_holding_value,
+    historical_ppf_holding_value,
+    holding_created_on_or_before,
+    is_excluded_historical_symbol,
+    is_market_replay_holding,
+    market_position_quantities_as_of,
+)
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.models import AssetClass, ValuationMethod
 
@@ -59,6 +75,15 @@ def _latest_price_on_or_before(
     return float(row) if row is not None else None
 
 
+def holding_value(
+    session: Session,
+    h: Holding,
+    as_of_date: datetime.date | None = None,
+) -> float:
+    """Public: economic value of one holding (same rules as net worth snapshots)."""
+    return _holding_value(session, h, as_of_date)
+
+
 def _holding_value(
     session: Session,
     h: Holding,
@@ -68,7 +93,25 @@ def _holding_value(
     if as_of is None:
         return float(h.current_value or 0.0)
 
-    # Manual / fixed snapshots: we do not time-travel without extra history.
+    if is_excluded_historical_symbol(h.symbol):
+        return 0.0
+
+    # PPF, NPS, and market-replay have transaction/snapshot-level dates that
+    # naturally handle "does this holding exist as of X?" — no created_at gate.
+    if h.asset_class == AssetClass.PPF.value:
+        return historical_ppf_holding_value(session, h, as_of=as_of)
+
+    if h.asset_class == AssetClass.NPS.value:
+        return historical_nps_holding_value(session, h, as_of=as_of)
+
+    if is_market_replay_holding(h):
+        return historical_market_holding_value(session, h, as_of=as_of)
+
+    # For remaining holdings (manual / fixed-return) we have no historical txn
+    # data, so gate on created_at to avoid projecting current_value into the past.
+    if not holding_created_on_or_before(h, as_of):
+        return 0.0
+
     if h.valuation_method in (
         ValuationMethod.MANUAL.value,
         ValuationMethod.FIXED_RETURN.value,
@@ -96,6 +139,82 @@ def _holding_value(
     return float(h.quantity) * px
 
 
+def _historical_total_assets(
+    session: Session,
+    *,
+    as_of_date: datetime.date,
+    user_id: str | None,
+) -> float:
+    """Historical gross assets for the trend chart and net-worth history.
+
+    Market-priced replayable sleeves are handled in one aggregate pass so sold
+    historical positions still appear before exit, even if their holding row is
+    inactive today.
+    """
+    uid = user_id.strip() if user_id and user_id.strip() else None
+    total = 0.0
+    if uid:
+        total += historical_market_assets_value(session, user_id=uid, as_of=as_of_date)
+
+    for h in _active_holdings(session, user_id):
+        if is_market_replay_holding(h):
+            continue
+        total += _holding_value(session, h, as_of_date)
+    return round(total, 2)
+
+
+def historical_asset_class_values(
+    session: Session,
+    *,
+    as_of_date: datetime.date,
+    user_id: str | None,
+) -> dict[str, float]:
+    """Same valuation rules as ``_historical_total_assets``, split by ``asset_class``.
+
+    Market replay positions are bucketed by the asset class on the position key;
+    PPF / NPS / manual / etc. use each holding's ``asset_class``.
+    """
+    uid = user_id.strip() if user_id and user_id.strip() else None
+    by_ac: dict[str, float] = defaultdict(float)
+    if uid:
+        positions = market_position_quantities_as_of(session, user_id=uid, as_of=as_of_date)
+        for (asset_class, symbol), qty in positions.items():
+            px = _latest_price_on_or_before(session, symbol, as_of_date)
+            if px is None:
+                continue
+            by_ac[asset_class] += qty * px
+
+    for h in _active_holdings(session, user_id):
+        if is_market_replay_holding(h):
+            continue
+        v = _holding_value(session, h, as_of_date)
+        by_ac[h.asset_class] += v
+
+    return {k: round(v, 2) for k, v in by_ac.items() if v > 1e-9}
+
+
+def portfolio_live_as_of_date(
+    session: Session,
+    *,
+    user_id: str | None = None,
+) -> datetime.date | None:
+    """Latest ``last_valued_date`` among active market-priced holdings.
+
+    After POST /prices/refresh, marks are written with the NAV/bhav row date — so
+    this stays on e.g. 27 Mar until the next refresh moves it forward, even if the
+    user opens the app days later without refreshing.
+    """
+    clauses: list = [
+        Holding.is_active == True,  # noqa: E712
+        col(Holding.last_valued_date).isnot(None),
+        Holding.valuation_method == ValuationMethod.MARKET_PRICE.value,
+    ]
+    if user_id:
+        clauses.append(Holding.user_id == user_id)
+    q = select(func.max(Holding.last_valued_date)).where(*clauses)
+    return session.exec(q).first()
+
+
 def compute_net_worth(
     session: Session,
     *,
@@ -103,18 +222,27 @@ def compute_net_worth(
     user_id: str | None = None,
 ) -> dict[str, float | str | None]:
     """Total assets, liabilities, and net (assets − debt)."""
-    holdings = _active_holdings(session, user_id)
     liabilities = _active_liabilities(session, user_id)
-
-    assets = sum(_holding_value(session, h, as_of_date) for h in holdings)
+    if as_of_date is None:
+        holdings = _active_holdings(session, user_id)
+        assets = sum(_holding_value(session, h, as_of_date) for h in holdings)
+    else:
+        assets = _historical_total_assets(session, as_of_date=as_of_date, user_id=user_id)
     debt = sum(float(x.principal_outstanding) for x in liabilities)
     net = assets - debt
+
+    as_of_out: str | None
+    if as_of_date is not None:
+        as_of_out = as_of_date.isoformat()
+    else:
+        live = portfolio_live_as_of_date(session, user_id=user_id)
+        as_of_out = live.isoformat() if live is not None else None
 
     return {
         "total_assets": round(assets, 2),
         "total_liabilities": round(debt, 2),
         "net_worth": round(net, 2),
-        "as_of": as_of_date.isoformat() if as_of_date else None,
+        "as_of": as_of_out,
     }
 
 
@@ -179,6 +307,12 @@ def compute_concentration(
     }
 
 
+def _last_day_of_month(year: int, month: int) -> datetime.date:
+    """Calendar last day (handles leap years)."""
+    last = calendar.monthrange(year, month)[1]
+    return datetime.date(year, month, last)
+
+
 def _iter_period_starts(start: datetime.date, end: datetime.date, g: Granularity) -> list[datetime.date]:
     """Generate anchor dates for history (inclusive of range endpoints)."""
     out: list[datetime.date] = []
@@ -198,23 +332,32 @@ def _iter_period_starts(start: datetime.date, end: datetime.date, g: Granularity
         if out and out[-1] != end:
             out.append(end)
         return out
-    # monthly — 1st of each month overlapping the window, plus end
+    # monthly — last calendar day of each month in range; for the month containing
+    # `end`, use `end` (typically today) so the current month is "latest day so far".
     y, m = start.year, start.month
-    while True:
-        d = datetime.date(y, m, 1)
-        if d > end:
-            break
-        if d >= start:
-            out.append(d)
+    end_ym = (end.year, end.month)
+    while (y, m) <= end_ym:
+        if (y, m) == end_ym:
+            anchor = end
+        else:
+            anchor = _last_day_of_month(y, m)
+        if anchor >= start and anchor <= end:
+            out.append(anchor)
         if m == 12:
-            y += 1
-            m = 1
+            y, m = y + 1, 1
         else:
             m += 1
-    if end not in out:
-        out.append(end)
     out.sort()
     return out
+
+
+def net_worth_history_anchor_dates(
+    start_date: datetime.date,
+    end_date: datetime.date,
+    granularity: Granularity = "monthly",
+) -> list[datetime.date]:
+    """Public wrapper for monthly/daily/weekly anchor dates used by history APIs."""
+    return _iter_period_starts(start_date, end_date, granularity)
 
 
 def compute_net_worth_history(

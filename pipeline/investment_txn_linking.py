@@ -19,6 +19,7 @@ from sqlmodel import Session, col, select
 from api.models import Holding, InvestmentTransaction
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.holding_parsers.base import ParsedInvestmentTxn
+from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME
 from pipeline.models import AssetClass
 
 logger = logging.getLogger(__name__)
@@ -123,10 +124,75 @@ def _match_mf_holding(
     return None
 
 
+def _pick_nps_holding_id(matched: list[Holding]) -> int | None:
+    """Prefer the consolidated NPS row; else a single legacy row; else lowest id."""
+    if not matched:
+        return None
+    canon = [h for h in matched if h.name == NPS_CANONICAL_HOLDING_NAME]
+    if len(canon) == 1 and canon[0].id is not None:
+        return canon[0].id
+    if len(matched) == 1 and matched[0].id is not None:
+        return matched[0].id
+    if canon:
+        ids = [c.id for c in canon if c.id is not None]
+        return min(ids) if ids else None
+    ids = [h.id for h in matched if h.id is not None]
+    return min(ids) if ids else None
+
+
+def _nps_holdings_matching_pran(hs: list[Holding], pran: str) -> list[Holding]:
+    pran = pran.strip()
+    return [
+        h
+        for h in hs
+        if (h.folio_number_encrypted and str(h.folio_number_encrypted).strip() == pran)
+        or (h.account_identifier_encrypted and str(h.account_identifier_encrypted).strip() == pran)
+    ]
+
+
 def find_holding_id_for_parsed_txn(session: Session, user_id: str, t: ParsedInvestmentTxn) -> int | None:
     """Resolve ``holding_id`` for a parsed ledger row (call after holdings upserted)."""
     platform = (t.account_platform or "").strip()
     if not platform:
+        return None
+
+    # Single PPF account per platform (ICICI / SBI export) → attach all ledger rows.
+    if platform.endswith(" PPF") or platform == "ICICI PPF":
+        hs = list(
+            session.exec(
+                select(Holding).where(
+                    Holding.user_id == user_id,
+                    Holding.account_platform == platform,
+                    Holding.asset_class == AssetClass.PPF.value,
+                    Holding.is_active == True,  # noqa: E712
+                )
+            ).all()
+        )
+        if len(hs) == 1 and hs[0].id is not None:
+            return hs[0].id
+        return None
+
+    # NPS: PRAN on folio or account_identifier; multiple legacy E/C/G → pick canonical or min id.
+    if platform == "NPS (CRA)":
+        meta = t.metadata or {}
+        pran = str(meta.get("pran") or "").strip()
+        hs = list(
+            session.exec(
+                select(Holding).where(
+                    Holding.user_id == user_id,
+                    Holding.account_platform == platform,
+                    Holding.asset_class == AssetClass.NPS.value,
+                    Holding.is_active == True,  # noqa: E712
+                )
+            ).all()
+        )
+        if pran:
+            matched = _nps_holdings_matching_pran(hs, pran)
+            hid = _pick_nps_holding_id(matched)
+            if hid is not None:
+                return hid
+        if len(hs) == 1 and hs[0].id is not None:
+            return hs[0].id
         return None
 
     if platform == "ICICI Direct MF":
@@ -172,6 +238,43 @@ def find_holding_id_for_stored_txn(
     """Resolve ``holding_id`` for an existing DB row (historical backfill)."""
     platform = (txn.account_platform or "").strip()
     if not platform:
+        return None
+
+    if platform.endswith(" PPF") or platform == "ICICI PPF":
+        hs = list(
+            session.exec(
+                select(Holding).where(
+                    Holding.user_id == user_id,
+                    Holding.account_platform == platform,
+                    Holding.asset_class == AssetClass.PPF.value,
+                    Holding.is_active == True,  # noqa: E712
+                )
+            ).all()
+        )
+        if len(hs) == 1 and hs[0].id is not None:
+            return hs[0].id
+        return None
+
+    if platform == "NPS (CRA)":
+        pran_m = re.search(r"PRAN\D*(\d{12})\b", txn.notes or "", re.I)
+        pran = pran_m.group(1) if pran_m else ""
+        hs = list(
+            session.exec(
+                select(Holding).where(
+                    Holding.user_id == user_id,
+                    Holding.account_platform == platform,
+                    Holding.asset_class == AssetClass.NPS.value,
+                    Holding.is_active == True,  # noqa: E712
+                )
+            ).all()
+        )
+        if pran:
+            matched = _nps_holdings_matching_pran(hs, pran)
+            hid = _pick_nps_holding_id(matched)
+            if hid is not None:
+                return hid
+        if len(hs) == 1 and hs[0].id is not None:
+            return hs[0].id
         return None
 
     if platform == "ICICI Direct MF":
