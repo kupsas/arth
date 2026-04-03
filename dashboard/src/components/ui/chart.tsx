@@ -104,6 +104,34 @@ ${colorConfig
 
 const ChartTooltip = RechartsPrimitive.Tooltip
 
+/**
+ * Custom <Tooltip content={...} /> render props. Recharts v3 types these on the
+ * content callback, not on <Tooltip /> itself, so we declare them explicitly.
+ */
+type ChartTooltipContentRenderProps = {
+  active?: boolean
+  labelClassName?: string
+  payload?: ReadonlyArray<{
+    name?: string | number
+    dataKey?: string | number
+    value?: unknown
+    color?: string
+    type?: string
+    payload?: { fill?: string; [key: string]: unknown }
+  }>
+  label?: string | number
+  labelFormatter?: (label: unknown, payload: unknown) => React.ReactNode
+  formatter?: (
+    value: unknown,
+    name: unknown,
+    item: unknown,
+    index: number,
+    payload: unknown
+  ) => React.ReactNode
+  /** Passed through from Tooltip; rarely needed in custom content. */
+  color?: string
+}
+
 function ChartTooltipContent({
   active,
   payload,
@@ -118,7 +146,7 @@ function ChartTooltipContent({
   color,
   nameKey,
   labelKey,
-}: React.ComponentProps<typeof RechartsPrimitive.Tooltip> &
+}: ChartTooltipContentRenderProps &
   React.ComponentProps<"div"> & {
     hideLabel?: boolean
     hideIndicator?: boolean
@@ -184,7 +212,8 @@ function ChartTooltipContent({
           .map((item, index) => {
             const key = `${nameKey || item.name || item.dataKey || "value"}`
             const itemConfig = getPayloadConfigFromPayload(config, item, key)
-            const indicatorColor = color || item.payload.fill || item.color
+            const indicatorColor =
+              color || item.payload?.fill || item.color
 
             return (
               <div
@@ -234,9 +263,11 @@ function ChartTooltipContent({
                           {itemConfig?.label || item.name}
                         </span>
                       </div>
-                      {item.value && (
+                      {item.value != null && item.value !== "" && (
                         <span className="font-mono font-medium text-foreground tabular-nums">
-                          {item.value.toLocaleString()}
+                          {typeof item.value === "number"
+                            ? item.value.toLocaleString()
+                            : String(item.value)}
                         </span>
                       )}
                     </div>
@@ -258,11 +289,18 @@ function ChartLegendContent({
   payload,
   verticalAlign = "bottom",
   nameKey,
-}: React.ComponentProps<"div"> &
-  Pick<RechartsPrimitive.LegendProps, "payload" | "verticalAlign"> & {
-    hideIcon?: boolean
-    nameKey?: string
-  }) {
+}: React.ComponentProps<"div"> & {
+  /** Legend items from Recharts (v3 LegendProps typing differs; keep explicit). */
+  payload?: ReadonlyArray<{
+    value?: string | number
+    dataKey?: string | number
+    color?: string
+    type?: string
+  }>
+  verticalAlign?: "top" | "bottom" | "middle"
+  hideIcon?: boolean
+  nameKey?: string
+}) {
   const { config } = useChart()
 
   if (!payload?.length) {

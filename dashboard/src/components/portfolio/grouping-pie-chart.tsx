@@ -128,13 +128,17 @@ export function GroupingPieChart({
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value: number, _name, item) => {
+                    formatter={(value, _name, item) => {
+                      const amt =
+                        typeof value === "number"
+                          ? value
+                          : Number(value ?? 0);
                       const row = item?.payload as {
                         pct?: number;
                       };
                       const pct =
                         row?.pct != null ? formatPercent(row.pct, 1) : "";
-                      return [`${formatCurrency(value)} (${pct})`, "Value"];
+                      return [`${formatCurrency(amt)} (${pct})`, "Value"];
                     }}
                   />
                 </PieChart>

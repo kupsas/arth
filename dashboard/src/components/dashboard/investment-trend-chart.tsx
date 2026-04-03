@@ -44,8 +44,9 @@ function InvestmentNetTooltip({
   payload,
 }: {
   active?: boolean
-  label?: string
-  payload?: { payload?: InvestmentTrendRow }[]
+  /** Recharts Tooltip passes `label` as string | number depending on axis. */
+  label?: string | number
+  payload?: readonly { payload?: InvestmentTrendRow }[]
 }) {
   if (!active || !payload?.length) return null
   const row = payload[0]?.payload

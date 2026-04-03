@@ -134,7 +134,13 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                         ))}
                       </Pie>
                       <Tooltip
-                        formatter={(v: number) => [formatPercent(v), "Weight"]}
+                        formatter={(v) =>
+                          [
+                            formatPercent(
+                              typeof v === "number" ? v : Number(v ?? 0),
+                            ),
+                            "Weight",
+                          ]}
                         labelFormatter={(name) => labelPretty(String(name))}
                       />
                     </PieChart>
@@ -165,7 +171,12 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                           name={labelPretty(key)}
                         />
                       ))}
-                      <Tooltip formatter={(v: number) => formatPercent(v)} />
+                      <Tooltip
+                        formatter={(v) =>
+                          formatPercent(
+                            typeof v === "number" ? v : Number(v ?? 0),
+                          )}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                   <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -211,7 +222,13 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                         ))}
                       </Pie>
                       <Tooltip
-                        formatter={(v: number) => [formatPercent(v), "Weight"]}
+                        formatter={(v) =>
+                          [
+                            formatPercent(
+                              typeof v === "number" ? v : Number(v ?? 0),
+                            ),
+                            "Weight",
+                          ]}
                         labelFormatter={(name) => String(name)}
                       />
                     </PieChart>

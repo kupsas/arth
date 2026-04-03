@@ -100,11 +100,16 @@ export function AssetAllocationDonut({ userId }: AssetAllocationDonutProps) {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value: number, _n, item) => {
+                    formatter={(value, _n, item) => {
+                      // Recharts v3 types `value` as possibly undefined; coerce for display.
+                      const amt =
+                        typeof value === "number"
+                          ? value
+                          : Number(value ?? 0);
                       const row = item?.payload as { pct?: number };
                       const p =
                         row?.pct != null ? formatPercent(row.pct, 1) : "";
-                      return [`${formatCurrency(value)} (${p})`, "Value"];
+                      return [`${formatCurrency(amt)} (${p})`, "Value"];
                     }}
                   />
                 </PieChart>

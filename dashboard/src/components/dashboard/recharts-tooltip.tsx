@@ -35,7 +35,8 @@ export function RechartsTooltipCard({
   totalLabel = "Total",
 }: {
   active?: boolean
-  payload?: RechartsTooltipPayload[]
+  /** Recharts v3 types `payload` as readonly; keep compatible with spread from <Tooltip content={...} />. */
+  payload?: readonly RechartsTooltipPayload[]
   label?: string | number
   labelPrefix?: string
   /** If omitted, values render as plain strings. */
