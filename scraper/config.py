@@ -73,6 +73,13 @@ _HDFC_BANK_ACCOUNTS: dict[str, dict] = {
     },
 }
 
+# HDFC Card Statement PDF emails — same last-4 → account map as InstaAlerts, longer
+# first-run lookback so a monthly statement is not missed when onboarding a new sender.
+_HDFC_CC_STATEMENT_ACCOUNTS = {
+    "1905": _HDFC_BANK_ACCOUNTS["1905"],
+    "5778": _HDFC_BANK_ACCOUNTS["5778"],
+}
+
 BANK_SENDERS: dict[str, dict] = {
     "alerts@hdfcbank.net": {
         "parser_key": "hdfc_bank",
@@ -93,10 +100,23 @@ BANK_SENDERS: dict[str, dict] = {
     "estatement@icicibank.com": {
         "parser_key": "icici_statement",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
+        "first_run_lookback_days": 45,
     },
     "customernotification@icicibank.com": {
         "parser_key": "icici_statement",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
+        "first_run_lookback_days": 45,
+    },
+    # Credit card monthly PDF — From varies (.net vs .bank.in); see email-statement plan.
+    "emailstatements.cards@hdfcbank.net": {
+        "parser_key": "hdfc_cc_statement",
+        "accounts": _HDFC_CC_STATEMENT_ACCOUNTS,
+        "first_run_lookback_days": 45,
+    },
+    "emailstatements.cards@hdfcbank.bank.in": {
+        "parser_key": "hdfc_cc_statement",
+        "accounts": _HDFC_CC_STATEMENT_ACCOUNTS,
+        "first_run_lookback_days": 45,
     },
 }
 

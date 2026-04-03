@@ -38,7 +38,7 @@ from pipeline.llm_classifier import classify_llm
 from pipeline.models import ParsedTransaction
 from pipeline.rules_classifier import classify_rules
 from pipeline.transformer import transform
-from scraper.config import ALL_SENDERS, SCRAPER_LOOKBACK_DAYS
+from scraper.config import ALL_SENDERS, BANK_SENDERS, SCRAPER_LOOKBACK_DAYS
 from scraper.email_router import _normalise_sender, find_parser
 from scraper.gmail_client import GmailClient, GmailMessage
 
@@ -95,8 +95,17 @@ def _get_lookback_date(session: Session, sender: str) -> datetime.date:
         # Subtract 1 day to catch any email from the same day we last processed.
         return (latest.received_at - datetime.timedelta(days=1)).date()
 
-    # First run — look back a fixed window to bootstrap the history.
-    return datetime.date.today() - datetime.timedelta(days=SCRAPER_LOOKBACK_DAYS)
+    # First run — look back a fixed window to bootstrap the history.  Statement
+    # senders (monthly PDFs) can override with ``first_run_lookback_days`` in
+    # :data:`scraper.config.BANK_SENDERS` so the first poll is not shorter than a
+    # typical billing cycle.
+    days = SCRAPER_LOOKBACK_DAYS
+    for raw_addr, cfg in BANK_SENDERS.items():
+        if _normalise_sender(raw_addr) == sender:
+            days = int(cfg.get("first_run_lookback_days", days))
+            break
+
+    return datetime.date.today() - datetime.timedelta(days=days)
 
 
 def _get_processed_ids(session: Session) -> set[str]:

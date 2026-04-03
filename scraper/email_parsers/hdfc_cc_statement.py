@@ -1,0 +1,143 @@
+"""
+HDFC Bank **credit card statement PDF** emails (Swiggy 1905, Diners 5778, etc.).
+
+From addresses vary by product era (``.net`` vs ``.bank.in``) — both are registered in
+``scraper/config.py``.  We decrypt with ``HDFC_CC_STATEMENT_PASSWORD``, parse with
+:class:`~pipeline.parsers.hdfc_cc_pdf.HDFCCreditCardPdfParser`, then stamp the correct
+``account_id`` / ``source_key`` for the card inferred from the subject (and PDF text
+as a fallback).
+
+Subject routing (order matters — most specific first in :meth:`can_parse`):
+
+1. **Diners Privilege** (current product name) — subject contains ``Diners Privilege``.
+2. **Diners Club International** (legacy) — subject contains ``Diners Club``.
+3. **Swiggy / 1905** — subject contains ``Swiggy``.
+4. Otherwise, if the subject still looks like an HDFC CC statement, we inspect the
+   decrypted PDF for ``…XXXX…1905`` vs ``…5778`` and map to the right account.
+"""
+
+from __future__ import annotations
+
+import datetime
+import logging
+import os
+import re
+from typing import ClassVar
+
+import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
+
+from pipeline.models import ParsedTransaction
+from pipeline.parsers.hdfc_cc_pdf import HDFCCreditCardPdfParser
+from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from scraper.pdf_utils import decrypt_pdf
+
+logger = logging.getLogger(__name__)
+
+def _pdf_card_tail(pdf_path) -> str | None:
+    """Read page 1 text and return the last 4 digits of the printed card number.
+
+    Example line: ``Credit Card No. 526873XXXXXX1905`` → ``1905`` (not the postal code
+    elsewhere on the page).
+    """
+    import pdfplumber
+
+    with pdfplumber.open(pdf_path) as pdf:
+        if not pdf.pages:
+            return None
+        text = pdf.pages[0].extract_text() or ""
+
+    # Do not allow ``\\s`` in the capture — PDF text can break right after ``1905`` and
+    # pull ``5042`` from the address line into the same match.
+    m = re.search(
+        r"Credit\s+Card\s+No\.\s*([0-9X]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        digits = "".join(c for c in m.group(1) if c.isdigit())
+        if len(digits) >= 4:
+            return digits[-4:]
+
+    # Fallback: masked PAN on one line
+    for line in text.splitlines():
+        if "XXXX" in line and "Credit" not in line:
+            compact = line.replace(" ", "")
+            m2 = re.search(r"(\d{4})\s*$", compact)
+            if m2 and "XXXX" in compact:
+                return m2.group(1)
+    return None
+
+
+def _card_last4_from_subject(subject: str) -> str | None:
+    sl = subject.lower()
+    if "diners privilege" in sl or "diners club" in sl:
+        return "5778"
+    if "swiggy" in sl:
+        return "1905"
+    return None
+
+
+class HDFCCCStatementEmailParser(BaseStatementEmailParser):
+    """Decrypt HDFC CC PDF attachments and parse with :class:`HDFCCreditCardPdfParser`."""
+
+    parse_type: ClassVar[str] = "attachment"
+
+    def can_parse(self, sender: str, subject: str) -> bool:
+        # Sender is scoped in ``EMAIL_PARSER_REGISTRY`` to ``emailstatements.cards@…``
+        # only — a broad subject match is enough (Swiggy, Diners Club, etc.).
+        return "credit card statement" in subject.lower()
+
+    def parse_attachment(
+        self,
+        pdf_bytes: bytes,
+        received_date: datetime.date,
+        *,
+        email_sender: str = "",
+        email_subject: str = "",
+    ) -> list[ParsedTransaction]:
+        password = os.getenv("HDFC_CC_STATEMENT_PASSWORD") or os.getenv(
+            "HDFC_STATEMENT_PASSWORD", ""
+        )
+        if not password:
+            logger.error(
+                "HDFC_CC_STATEMENT_PASSWORD is not set — cannot decrypt HDFC CC PDF."
+            )
+            return []
+
+        last4 = _card_last4_from_subject(email_subject or "")
+        decrypted = decrypt_pdf(pdf_bytes, password)
+        try:
+            if last4 is None:
+                last4 = _pdf_card_tail(decrypted)
+            if last4 is None or last4 not in self.accounts:
+                logger.warning(
+                    "Could not map HDFC CC PDF to an account "
+                    "(last4=%r, known=%s, subject=%r)",
+                    last4,
+                    list(self.accounts.keys()),
+                    (email_subject or "")[:100],
+                )
+                return []
+
+            entry = self.accounts[last4]
+            account_id = entry["account_id"]
+            source_key = entry["source_key"]
+
+            rows = HDFCCreditCardPdfParser().parse(decrypted)
+            return [_stamp(r, account_id, source_key) for r in rows]
+        finally:
+            decrypted.unlink(missing_ok=True)
+
+
+def _stamp(pt: ParsedTransaction, account_id: str, source_key: str) -> ParsedTransaction:
+    """Attach orchestrator metadata — same pattern as ICICI statement emails."""
+    return pt.model_copy(
+        update={
+            "metadata": {
+                **pt.metadata,
+                "account_id": account_id,
+                "source_key": source_key,
+                "email_source": "hdfc_cc_statement_pdf",
+            }
+        }
+    )

@@ -26,11 +26,14 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import logging
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.models import PipelineRun, Transaction
 from pipeline.models import CanonicalTransaction
+
+logger = logging.getLogger(__name__)
 
 
 def compute_content_hash(txn: CanonicalTransaction) -> str:
@@ -67,6 +70,38 @@ def _resolve_value(txn: CanonicalTransaction, attr: str) -> str | None:
     if val is None:
         return None
     return val.value if hasattr(val, "value") else str(val)
+
+
+def _find_statement_match_for_email(
+    session: Session,
+    txn: CanonicalTransaction,
+    account_id: str,
+) -> Transaction | None:
+    """If a CSV/statement row already represents this spend, skip inserting an email PDF duplicate.
+
+    Same core idea as :func:`_find_email_match`, inverted: email ingest checks for an
+    existing **statement** or **reconciled** row with the same account, amount,
+    direction, and txn_date within ±1 day.  Narration differs (PDF vs export), so
+    :func:`compute_content_hash` will not dedupe.
+
+    If **more than one** row matches (e.g. two identical Swiggy orders same day),
+    returns ``None`` and we **insert** the email row — safer than dropping a real
+    second charge.
+    """
+    one_day = datetime.timedelta(days=1)
+    stmt = (
+        select(Transaction)
+        .where(Transaction.account_id == account_id)
+        .where(Transaction.amount == float(txn.amount))
+        .where(Transaction.direction == txn.direction.value)
+        .where(Transaction.txn_date >= txn.txn_date - one_day)
+        .where(Transaction.txn_date <= txn.txn_date + one_day)
+        .where(col(Transaction.source_type).in_(["statement", "reconciled"]))
+    )
+    rows = list(session.exec(stmt).all())
+    if len(rows) == 1:
+        return rows[0]
+    return None
 
 
 def _find_email_match(
@@ -175,6 +210,14 @@ def write_to_db(
         *upgraded* with the richer statement data instead of inserting a duplicate.
         This is the mechanism that prevents statement uploads from creating ghost
         duplicates of transactions the email scraper already captured.
+
+    Email path (inverse):
+        When source_type="email", before inserting we check whether a **statement**
+        or **reconciled** row already exists with the same account, amount,
+        direction, and date ±1 day (:func:`_find_statement_match_for_email`).  If
+        exactly one match exists, the email row is **skipped** so PDF/CSV duplicates
+        do not flood the DB.  ``processed_emails`` is unchanged — that ledger only
+        controls whether Gmail is fetched again.
     """
     # Create the audit-trail row first so we can link transactions to it.
     run = PipelineRun(
@@ -240,6 +283,21 @@ def write_to_db(
                     date_min = txn.txn_date
                 if date_max is None or txn.txn_date > date_max:
                     date_max = txn.txn_date
+                continue
+
+        # ── Path B2: email → skip if a statement row already captured this txn ───
+        if source_type == "email":
+            account_id = txn.account_id
+            statement_dup = _find_statement_match_for_email(session, txn, account_id)
+            if statement_dup is not None:
+                logger.debug(
+                    "Skipping email insert (statement already exists): "
+                    "existing_id=%s account=%s amt=%s date=%s",
+                    statement_dup.id,
+                    account_id,
+                    txn.amount,
+                    txn.txn_date,
+                )
                 continue
 
         # ── Path C: brand-new row ────────────────────────────────────────────

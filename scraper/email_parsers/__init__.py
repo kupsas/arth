@@ -19,6 +19,7 @@ from scraper.email_parsers.hdfc_bank import (
     HDFCUPIAlertParser,
 )
 from scraper.email_parsers.icici_bank import ICICINetBankingParser
+from scraper.email_parsers.hdfc_cc_statement import HDFCCCStatementEmailParser
 from scraper.email_parsers.icici_statement import ICICIStatementEmailParser
 
 
@@ -35,6 +36,9 @@ def _hdfc_parser_list(accounts: dict) -> list[BaseEmailParser]:
 # Only the FIRST matching parser is used per email.
 _hdfc_accounts = BANK_SENDERS["alerts@hdfcbank.net"]["accounts"]
 _icici_statement_accounts = BANK_SENDERS["estatement@icicibank.com"]["accounts"]
+_hdfc_cc_statement_accounts = BANK_SENDERS["emailstatements.cards@hdfcbank.net"][
+    "accounts"
+]
 
 EMAIL_PARSER_REGISTRY: dict[str, list[BaseEmailParser]] = {
     "alerts@hdfcbank.net": _hdfc_parser_list(_hdfc_accounts),
@@ -50,6 +54,12 @@ EMAIL_PARSER_REGISTRY: dict[str, list[BaseEmailParser]] = {
     ],
     "customernotification@icicibank.com": [
         ICICIStatementEmailParser(_icici_statement_accounts),
+    ],
+    "emailstatements.cards@hdfcbank.net": [
+        HDFCCCStatementEmailParser(_hdfc_cc_statement_accounts),
+    ],
+    "emailstatements.cards@hdfcbank.bank.in": [
+        HDFCCCStatementEmailParser(_hdfc_cc_statement_accounts),
     ],
 }
 
