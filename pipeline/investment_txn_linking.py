@@ -58,13 +58,13 @@ def extract_amfi_scheme_code(text: str | None) -> str | None:
 
 
 def _mf_candidates(session: Session, user_id: str, platform: str) -> list[Holding]:
+    """Include inactive MF holdings so historical txns can link after full redemption."""
     return list(
         session.exec(
             select(Holding).where(
                 Holding.user_id == user_id,
                 Holding.account_platform == platform,
                 Holding.asset_class == AssetClass.MUTUAL_FUND.value,
-                Holding.is_active == True,  # noqa: E712
             )
         ).all()
     )
@@ -164,7 +164,6 @@ def find_holding_id_for_parsed_txn(session: Session, user_id: str, t: ParsedInve
                     Holding.user_id == user_id,
                     Holding.account_platform == platform,
                     Holding.asset_class == AssetClass.PPF.value,
-                    Holding.is_active == True,  # noqa: E712
                 )
             ).all()
         )
@@ -182,7 +181,6 @@ def find_holding_id_for_parsed_txn(session: Session, user_id: str, t: ParsedInve
                     Holding.user_id == user_id,
                     Holding.account_platform == platform,
                     Holding.asset_class == AssetClass.NPS.value,
-                    Holding.is_active == True,  # noqa: E712
                 )
             ).all()
         )
@@ -247,7 +245,6 @@ def find_holding_id_for_stored_txn(
                     Holding.user_id == user_id,
                     Holding.account_platform == platform,
                     Holding.asset_class == AssetClass.PPF.value,
-                    Holding.is_active == True,  # noqa: E712
                 )
             ).all()
         )
@@ -264,7 +261,6 @@ def find_holding_id_for_stored_txn(
                     Holding.user_id == user_id,
                     Holding.account_platform == platform,
                     Holding.asset_class == AssetClass.NPS.value,
-                    Holding.is_active == True,  # noqa: E712
                 )
             ).all()
         )

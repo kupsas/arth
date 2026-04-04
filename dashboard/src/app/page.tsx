@@ -6,7 +6,6 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { AlertTriangle } from "lucide-react"
 
 import {
   BarDrilldownSheet,
@@ -20,9 +19,9 @@ import { InvestmentTrendChart } from "@/components/dashboard/investment-trend-ch
 import { RemindersCard } from "@/components/dashboard/reminders-card"
 import { TimeRangeToggle, type TrendMonths } from "@/components/dashboard/time-range-toggle"
 import { TopExpensesCard } from "@/components/dashboard/top-expenses-card"
+import { ReviewQueueBanner } from "@/components/review/review-queue-banner"
 import { TransactionEditSheet } from "@/components/transactions/transaction-edit-sheet"
 import { useGoals } from "@/hooks/use-goals"
-import { useTransactions } from "@/hooks/use-transactions"
 import {
   CHART_KEY_EXPENSE_NEED_WANT_STACK,
   CHART_KEY_INVESTMENT_NET,
@@ -51,13 +50,6 @@ export default function DashboardPage() {
       ? expenseStackGoal.target_amount ?? null
       : null
 
-  const { data: unreviewedData } = useTransactions({
-    is_reviewed: false,
-    page: 1,
-    page_size: 1,
-  })
-  const unreviewedCount = unreviewedData?.total ?? 0
-
   function openDrilldown(p: {
     chart: BarDrilldownChart
     month: string
@@ -68,21 +60,7 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      {unreviewedCount > 0 && (
-        <Link
-          href="/review"
-          className="flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm transition-colors hover:bg-amber-500/20"
-        >
-          <AlertTriangle className="size-4 shrink-0 text-amber-500" />
-          <span className="flex-1 text-amber-700 dark:text-amber-400">
-            <strong>{unreviewedCount.toLocaleString()} transaction{unreviewedCount !== 1 ? "s" : ""}</strong> need
-            {unreviewedCount === 1 ? "s" : ""} review.
-          </span>
-          <span className="shrink-0 text-xs font-medium text-amber-600 dark:text-amber-400 underline underline-offset-2">
-            Review Queue →
-          </span>
-        </Link>
-      )}
+      <ReviewQueueBanner />
 
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Expense Tracker</h1>

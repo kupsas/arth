@@ -5,8 +5,10 @@ Optional ICICI ↔ NSE symbol overrides (manual JSON).
 - **Overrides** live in ``data/icici_nse_symbol_overrides.json`` (gitignored — copy from
   ``*.example.json``). Edit by hand when a broker short code is missing from the static map.
 
-NSE *Trades executed* PDFs already carry the **NSE symbol**, so automatic learning from a
-second PDF is not used — keeps ingestion simple.
+NSE *Trades executed* PDFs already carry the **NSE ``TckrSymb``** (same string bhavcopy uses).
+If a PDF ever shows an alias, add a row under ``icici_short_to_nse`` so
+:func:`api.services.price_feed.canonical_nse_symbol` resolves before refresh.
+Validated multi-candidate flows can use :mod:`api.services.nse_ticker_resolve`.
 
 Merged into :func:`api.services.price_feed.canonical_nse_symbol` and equity resolution.
 """

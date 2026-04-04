@@ -15,6 +15,7 @@ import { EquitiesSection } from "@/components/portfolio/equities-section";
 import { MutualFundsSection } from "@/components/portfolio/mutual-funds-section";
 import { OtherAssetsSection } from "@/components/portfolio/other-assets-section";
 import { TopSection } from "@/components/portfolio/top-section";
+import { ReviewQueueBanner } from "@/components/review/review-queue-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthMe } from "@/hooks/use-auth";
 
@@ -50,6 +51,8 @@ export default function PortfolioPage() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-10 pb-16">
+      <ReviewQueueBanner />
+
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Holdings</h1>
         <p className="text-sm text-muted-foreground mt-1">

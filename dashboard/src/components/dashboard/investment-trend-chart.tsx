@@ -12,6 +12,7 @@ import {
   YAxis,
 } from "recharts"
 
+import { RECHARTS_TOOLTIP_CARD_CLASS } from "@/components/dashboard/recharts-tooltip"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useInvestmentTrend } from "@/hooks/use-metrics"
@@ -53,22 +54,22 @@ function InvestmentNetTooltip({
   if (!row) return null
 
   return (
-    <div className="rounded-md border border-border bg-popover px-2.5 py-2 text-xs text-popover-foreground shadow-md">
-      <p className="mb-1.5 font-medium text-foreground">
+    <div className={RECHARTS_TOOLTIP_CARD_CLASS}>
+      <p className="font-medium leading-tight">
         Month {label != null ? String(label) : ""}
       </p>
-      <ul className="space-y-1 tabular-nums">
+      <ul className="mt-1.5 space-y-1 tabular-nums text-muted-foreground">
         <li className="flex justify-between gap-6">
-          <span className="text-muted-foreground">Net</span>
-          <span className="font-medium text-foreground">{formatCurrency(row.net)}</span>
+          <span>Net</span>
+          <span>{formatCurrency(row.net)}</span>
         </li>
         <li className="flex justify-between gap-6">
-          <span className="text-muted-foreground">Purchases</span>
-          <span className="font-medium text-foreground">{formatCurrency(row.purchases)}</span>
+          <span>Purchases</span>
+          <span>{formatCurrency(row.purchases)}</span>
         </li>
         <li className="flex justify-between gap-6">
-          <span className="text-muted-foreground">Sales</span>
-          <span className="font-medium text-foreground">{formatCurrency(row.sales)}</span>
+          <span>Sales</span>
+          <span>{formatCurrency(row.sales)}</span>
         </li>
       </ul>
     </div>

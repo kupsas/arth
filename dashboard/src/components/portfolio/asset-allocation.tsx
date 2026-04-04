@@ -26,6 +26,10 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  RECHARTS_TOOLTIP_CARD_CLASS,
+  RechartsPieSliceTooltip,
+} from "@/components/dashboard/recharts-tooltip";
 import { useHoldingsSummary } from "@/hooks/use-portfolio";
 import { CHART_SERIES_COLORS } from "@/lib/chart-colors";
 import { formatPercent } from "@/lib/utils";
@@ -134,14 +138,13 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                         ))}
                       </Pie>
                       <Tooltip
-                        formatter={(v) =>
-                          [
-                            formatPercent(
-                              typeof v === "number" ? v : Number(v ?? 0),
-                            ),
-                            "Weight",
-                          ]}
-                        labelFormatter={(name) => labelPretty(String(name))}
+                        content={(props) => (
+                          <RechartsPieSliceTooltip
+                            {...props}
+                            valueMode="percent"
+                            formatTitle={labelPretty}
+                          />
+                        )}
                       />
                     </PieChart>
                   </ResponsiveContainer>
@@ -172,10 +175,31 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                         />
                       ))}
                       <Tooltip
-                        formatter={(v) =>
-                          formatPercent(
-                            typeof v === "number" ? v : Number(v ?? 0),
-                          )}
+                        shared={false}
+                        cursor={false}
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.[0]) return null;
+                          const p = payload[0];
+                          // `name` comes from each <Bar name={labelPretty(key)} /> — already human-readable.
+                          const title =
+                            p.name != null
+                              ? String(p.name)
+                              : String(p.dataKey ?? "");
+                          const v =
+                            typeof p.value === "number"
+                              ? p.value
+                              : Number(p.value ?? 0);
+                          return (
+                            <div className={RECHARTS_TOOLTIP_CARD_CLASS}>
+                              <p className="font-medium leading-tight">
+                                {title}
+                              </p>
+                              <p className="mt-1.5 text-muted-foreground leading-tight">
+                                {formatPercent(v)}
+                              </p>
+                            </div>
+                          );
+                        }}
                       />
                     </BarChart>
                   </ResponsiveContainer>
@@ -222,14 +246,12 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
                         ))}
                       </Pie>
                       <Tooltip
-                        formatter={(v) =>
-                          [
-                            formatPercent(
-                              typeof v === "number" ? v : Number(v ?? 0),
-                            ),
-                            "Weight",
-                          ]}
-                        labelFormatter={(name) => String(name)}
+                        content={(props) => (
+                          <RechartsPieSliceTooltip
+                            {...props}
+                            valueMode="percent"
+                          />
+                        )}
                       />
                     </PieChart>
                   </ResponsiveContainer>

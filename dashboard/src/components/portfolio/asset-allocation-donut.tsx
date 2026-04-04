@@ -8,6 +8,7 @@
 import * as React from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
+import { RechartsPieSliceTooltip } from "@/components/dashboard/recharts-tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -100,17 +101,7 @@ export function AssetAllocationDonut({ userId }: AssetAllocationDonutProps) {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value, _n, item) => {
-                      // Recharts v3 types `value` as possibly undefined; coerce for display.
-                      const amt =
-                        typeof value === "number"
-                          ? value
-                          : Number(value ?? 0);
-                      const row = item?.payload as { pct?: number };
-                      const p =
-                        row?.pct != null ? formatPercent(row.pct, 1) : "";
-                      return [`${formatCurrency(amt)} (${p})`, "Value"];
-                    }}
+                    content={(props) => <RechartsPieSliceTooltip {...props} />}
                   />
                 </PieChart>
               </ResponsiveContainer>

@@ -156,6 +156,7 @@ function InvestmentTransactionsTabContent() {
         isLoading={isLoading}
         filters={filters}
         onFiltersChange={handleFiltersChange}
+        userId={userId}
       />
     </>
   )

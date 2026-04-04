@@ -270,23 +270,75 @@ def _bhav_symbol_to_close(path: Path) -> dict[str, float]:
     return out
 
 
-def fetch_equity_closes_from_nse_bhav(
-    symbols: list[str],
-    trade_date: datetime.date,
-) -> dict[str, float]:
-    """Official NSE closing prices for one session (bhavcopy)."""
+# A real equity bhav file has thousands of symbols; empty or corrupt parses are tiny.
+# We do **not** probe a specific ticker (e.g. RELIANCE) — you might not hold it.
+_MIN_EQUITY_BHAV_SYMBOL_ROWS = 200
+
+
+def load_nse_equity_bhav_map(trade_date: datetime.date) -> dict[str, float] | None:
+    """Download and parse the full NSE equity bhavcopy for ``trade_date``.
+
+    Returns ``None`` if the file is missing or empty. One network round-trip per call —
+    used by session resolution and by :func:`fetch_equity_closes_from_nse_bhav` so we
+    do not double-download during ``refresh_all_prices``.
+    """
     nse = get_nse_client()
     dt = datetime.datetime.combine(trade_date, datetime.time.min)
     try:
         path = nse.equityBhavcopy(dt)
     except Exception as exc:
-        # Expected often: holiday/weekend, file not published yet, or NSE hiccup.
-        # Default server log level is INFO — avoid one line per date on every refresh/backfill.
         logger.debug("NSE bhavcopy failed for %s: %s", trade_date, exc)
+        return None
+    m = _bhav_symbol_to_close(Path(path))
+    return m if m else None
+
+
+def fetch_equity_closes_from_nse_bhav(
+    symbols: list[str],
+    trade_date: datetime.date,
+) -> dict[str, float]:
+    """Official NSE closing prices for one session (bhavcopy)."""
+    closes = load_nse_equity_bhav_map(trade_date)
+    if not closes:
         return {}
-    closes = _bhav_symbol_to_close(Path(path))
     norm = [canonical_nse_symbol(s) for s in symbols]
     return {s: closes[s] for s in norm if s in closes}
+
+
+def resolve_nse_bhav_session_and_map(
+    preferred: datetime.date,
+    *,
+    max_lookback_calendar_days: int = 10,
+) -> tuple[datetime.date, dict[str, float] | None]:
+    """Latest weekday on or before ``preferred`` with a usable equity bhav file.
+
+    Returns ``(session_date, full_symbol_map)``. The map is ``None`` if no session was
+    found within the lookback window — callers should treat pricing as unavailable and
+    rely on ``prices``-table fallback where applicable.
+
+    Walking back avoids using a **stale** cached ``prices`` row when today's file is
+    not published yet while an earlier session's file is available.
+    """
+    d = preferred
+    for _ in range(max_lookback_calendar_days + 1):
+        if d.weekday() < 5:
+            m = load_nse_equity_bhav_map(d)
+            if m and len(m) >= _MIN_EQUITY_BHAV_SYMBOL_ROWS:
+                return d, m
+        d -= datetime.timedelta(days=1)
+    return preferred, None
+
+
+def resolve_nse_bhav_session_date(
+    preferred: datetime.date,
+    *,
+    max_lookback_calendar_days: int = 10,
+) -> datetime.date | None:
+    """Return the session date from :func:`resolve_nse_bhav_session_and_map`, or ``None`` if no map."""
+    d, m = resolve_nse_bhav_session_and_map(
+        preferred, max_lookback_calendar_days=max_lookback_calendar_days
+    )
+    return d if m else None
 
 
 def fetch_equity_prices_nse(
@@ -574,7 +626,15 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
     """
     holdings = _select_market_priced_holdings(session, user_id=user_id)
 
-    d = latest_bhav_target_date()
+    preferred = latest_bhav_target_date()
+    session_d, full_bhav_map = resolve_nse_bhav_session_and_map(preferred)
+    if full_bhav_map and session_d < preferred:
+        logger.info(
+            "NSE bhav: using session %s (preferred %s not available yet)",
+            session_d,
+            preferred,
+        )
+    d = session_d
 
     nse_symbols: list[str] = []
     mf_codes: list[str] = []
@@ -609,7 +669,10 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
     price_rows: list[Price] = []
     nse_map: dict[str, float] = {}
     if nse_symbols:
-        nse_map = fetch_equity_closes_from_nse_bhav(nse_symbols, d)
+        if full_bhav_map:
+            nse_map = {s: full_bhav_map[s] for s in nse_symbols if s in full_bhav_map}
+        else:
+            nse_map = {}
 
     for sym in nse_symbols:
         close = nse_map.get(sym)

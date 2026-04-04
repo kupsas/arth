@@ -9,6 +9,7 @@
 import * as React from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
+import { RechartsPieSliceTooltip } from "@/components/dashboard/recharts-tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -20,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CHART_SERIES_COLORS } from "@/lib/chart-colors";
-import { cn, formatCurrency, formatPercent } from "@/lib/utils";
+import { cn, formatPercent } from "@/lib/utils";
 
 export interface GroupingPieSlice {
   name: string;
@@ -128,18 +129,7 @@ export function GroupingPieChart({
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value, _name, item) => {
-                      const amt =
-                        typeof value === "number"
-                          ? value
-                          : Number(value ?? 0);
-                      const row = item?.payload as {
-                        pct?: number;
-                      };
-                      const pct =
-                        row?.pct != null ? formatPercent(row.pct, 1) : "";
-                      return [`${formatCurrency(amt)} (${pct})`, "Value"];
-                    }}
+                    content={(props) => <RechartsPieSliceTooltip {...props} />}
                   />
                 </PieChart>
               </ResponsiveContainer>

@@ -367,7 +367,7 @@ export function TransactionEditSheet({
                       <SelectItem key={cat} value={cat}>
                         <span
                           className={cn(
-                            "size-2 rounded-full mr-1 inline-block",
+                            "size-2 shrink-0 rounded-full",
                             categoryColor(cat),
                           )}
                         />
@@ -412,7 +412,9 @@ export function TransactionEditSheet({
                       <SelectItem value="">— None (let pipeline decide) —</SelectItem>
                       {SPEND_CATEGORIES.map(({ value, label, color }) => (
                         <SelectItem key={value} value={value}>
-                          <span className={cn("size-2 rounded-full mr-1 inline-block", color)} />
+                          <span
+                            className={cn("size-2 shrink-0 rounded-full", color)}
+                          />
                           {label}
                         </SelectItem>
                       ))}
@@ -504,7 +506,10 @@ export function TransactionEditSheet({
                   <span className="text-xs text-muted-foreground">Preview:</span>
                   <Badge variant="secondary" className="font-normal">
                     <span
-                      className={cn("size-1.5 rounded-full", categoryColor(category))}
+                      className={cn(
+                        "size-1.5 shrink-0 rounded-full",
+                        categoryColor(category),
+                      )}
                     />
                     {category}
                   </Badge>

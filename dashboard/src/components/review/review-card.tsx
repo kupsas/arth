@@ -71,8 +71,10 @@ export function ReviewCard({
   const displayName = txn.counterparty ?? txn.raw_description
 
   return (
-    <Card className="flex flex-col gap-0 overflow-hidden">
-      <CardContent className="flex flex-col gap-3 p-4">
+    // h-full: fill the grid cell so every card in a row matches the tallest;
+    // CardContent flex-1: body grows so the footer stays pinned to the bottom.
+    <Card className="flex h-full min-h-0 flex-col gap-0 overflow-hidden">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 p-4">
         {/* ── Top row: name + amount ─────────────────────────────────── */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">

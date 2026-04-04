@@ -8,6 +8,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   createColumnHelper,
   flexRender,
@@ -27,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useHoldings } from "@/hooks/use-portfolio";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type {
   InvestmentTxn,
@@ -39,6 +41,8 @@ interface InvestmentTransactionTableProps {
   isLoading: boolean;
   filters: InvestmentTransactionFilters;
   onFiltersChange: (update: Partial<InvestmentTransactionFilters>) => void;
+  /** Used to resolve holding names for the Linked holding column. */
+  userId: string;
 }
 
 const col = createColumnHelper<InvestmentTxn>();
@@ -54,10 +58,20 @@ export function InvestmentTransactionTable({
   isLoading,
   filters,
   onFiltersChange,
+  userId,
 }: InvestmentTransactionTableProps) {
   const rows = data?.items ?? [];
   const totalPages = data?.total_pages ?? 1;
   const currentPage = filters.page ?? 1;
+
+  const { data: holdings } = useHoldings({ user_id: userId });
+  const holdingNameById = React.useMemo(() => {
+    const m = new Map<number, string>();
+    for (const h of holdings ?? []) {
+      if (h.id != null) m.set(h.id, h.name);
+    }
+    return m;
+  }, [holdings]);
 
   const columns = React.useMemo(
     () => [
@@ -101,6 +115,30 @@ export function InvestmentTransactionTable({
           <span className="text-xs text-muted-foreground">{info.getValue()}</span>
         ),
       }),
+      col.accessor("holding_id", {
+        header: "Linked holding",
+        cell: (info) => {
+          const hid = info.getValue() as number | null;
+          if (hid == null) {
+            return (
+              <span className="text-xs text-amber-600 dark:text-amber-500" title="Not linked to a portfolio row">
+                Unlinked
+              </span>
+            );
+          }
+          const label = holdingNameById.get(hid) ?? `Holding #${hid}`;
+          return (
+            <Link
+              href="/portfolio"
+              className="block max-w-[200px] truncate text-xs text-primary underline-offset-2 hover:underline"
+              title={`${label} (id ${hid}) — open Portfolio to see this position`}
+            >
+              {label}
+              <span className="ml-1 font-mono text-[10px] text-muted-foreground">#{hid}</span>
+            </Link>
+          );
+        },
+      }),
       col.accessor("notes", {
         header: "Notes",
         cell: (info) => {
@@ -123,7 +161,7 @@ export function InvestmentTransactionTable({
           ),
       }),
     ],
-    [],
+    [holdingNameById],
   );
 
   const table = useReactTable({

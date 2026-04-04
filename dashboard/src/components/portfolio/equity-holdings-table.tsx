@@ -21,6 +21,7 @@ import {
 import {
   holdingCostBasis,
   prettyMarketCapClass,
+  weightPercentWithinSleeve,
 } from "@/lib/holdings-display";
 import type { Holding } from "@/lib/types";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
@@ -262,6 +263,10 @@ export function EquityHoldingsTable({
                   const cmp = h.current_price_per_unit;
                   const open = expanded.has(h.id);
                   const ep = equityPeriodPart(h);
+                  const wtSleeve = weightPercentWithinSleeve(
+                    h.current_value,
+                    grand.sumValue,
+                  );
                   return (
                     <React.Fragment key={h.id}>
                       <TableRow>
@@ -346,22 +351,33 @@ export function EquityHoldingsTable({
                             colSpan={detailColSpan}
                             className="text-xs text-muted-foreground py-2"
                           >
-                            <span className="mr-4">
-                              Weight:{" "}
-                              {h.weight_pct != null
-                                ? formatPercent(h.weight_pct, 1)
-                                : "—"}{" "}
-                              of portfolio
-                            </span>
-                            <span className="mr-4">
-                              Market cap:{" "}
-                              {prettyMarketCapClass(h.market_cap_class)}
-                            </span>
-                            {hpMode && ep.note ? (
-                              <span className="block mt-1 text-[11px]">
-                                Holding-period basis: {ep.note}
-                              </span>
-                            ) : null}
+                            <div className="space-y-1">
+                              <p>
+                                Weight:{" "}
+                                {h.weight_pct != null
+                                  ? formatPercent(h.weight_pct, 1)
+                                  : "—"}{" "}
+                                of total portfolio
+                              </p>
+                              <p>
+                                Weight:{" "}
+                                {wtSleeve != null
+                                  ? formatPercent(wtSleeve, 1)
+                                  : "—"}{" "}
+                                of total equity portfolio
+                              </p>
+                              <p>
+                                <span className="mr-4">
+                                  Market cap:{" "}
+                                  {prettyMarketCapClass(h.market_cap_class)}
+                                </span>
+                              </p>
+                              {hpMode && ep.note ? (
+                                <p className="text-[11px]">
+                                  Holding-period basis: {ep.note}
+                                </p>
+                              ) : null}
+                            </div>
                           </TableCell>
                         </TableRow>
                       ) : null}

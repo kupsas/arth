@@ -26,6 +26,14 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -66,6 +74,8 @@ export default function SettingsPage() {
   const [createAnchorText, setCreateAnchorText] = React.useState("")
 
   const [editing, setEditing] = React.useState<Reminder | null>(null)
+  /** Set when user clicks trash — confirmed in a small dialog before DELETE runs. */
+  const [deleteTarget, setDeleteTarget] = React.useState<Reminder | null>(null)
   const [editName, setEditName] = React.useState("")
   const [editDueDay, setEditDueDay] = React.useState("5")
   const [editAmount, setEditAmount] = React.useState("")
@@ -344,7 +354,7 @@ export default function SettingsPage() {
                       variant="ghost"
                       size="icon-sm"
                       className="text-destructive"
-                      onClick={() => deleteMut.mutate(r.id)}
+                      onClick={() => setDeleteTarget(r)}
                       disabled={deleteMut.isPending}
                       aria-label="Delete reminder"
                     >
@@ -460,6 +470,44 @@ export default function SettingsPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      <Dialog
+        open={deleteTarget != null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
+      >
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete reminder?</DialogTitle>
+            <DialogDescription>
+              This removes &quot;{deleteTarget?.name}&quot; from your payment reminders. You can add
+              it again later, but this action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 border-0 bg-transparent p-0 pt-2 sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleteMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deleteMut.isPending}
+              onClick={() => {
+                if (deleteTarget == null) return
+                void deleteMut.mutateAsync(deleteTarget.id).then(() => setDeleteTarget(null))
+              }}
+            >
+              {deleteMut.isPending ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

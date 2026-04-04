@@ -23,6 +23,7 @@ import {
 } from "recharts";
 
 import { Button } from "@/components/ui/button";
+import { RECHARTS_TOOLTIP_CARD_CLASS } from "@/components/dashboard/recharts-tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -164,23 +165,25 @@ export function NetWorthChart({ userId }: NetWorthChartProps) {
                       total_liabilities?: number;
                     };
                     return (
-                      <div className="rounded-lg border bg-card px-3 py-2 text-xs shadow-md">
-                        <p className="font-medium mb-1">{formatDate(String(label))}</p>
-                        <p className="text-muted-foreground">
+                      <div className={RECHARTS_TOOLTIP_CARD_CLASS}>
+                        <p className="font-medium leading-tight">
+                          {formatDate(String(label))}
+                        </p>
+                        <p className="mt-1.5 text-muted-foreground leading-tight">
                           Net:{" "}
-                          <span className="text-foreground font-mono">
+                          <span className="text-card-foreground font-mono">
                             {formatCurrency(row.net_worth ?? 0)}
                           </span>
                         </p>
-                        <p className="text-muted-foreground">
+                        <p className="mt-1 text-muted-foreground leading-tight">
                           Assets:{" "}
-                          <span className="text-foreground font-mono">
+                          <span className="text-card-foreground font-mono">
                             {formatCurrency(row.total_assets ?? 0)}
                           </span>
                         </p>
-                        <p className="text-muted-foreground">
+                        <p className="mt-1 text-muted-foreground leading-tight">
                           Liabilities:{" "}
-                          <span className="text-foreground font-mono">
+                          <span className="text-card-foreground font-mono">
                             {formatCurrency(row.total_liabilities ?? 0)}
                           </span>
                         </p>

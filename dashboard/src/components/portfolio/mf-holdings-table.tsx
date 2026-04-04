@@ -21,6 +21,7 @@ import {
   annualizedReturnPercentPoints,
   formatAnnualizedReturnForDisplay,
   holdingCostBasis,
+  weightPercentWithinSleeve,
 } from "@/lib/holdings-display";
 import type { Holding } from "@/lib/types";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
@@ -200,6 +201,10 @@ export function MfHoldingsTable({
                   const xirr = formatAnnualizedReturnForDisplay(
                     ret.annualized_return,
                   );
+                  const wtSleeve = weightPercentWithinSleeve(
+                    h.current_value,
+                    grand.sumValue,
+                  );
                   const open = expanded.has(h.id);
                   return (
                     <React.Fragment key={h.id}>
@@ -267,15 +272,25 @@ export function MfHoldingsTable({
                             colSpan={6}
                             className="text-xs text-muted-foreground py-2"
                           >
-                            <span>
-                              AMC: {h.fund_house?.trim() || "—"}
-                            </span>
-                            <span className="ml-4">
-                              Weight:{" "}
-                              {h.weight_pct != null
-                                ? formatPercent(h.weight_pct, 1)
-                                : "—"}
-                            </span>
+                            <div className="space-y-1">
+                              <p>
+                                AMC: {h.fund_house?.trim() || "—"}
+                              </p>
+                              <p>
+                                Weight:{" "}
+                                {h.weight_pct != null
+                                  ? formatPercent(h.weight_pct, 1)
+                                  : "—"}{" "}
+                                of total portfolio
+                              </p>
+                              <p>
+                                Weight:{" "}
+                                {wtSleeve != null
+                                  ? formatPercent(wtSleeve, 1)
+                                  : "—"}{" "}
+                                of total mutual fund portfolio
+                              </p>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ) : null}

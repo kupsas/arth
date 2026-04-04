@@ -43,7 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useInvestmentTransactions } from "@/hooks/use-portfolio";
+import { useHoldings, useInvestmentTransactions } from "@/hooks/use-portfolio";
 import type { InvestmentLedgerTxnType, InvestmentTxn } from "@/lib/types";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 
@@ -129,6 +129,15 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
     page,
     page_size: PAGE_SIZE,
   });
+
+  const { data: holdings } = useHoldings({ user_id: userId });
+  const holdingNameById = React.useMemo(() => {
+    const m = new Map<number, string>();
+    for (const h of holdings ?? []) {
+      if (h.id != null) m.set(h.id, h.name);
+    }
+    return m;
+  }, [holdings]);
 
   const rows = data?.items ?? [];
   const totalPages = data?.total_pages ?? 1;
@@ -235,6 +244,31 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
         ),
       }),
       invTxnCol.display({
+        id: "holding",
+        header: "Linked holding",
+        cell: ({ row }) => {
+          const hid = row.original.holding_id;
+          if (hid == null) {
+            return (
+              <span className="text-xs text-amber-600 dark:text-amber-500" title="Not linked">
+                Unlinked
+              </span>
+            );
+          }
+          const label = holdingNameById.get(hid) ?? `Holding #${hid}`;
+          return (
+            <Link
+              href="/portfolio"
+              className="block max-w-[160px] truncate text-xs text-primary underline-offset-2 hover:underline"
+              title={`${label} (id ${hid})`}
+            >
+              {label}
+              <span className="ml-1 font-mono text-[10px] text-muted-foreground">#{hid}</span>
+            </Link>
+          );
+        },
+      }),
+      invTxnCol.display({
         id: "bank",
         header: "Bank link",
         cell: ({ row }) => {
@@ -254,7 +288,7 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
         },
       }),
     ],
-    [sorting, toggleSort],
+    [sorting, toggleSort, holdingNameById],
   );
 
   const table = useReactTable({

@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 from api.database import get_session
 from api.models import Holding
 from api.routes.ingest_utils import parser_input_path, saved_upload_directory
-from api.services.holding_enrichment import enrich_holdings
+from api.services.holding_enrichment import enrich_holdings, enrich_single_equity_classification
 from api.services.holdings_metrics import (
     asset_class_breakdown_and_totals,
     compute_batch_returns,
@@ -569,6 +569,8 @@ def create_holding(body: HoldingCreate, *, session: Session = Depends(get_sessio
     if body.account_identifier:
         h.account_identifier_encrypted = body.account_identifier
     session.add(h)
+    session.flush()
+    enrich_single_equity_classification(session, h)
     session.commit()
     session.refresh(h)
     uid = body.user_id.strip() or "sashank"
@@ -635,7 +637,7 @@ def import_holdings(
 
     hstats = ingest_holdings(session, holdings, user_id=user_id.strip() or "sashank", dry_run=False)
     if skip_investment_txns:
-        tstats = {"inserted": 0, "skipped_duplicate": 0, "errors": 0}
+        tstats = {"inserted": 0, "skipped_duplicate": 0, "errors": 0, "holdings_synced": 0}
     else:
         tstats = ingest_investment_transactions(
             session,

@@ -26,10 +26,63 @@ import { useUpdateInvestmentTransaction } from "@/hooks/use-investment-transacti
 import { useInvestmentTransactions } from "@/hooks/use-portfolio";
 import { useTransactions, useUpdateTransaction } from "@/hooks/use-transactions";
 import type { InvestmentTxn, Transaction } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+/** Tiny count next to each tab label — uses page_size=1 list calls so `total` is cheap. */
+function ReviewQueueTabBadge({
+  count,
+  isLoading,
+  unavailable,
+}: {
+  count: number;
+  isLoading: boolean;
+  /** e.g. investment queue needs sign-in — show an em dash instead of a number */
+  unavailable?: boolean;
+}) {
+  if (unavailable) {
+    return (
+      <span className="text-[10px] font-medium text-muted-foreground tabular-nums" title="Sign in to load">
+        —
+      </span>
+    );
+  }
+  if (isLoading) {
+    return <Skeleton className="h-4 w-6 shrink-0 rounded-full" aria-hidden />;
+  }
+  const label = count > 99 ? "99+" : String(count);
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-5 shrink-0 items-center justify-center rounded-full border px-1.5 py-0 text-[10px] font-medium tabular-nums",
+        count > 0
+          ? "border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+          : "border-transparent bg-muted/70 text-muted-foreground",
+      )}
+      title={`${count} unreviewed`}
+    >
+      {label}
+    </span>
+  );
+}
 
 export default function ReviewPage() {
   const { data: auth } = useAuthMe();
   const userId = auth?.username ?? null;
+
+  // Headline counts for tab badges (same filters as each queue, minimal page size).
+  const { data: bankTabCount, isLoading: bankTabCountLoading } = useTransactions({
+    is_reviewed: false,
+    page: 1,
+    page_size: 1,
+    sort_by: "created_at",
+    sort_order: "desc",
+  });
+  const { data: invTabCount, isLoading: invTabCountLoading } = useInvestmentTransactions(
+    userId
+      ? { user_id: userId, is_reviewed: false, page: 1, page_size: 1 }
+      : { is_reviewed: false, page: 1, page_size: 1 },
+    { enabled: userId != null },
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -44,11 +97,20 @@ export default function ReviewPage() {
 
       <Tabs defaultValue="transactions" className="w-full">
         <TabsList variant="line" className="mb-1 h-9 w-full min-w-0 justify-start">
-          <TabsTrigger value="transactions" className="text-xs">
-            Transactions
+          <TabsTrigger value="transactions" className="gap-2 text-xs">
+            <span>Transactions</span>
+            <ReviewQueueTabBadge
+              count={bankTabCount?.total ?? 0}
+              isLoading={bankTabCountLoading}
+            />
           </TabsTrigger>
-          <TabsTrigger value="investments" className="text-xs">
-            Investment transactions
+          <TabsTrigger value="investments" className="gap-2 text-xs">
+            <span>Investment transactions</span>
+            <ReviewQueueTabBadge
+              count={invTabCount?.total ?? 0}
+              isLoading={invTabCountLoading}
+              unavailable={userId == null}
+            />
           </TabsTrigger>
         </TabsList>
 
@@ -129,7 +191,7 @@ function BankTransactionReviewTab() {
       )}
 
       {!isLoading && (
-        <div className="flex items-center gap-3">
+        <div className="mb-4 flex items-center gap-3">
           <span className="text-sm text-muted-foreground">
             {totalUnreviewed === 0
               ? "All caught up!"
@@ -328,7 +390,7 @@ function InvestmentTransactionReviewTab({ userId }: { userId: string | null }) {
       )}
 
       {!isLoading && (
-        <div className="flex items-center gap-3">
+        <div className="mb-4 flex items-center gap-3">
           <span className="text-sm text-muted-foreground">
             {totalUnreviewed === 0
               ? "All caught up!"

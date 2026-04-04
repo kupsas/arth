@@ -21,6 +21,20 @@ export function holdingCostBasis(h: Holding): number | null {
   return null;
 }
 
+/**
+ * Share of one holding within a **sleeve** (e.g. all equity rows in the equity
+ * table), as percentage points 0–100. Used next to API `weight_pct`, which is
+ * vs the full portfolio across all asset classes.
+ */
+export function weightPercentWithinSleeve(
+  currentValue: number | null | undefined,
+  sleeveTotalValue: number,
+): number | null {
+  if (sleeveTotalValue <= 0) return null;
+  const v = currentValue ?? 0;
+  return (100 * v) / sleeveTotalValue;
+}
+
 /** "MUTUAL_FUND" → "Mutual fund" style labels for tables and charts. */
 export function prettyAssetClassLabel(assetClass: string): string {
   return assetClass

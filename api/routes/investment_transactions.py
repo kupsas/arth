@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -18,6 +19,10 @@ from sqlmodel import Session, col, func, select
 
 from api.database import get_session
 from api.models import Holding, InvestmentTransaction
+from api.services.holdings_sync import (
+    ensure_holding_for_transaction,
+    sync_holding_from_transactions,
+)
 from api.routes.ingest_utils import parser_input_path, saved_upload_directory
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY
 from pipeline.holding_pipeline import ingest_investment_transactions
@@ -100,6 +105,7 @@ class InvestmentTransactionUpdate(BaseModel):
     price_per_unit: float | None = Field(default=None, ge=0)
     total_amount: float | None = Field(default=None, ge=0)
     txn_date: datetime.date | None = None
+    holding_id: int | None = None
 
 
 class BulkInvestmentUpdateRequest(BaseModel):
@@ -112,11 +118,28 @@ class ImportInvTxnResultOut(BaseModel):
     investment_txn_stats: dict[str, Any]
 
 
-def _validate_inv_update(body: InvestmentTransactionUpdate) -> None:
+def _default_user_id_for_inv_sync() -> str:
+    return (os.environ.get("ARTH_USER_ID") or "sashank").strip() or "sashank"
+
+
+def _inv_txn_user_id_for_sync(session: Session, row: InvestmentTransaction) -> str:
+    if row.holding_id is not None:
+        h = session.get(Holding, row.holding_id)
+        if h:
+            return h.user_id
+    return _default_user_id_for_sync()
+
+
+def _validate_inv_update(body: InvestmentTransactionUpdate, *, session: Session | None = None) -> None:
     data = body.model_dump(exclude_unset=True)
     tt = data.get("txn_type")
     if tt is not None and tt not in _VALID_TXN:
         raise HTTPException(status_code=400, detail=f"Invalid txn_type: {tt!r}")
+    hid = data.get("holding_id")
+    if hid is not None and session is not None:
+        h = session.get(Holding, hid)
+        if not h:
+            raise HTTPException(status_code=400, detail=f"holding_id {hid} does not exist")
 
 
 def _apply_inv_update(row: InvestmentTransaction, body: InvestmentTransactionUpdate) -> None:
@@ -266,18 +289,28 @@ def bulk_update_investment_transactions(
     session: Session = Depends(get_session),
 ):
     """Apply the same update to many investment transactions (e.g. mark all reviewed)."""
-    _validate_inv_update(body.update)
+    _validate_inv_update(body.update, session=session)
     updated: list[int] = []
     not_found: list[int] = []
+    holding_ids_to_sync: set[int] = set()
     for iid in body.ids:
         row = session.get(InvestmentTransaction, iid)
         if not row:
             not_found.append(iid)
             continue
+        old_hid = row.holding_id
         _apply_inv_update(row, body.update)
         session.add(row)
         updated.append(iid)
+        if old_hid is not None:
+            holding_ids_to_sync.add(old_hid)
+        if row.holding_id is not None:
+            holding_ids_to_sync.add(row.holding_id)
     session.commit()
+    for hid in sorted(holding_ids_to_sync):
+        sync_holding_from_transactions(session, hid)
+    if holding_ids_to_sync:
+        session.commit()
     return {"updated": updated, "not_found": not_found}
 
 
@@ -291,10 +324,21 @@ def update_investment_transaction(
     row = session.get(InvestmentTransaction, inv_id)
     if not row:
         raise HTTPException(status_code=404, detail=f"Investment transaction {inv_id} not found")
-    _validate_inv_update(body)
+    _validate_inv_update(body, session=session)
+    old_hid = row.holding_id
     _apply_inv_update(row, body)
     session.add(row)
     session.commit()
+    session.refresh(row)
+    to_sync: set[int] = set()
+    if old_hid is not None:
+        to_sync.add(old_hid)
+    if row.holding_id is not None:
+        to_sync.add(row.holding_id)
+    for hid in sorted(to_sync):
+        sync_holding_from_transactions(session, hid)
+    if to_sync:
+        session.commit()
     session.refresh(row)
     return row
 
@@ -334,6 +378,14 @@ def create_investment_transaction(
     session.add(it)
     session.commit()
     session.refresh(it)
+    uid = _inv_txn_user_id_for_sync(session, it)
+    if it.holding_id is None:
+        ensure_holding_for_transaction(session, it, user_id=uid)
+    session.flush()
+    if it.holding_id is not None:
+        sync_holding_from_transactions(session, it.holding_id)
+        session.commit()
+        session.refresh(it)
     return it
 
 

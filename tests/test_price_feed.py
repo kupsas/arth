@@ -23,6 +23,7 @@ from api.services.price_feed import (
     parse_amfi_nav_rows,
     parse_amfi_navall,
     refresh_all_prices,
+    resolve_nse_bhav_session_date,
     upsert_prices,
 )
 from pipeline.models import AssetClass, LiquidityClass, ValuationMethod
@@ -51,6 +52,24 @@ def test_latest_bhav_target_date_weekday_unchanged() -> None:
 def test_latest_bhav_target_date_saturday_rolls_to_friday() -> None:
     sat = datetime.date(2025, 3, 22)  # Saturday
     assert latest_bhav_target_date(as_of=sat) == datetime.date(2025, 3, 21)
+
+
+@patch("api.services.price_feed.load_nse_equity_bhav_map")
+def test_resolve_nse_bhav_session_date_returns_preferred_when_probe_hits(
+    mock_map: object,
+) -> None:
+    # Session is valid when the parsed map is large enough (not tied to any one ticker).
+    mock_map.return_value = {f"X{i}": float(i) for i in range(200)}
+    mon = datetime.date(2025, 3, 24)
+    assert resolve_nse_bhav_session_date(mon) == mon
+
+
+@patch("api.services.price_feed.load_nse_equity_bhav_map", return_value=None)
+def test_resolve_nse_bhav_session_date_returns_none_when_no_session_within_window(
+    _mock_map: object,
+) -> None:
+    mon = datetime.date(2025, 3, 24)
+    assert resolve_nse_bhav_session_date(mon, max_lookback_calendar_days=3) is None
 
 
 def test_parse_amfi_nav_rows_picks_latest_per_code() -> None:
@@ -204,7 +223,7 @@ def test_backfill_prices_calls_fetch_and_upserts(mock_fetch) -> None:
     assert got.close_price == pytest.approx(1500.0)
 
 
-@patch("api.services.price_feed.fetch_equity_closes_from_nse_bhav", return_value={})
+@patch("api.services.price_feed.load_nse_equity_bhav_map", return_value=None)
 @patch(
     "api.services.price_feed.latest_bhav_target_date",
     return_value=datetime.date(2025, 3, 24),

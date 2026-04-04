@@ -16,6 +16,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { RECHARTS_TOOLTIP_CARD_CLASS } from "@/components/dashboard/recharts-tooltip";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -153,9 +154,14 @@ export function PortfolioValueTrend({ userId }: PortfolioValueTrendProps) {
                       .filter(([, amt]) => amt > 0)
                       .sort((a, b) => b[1] - a[1]);
                     return (
-                      <div className="rounded-lg border bg-card px-3 py-2 text-xs shadow-md max-w-[240px]">
-                        <p className="font-medium">{row.month}</p>
-                        <p className="text-muted-foreground">
+                      <div
+                        className={cn(
+                          RECHARTS_TOOLTIP_CARD_CLASS,
+                          "max-w-[240px]",
+                        )}
+                      >
+                        <p className="font-medium leading-tight">{row.month}</p>
+                        <p className="mt-1.5 text-muted-foreground leading-tight">
                           {formatCurrency(row.total_portfolio_value)}
                         </p>
                         {breakdown.length > 0 && (

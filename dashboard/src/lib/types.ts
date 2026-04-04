@@ -918,6 +918,7 @@ export interface InvestmentTransactionUpdate {
   price_per_unit?: number;
   total_amount?: number;
   txn_date?: string;
+  holding_id?: number | null;
 }
 
 /** PATCH /api/investment-transactions/bulk */
