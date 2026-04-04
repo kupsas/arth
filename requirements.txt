@@ -13,6 +13,8 @@ fastapi>=0.115
 uvicorn[standard]>=0.34
 httpx>=0.27
 requests>=2.31
+# Goals architecture — IMF CPI via SDMX (inflation_service); pulls pandas via sdmx1
+sdmx1>=1.0
 python-multipart>=0.0.9
 
 # Phase 4 — Gmail API email scraper

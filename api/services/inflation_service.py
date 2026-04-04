@@ -1,10 +1,23 @@
 """
 External inflation data + cache (Goals architecture Sub-Plan F).
 
-Fetches CPI from data.gov.in when ``DATA_GOV_IN_API_KEY`` is set; stores rows in
-``InflationRate``; falls back to cached values (<90 days) then hard-coded defaults.
+Pulls **India** all-items CPI as a **monthly index** from the IMF SDMX API
+(``IND.CPI._T.IX.M``), computes **year-on-year % change for every month** with
+enough history, and stores **one ``InflationRate`` row per month** for
+``CPI_GENERAL`` (period ``YYYY-MM``). No API key.
 
-Parsing is defensive: OGD JSON shapes vary by dataset revision. Unit tests mock HTTP.
+Sync runs:
+  - On API startup (background thread, like price sync)
+  - Weekly (scheduler, Asia/Kolkata)
+  - On ``POST /api/inflation/refresh`` and when rate lookups trigger a refresh
+
+Other categories stay ``INFLATION_DEFAULTS`` until another source exists.
+
+Goal decomposition uses :func:`cpi_general_yoy_ema_pct` — an **exponential** moving
+average of monthly YoY (``span`` months, ``α = 2/(span+1)``), smoother than a plain
+mean and heavier on recent prints. Same value for all subtypes until sector series exist.
+
+Attribution: IMF data — see https://data.imf.org/ and IMF terms of use.
 """
 
 from __future__ import annotations
@@ -12,17 +25,16 @@ from __future__ import annotations
 import datetime
 import logging
 import os
-import re
 from typing import Any
 
-import httpx
+import pandas as pd
 from sqlmodel import Session, col, select
 
 from api.models import Goal, InflationRate
 
 logger = logging.getLogger(__name__)
 
-# ── Defaults (annual %, nominal) ────────────────────────────────────────────
+# ── Defaults (annual %, nominal) — used when DB has no row for that category ──
 
 INFLATION_DEFAULTS: dict[str, float] = {
     "CPI_GENERAL": 6.0,
@@ -48,207 +60,219 @@ GOAL_INFLATION_MAP: dict[str, str | None] = {
 CACHE_STALE_DAYS = 30
 CACHE_EXPIRED_DAYS = 90
 
-# MoSPI CPI datasets move between resource_ids — set DATA_GOV_IN_CPI_RESOURCE_ID in .env.
-DATA_GOV_BASE = "https://api.data.gov.in/resource"
+# IMF SDMX: monthly all-items CPI index for India (COICOP total _T).
+IMF_DATAFLOW_CPI = "CPI"
+IMF_INDIA_CPI_KEY = "IND.CPI._T.IX.M"
+
+# Index history must start ≥12 months before the first stored YoY month. Default
+# ``2018`` so YoY for ``2019-01`` can be computed; see ``MIN_STORED_CPI_PERIOD``.
+DEFAULT_IMF_CPI_INDEX_START = "2018"
+# Persist monthly YoY in ``inflation_rates`` only from this month onward (product default).
+MIN_STORED_CPI_PERIOD = "2019-01"
+
+# Goal decomposition: EMA span (months) for monthly YoY series — α = 2/(span+1).
+# Override via ``INFLATION_SIMULATION_EMA_SPAN`` (``INFLATION_SIMULATION_MA_MONTHS`` still read for compatibility).
+_DEFAULT_SIMULATION_EMA_SPAN = 12
+
+# YoY % sanity bounds (IMF/IFS can spike on revisions)
+_YOY_MIN = -10.0
+_YOY_MAX = 60.0
 
 
 def _now_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
 
-def _parse_float_loose(x: Any) -> float | None:
-    if x is None:
+def _imf_period_to_yyyy_mm(time_period: str) -> str:
+    """``2025-M12`` → ``2025-12`` for storage/display."""
+    if "-M" in time_period:
+        y, rest = time_period.split("-M", 1)
+        m = int(rest)
+        return f"{y}-{m:02d}"
+    return time_period[:7] if len(time_period) >= 7 else time_period
+
+
+def _fetch_imf_cpi_index_series() -> pd.Series | None:
+    """Download India monthly CPI index from IMF. Returns None on skip/failure."""
+    if os.getenv("INFLATION_DISABLE_IMF", "").strip().lower() in ("1", "true", "yes"):
+        logger.info("INFLATION_DISABLE_IMF set — skipping IMF CPI fetch.")
         return None
-    if isinstance(x, (int, float)) and not isinstance(x, bool):
-        return float(x)
-    s = str(x).strip().replace(",", "")
-    if not s:
-        return None
+
     try:
-        return float(s)
-    except ValueError:
+        import sdmx
+    except ImportError as e:
+        logger.warning("sdmx1 not installed (%s) — cannot fetch IMF CPI.", e)
         return None
 
+    start = (os.getenv("IMF_CPI_START_PERIOD") or DEFAULT_IMF_CPI_INDEX_START).strip()
 
-def _record_sort_key(rec: dict[str, Any]) -> tuple[int, int, int]:
-    """Best-effort (year, month) for sorting records chronologically."""
-    y = 0
-    m = 0
-    for ky in ("year", "Year", "financial_year", "Year__"):
-        v = rec.get(ky)
-        if v is not None:
-            try:
-                y = int(str(v).split("-")[0].strip()[:4])
-            except ValueError:
-                pass
-            break
-    for km in ("month", "Month", "month_name"):
-        v = rec.get(km)
-        if v is None:
+    try:
+        IMF = sdmx.Client("IMF_DATA")
+        msg = IMF.data(
+            IMF_DATAFLOW_CPI,
+            key=IMF_INDIA_CPI_KEY,
+            params={"startPeriod": start},
+        )
+        ser = sdmx.to_pandas(msg)
+    except Exception as e:
+        logger.warning("IMF SDMX CPI request failed: %s", e)
+        return None
+
+    if not isinstance(ser, pd.Series) or ser.empty:
+        logger.warning("IMF CPI returned empty series.")
+        return None
+    return ser
+
+
+def monthly_yoy_pairs_from_imf_series(ser: pd.Series) -> list[tuple[str, float]]:
+    """For each month with a full 12-month lookback, compute YoY %; period = ``YYYY-MM``."""
+    df = ser.reset_index()
+    if "TIME_PERIOD" not in df.columns:
+        logger.warning("IMF CPI series missing TIME_PERIOD.")
+        return []
+    val_col = "value" if "value" in df.columns else ser.name
+    if val_col not in df.columns:
+        logger.warning("IMF CPI series has no value column.")
+        return []
+
+    df = df.sort_values("TIME_PERIOD").reset_index(drop=True)
+    vals = pd.to_numeric(df[val_col], errors="coerce")
+    out: list[tuple[str, float]] = []
+    for i in range(12, len(df)):
+        cur = vals.iloc[i]
+        prev = vals.iloc[i - 12]
+        if pd.isna(cur) or pd.isna(prev) or float(prev) <= 0:
             continue
-        sv = str(v).strip().lower()
-        month_map = {
-            "jan": 1,
-            "feb": 2,
-            "mar": 3,
-            "apr": 4,
-            "may": 5,
-            "jun": 6,
-            "jul": 7,
-            "aug": 8,
-            "sep": 9,
-            "oct": 10,
-            "nov": 11,
-            "dec": 12,
-        }
-        for name, num in month_map.items():
-            if name in sv:
-                m = num
-                break
-        if m == 0:
-            try:
-                m = int(sv[:2]) if sv.isdigit() else int(float(sv))
-            except ValueError:
-                pass
-        if m:
-            break
-    # year_month combined field e.g. 202401
-    ym = rec.get("year_month") or rec.get("YearMonth") or rec.get("yearmonth")
-    if ym is not None and y == 0:
-        s = re.sub(r"\D", "", str(ym))
-        if len(s) >= 6:
-            try:
-                y = int(s[:4])
-                m = int(s[4:6])
-            except ValueError:
-                pass
-    return (y, m, 0)
-
-
-def _direct_inflation_from_records(records: list[dict[str, Any]]) -> float | None:
-    """If records expose a YoY inflation %, use the latest non-null."""
-    if not records:
-        return None
-    scored: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
-    for r in records:
-        scored.append((_record_sort_key(r), r))
-    scored.sort(key=lambda x: x[0])
-    for _k, r in reversed(scored):
-        for key in r:
-            lk = str(key).lower()
-            if "inflation" in lk or "yoy" in lk or lk.endswith("_y_o_y"):
-                val = _parse_float_loose(r[key])
-                if val is not None and 0 <= val <= 50:
-                    return val
-    return None
-
-
-def _yoy_from_index_series(records: list[dict[str, Any]]) -> float | None:
-    """Compute YoY % from a general index column when ≥13 sorted points exist."""
-    index_keys: list[str] = []
-    for r in records:
-        for k, v in r.items():
-            lk = str(k).lower()
-            if "index" in lk and "inflation" not in lk:
-                if _parse_float_loose(v) is not None:
-                    index_keys.append(k)
-                break
-        if index_keys:
-            break
-    if not index_keys:
-        # any numeric column with 'general' or 'combined'
-        for r in records:
-            for k, v in r.items():
-                lk = str(k).lower()
-                if ("general" in lk or "combined" in lk) and _parse_float_loose(v) is not None:
-                    index_keys.append(k)
-                    break
-            if index_keys:
-                break
-    if not index_keys:
-        return None
-    key = index_keys[0]
-    scored: list[tuple[tuple[int, int, int], float]] = []
-    for r in records:
-        v = _parse_float_loose(r.get(key))
-        if v is None or v <= 0:
+        yoy = (float(cur) - float(prev)) / float(prev) * 100.0
+        if yoy < _YOY_MIN or yoy > _YOY_MAX:
             continue
-        scored.append((_record_sort_key(r), v))
-    scored.sort(key=lambda x: x[0])
-    if len(scored) < 13:
+        p = _imf_period_to_yyyy_mm(str(df["TIME_PERIOD"].iloc[i]))
+        out.append((p, round(float(yoy), 2)))
+    return out
+
+
+def _filter_pairs_minimum_calendar_month(
+    pairs: list[tuple[str, float]],
+) -> list[tuple[str, float]]:
+    """Keep only ``YYYY-MM`` >= :data:`MIN_STORED_CPI_PERIOD` (default: from 2019)."""
+    return [(p, r) for p, r in pairs if p >= MIN_STORED_CPI_PERIOD]
+
+
+def implied_imf_monthly_yoy_pairs() -> list[tuple[str, float]] | None:
+    """Network: monthly YoY series for months >= ``MIN_STORED_CPI_PERIOD``, or None."""
+    ser = _fetch_imf_cpi_index_series()
+    if ser is None:
         return None
-    latest = scored[-1][1]
-    year_ago = scored[-13][1]
-    if year_ago <= 0:
+    raw = monthly_yoy_pairs_from_imf_series(ser)
+    if not raw:
+        logger.warning("IMF CPI: no monthly YoY pairs computed.")
         return None
-    return (latest - year_ago) / year_ago * 100.0
-
-
-def _period_label(records: list[dict[str, Any]]) -> str:
-    if not records:
-        return "unknown"
-    best = max(records, key=lambda r: _record_sort_key(r))
-    y, m, _ = _record_sort_key(best)
-    if y and m:
-        return f"{y:04d}-{m:02d}"
-    return "latest"
-
-
-def fetch_cpi_from_data_gov_in() -> dict[str, float] | None:
-    """Return at least CPI_GENERAL annual % from data.gov.in, or None."""
-    api_key = (os.getenv("DATA_GOV_IN_API_KEY") or "").strip()
-    resource_id = (os.getenv("DATA_GOV_IN_CPI_RESOURCE_ID") or "").strip()
-
-    if not api_key:
-        logger.warning("DATA_GOV_IN_API_KEY not set — skipping live CPI fetch.")
-        return None
-    if not resource_id:
+    pairs = _filter_pairs_minimum_calendar_month(raw)
+    if not pairs:
         logger.warning(
-            "DATA_GOV_IN_CPI_RESOURCE_ID not set — skipping live CPI fetch "
-            "(set both env vars from data.gov.in)."
+            "IMF CPI: no rows on/after %s — check IMF_CPI_START_PERIOD (need index data "
+            "≥12 months before that month).",
+            MIN_STORED_CPI_PERIOD,
         )
         return None
+    return pairs
 
-    url = f"{DATA_GOV_BASE}/{resource_id}"
-    params = {
-        "api-key": api_key,
-        "format": "json",
-        "limit": 500,
-    }
+
+def sync_imf_cpi_history(session: Session) -> dict[str, Any]:
+    """
+    Replace all system ``CPI_GENERAL`` rows with the latest IMF monthly YoY history.
+
+    One row per calendar month (``period`` = ``YYYY-MM``). All rows share the same
+    ``fetched_at`` (this sync run). Returns a small summary dict.
+    """
+    pairs = implied_imf_monthly_yoy_pairs()
+    if pairs is None:
+        return {"ok": False, "months_written": 0, "reason": "fetch_failed_or_disabled"}
+    if not pairs:
+        # Do not wipe existing DB rows if the API returned an empty series.
+        return {"ok": False, "months_written": 0, "reason": "no_monthly_pairs"}
+
+    sync_time = _now_utc()
+    # Remove previous IMF headline series so we don't duplicate periods.
+    existing = session.exec(
+        select(InflationRate).where(
+            InflationRate.category == "CPI_GENERAL",
+            InflationRate.user_id == "system",
+        )
+    ).all()
+    for row in existing:
+        session.delete(row)
+    session.flush()
+
+    for period, rate in pairs:
+        session.add(
+            InflationRate(
+                category="CPI_GENERAL",
+                rate=float(rate),
+                source="IMF_SDMX",
+                period=period,
+                user_id="system",
+                fetched_at=sync_time,
+            )
+        )
     try:
-        with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-            r = client.get(url, params=params)
-            r.raise_for_status()
-            payload = r.json()
+        session.commit()
     except Exception as e:
-        logger.warning("data.gov.in CPI request failed: %s", e)
-        return None
+        session.rollback()
+        logger.warning("Could not persist inflation history: %s", e)
+        return {"ok": False, "months_written": 0, "error": str(e)}
 
-    records = payload.get("records") if isinstance(payload, dict) else None
-    if not isinstance(records, list) or not records:
-        logger.warning("data.gov.in CPI response had no records.")
-        return None
+    logger.info(
+        "IMF CPI history synced — months=%d, latest_period=%s",
+        len(pairs),
+        pairs[-1][0],
+    )
+    return {
+        "ok": True,
+        "months_written": len(pairs),
+        "latest_period": pairs[-1][0],
+        "latest_yoy_pct": pairs[-1][1],
+        "synced_at": sync_time.isoformat(),
+    }
 
-    rate = _direct_inflation_from_records(records)
-    if rate is None:
-        rate = _yoy_from_index_series(records)
-    if rate is None or rate < 0 or rate > 50:
-        logger.warning("Could not derive a sane CPI YoY rate from records.")
-        return None
 
-    period = _period_label(records)
-    # Extra key consumed by fetch_and_cache_inflation (not a rate category).
-    return {"CPI_GENERAL": round(rate, 2), "_period": period}
+def fetch_cpi_from_imf_sdmx() -> dict[str, float] | None:
+    """
+    Latest headline YoY (convenience for callers that expect one dict).
+
+    Does not write to the DB — use :func:`sync_imf_cpi_history` for persistence.
+    """
+    pairs = implied_imf_monthly_yoy_pairs()
+    if not pairs:
+        return None
+    period, rate = pairs[-1]
+    return {"CPI_GENERAL": rate, "_period": period}
 
 
 def _latest_row_for_category(session: Session, category: str) -> InflationRate | None:
-    q = (
-        select(InflationRate)
-        .where(InflationRate.category == category)
-        .where(InflationRate.user_id == "system")
-        .order_by(col(InflationRate.fetched_at).desc())
+    q = select(InflationRate).where(
+        InflationRate.category == category,
+        InflationRate.user_id == "system",
     )
+    # CPI_GENERAL: many rows (one per month) — use latest calendar month.
+    if category == "CPI_GENERAL":
+        q = q.order_by(col(InflationRate.period).desc())
+    else:
+        q = q.order_by(col(InflationRate.fetched_at).desc())
     return session.exec(q).first()
+
+
+def _latest_sync_time_cpi_general(session: Session) -> datetime.datetime | None:
+    """Most recent batch sync time (all CPI_GENERAL rows share it)."""
+    row = session.exec(
+        select(InflationRate)
+        .where(
+            InflationRate.category == "CPI_GENERAL",
+            InflationRate.user_id == "system",
+        )
+        .order_by(col(InflationRate.fetched_at).desc())
+    ).first()
+    return row.fetched_at if row else None
 
 
 def _age_days(ts: datetime.datetime) -> int:
@@ -258,26 +282,8 @@ def _age_days(ts: datetime.datetime) -> int:
 
 
 def fetch_and_cache_inflation(session: Session) -> dict[str, float]:
-    """Fetch CPI when possible, append cache row, merge with defaults; never raises."""
-    fetched = fetch_cpi_from_data_gov_in()
-    if fetched and "CPI_GENERAL" in fetched:
-        period = str(fetched.get("_period", "unknown"))
-        cpi = fetched.get("CPI_GENERAL")
-        if cpi is not None:
-            row = InflationRate(
-                category="CPI_GENERAL",
-                rate=float(cpi),
-                source="MOSPI_CPI",
-                period=period,
-                user_id="system",
-                fetched_at=_now_utc(),
-            )
-            session.add(row)
-            try:
-                session.commit()
-            except Exception as e:
-                session.rollback()
-                logger.warning("Could not persist InflationRate: %s", e)
+    """Run full IMF history sync, then merged headline map for all categories."""
+    sync_imf_cpi_history(session)
 
     out: dict[str, float] = dict(INFLATION_DEFAULTS)
     for cat in INFLATION_DEFAULTS:
@@ -287,16 +293,113 @@ def fetch_and_cache_inflation(session: Session) -> dict[str, float]:
     return out
 
 
+def _simulation_ema_span() -> int:
+    """EMA ``span`` (1–120, default 12). Older env ``INFLATION_SIMULATION_MA_MONTHS`` still works."""
+    for key in ("INFLATION_SIMULATION_EMA_SPAN", "INFLATION_SIMULATION_MA_MONTHS"):
+        raw = (os.getenv(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            return max(1, min(int(raw), 120))
+        except ValueError:
+            continue
+    return _DEFAULT_SIMULATION_EMA_SPAN
+
+
+def simulation_inflation_ema_span() -> int:
+    """EMA window (months) — returned next to the blended % in decompose responses."""
+    return _simulation_ema_span()
+
+
+def simulation_inflation_trailing_months() -> int:
+    """Backward-compatible alias — same numeric window as :func:`simulation_inflation_ema_span`."""
+    return _simulation_ema_span()
+
+
+def _yoy_ema_last(values_oldest_to_newest: list[float], span: int) -> float:
+    """Recursive EMA (``adjust=False``): last value weights recent months more.
+
+    ``α = 2/(span+1)``; seed with the oldest observation, then walk forward in time.
+    """
+    if not values_oldest_to_newest:
+        raise ValueError("values_oldest_to_newest must be non-empty")
+    if len(values_oldest_to_newest) == 1:
+        return float(values_oldest_to_newest[0])
+    span = max(1, span)
+    alpha = 2.0 / (float(span) + 1.0)
+    ema = float(values_oldest_to_newest[0])
+    for x in values_oldest_to_newest[1:]:
+        ema = alpha * float(x) + (1.0 - alpha) * ema
+    return ema
+
+
+def _ensure_fresh_cpi_general(session: Session) -> None:
+    """Refresh IMF CPI rows if missing or cache older than :data:`CACHE_STALE_DAYS`."""
+    sync_ts = _latest_sync_time_cpi_general(session)
+    if sync_ts is None:
+        fetch_and_cache_inflation(session)
+        return
+    if _age_days(sync_ts) < CACHE_STALE_DAYS:
+        return
+    fetch_and_cache_inflation(session)
+
+
+def cpi_general_yoy_ema_pct(session: Session) -> float:
+    """
+    **Exponential** moving average of the last *N* stored monthly YoY % values for
+    ``CPI_GENERAL`` (*N* = :func:`simulation_inflation_ema_span`, chronological EMA).
+
+    Uses the same recursive rule as pandas ``ewm(span=N, adjust=False)``: recent
+    months influence the result more than a simple mean. If there is no history,
+    falls back to ``INFLATION_DEFAULTS['CPI_GENERAL']``.
+
+    Until sector-specific series exist, the same blended rate is used for every
+    goal subtype — see :func:`get_goal_inflation_rate`.
+    """
+    _ensure_fresh_cpi_general(session)
+    n = _simulation_ema_span()
+    rows = session.exec(
+        select(InflationRate)
+        .where(
+            InflationRate.category == "CPI_GENERAL",
+            InflationRate.user_id == "system",
+        )
+        .order_by(col(InflationRate.period).desc())
+        .limit(n)
+    ).all()
+    if not rows:
+        return float(INFLATION_DEFAULTS["CPI_GENERAL"])
+    # Chronological order (oldest → newest) for forward EMA.
+    chronological = list(reversed(rows))
+    vals = [float(r.rate) for r in chronological]
+    return round(_yoy_ema_last(vals, n), 2)
+
+
+def cpi_general_yoy_moving_average_pct(session: Session) -> float:
+    """Deprecated name — use :func:`cpi_general_yoy_ema_pct`."""
+    return cpi_general_yoy_ema_pct(session)
+
+
 def get_inflation_rate(session: Session, category: str) -> float:
     """Latest annual % for *category* with stale/fetch logic."""
     cat = category.strip().upper()
     row = _latest_row_for_category(session, cat)
+
+    if cat == "CPI_GENERAL":
+        _ensure_fresh_cpi_general(session)
+        row2 = _latest_row_for_category(session, cat)
+        return (
+            float(row2.rate)
+            if row2 is not None
+            else float(INFLATION_DEFAULTS["CPI_GENERAL"])
+        )
+
+    # Non-headline categories: single row or default
     if row is not None:
         age = _age_days(row.fetched_at)
         if age < CACHE_STALE_DAYS:
             return float(row.rate)
         if age < CACHE_EXPIRED_DAYS:
-            # Soft stale: try refresh but return cache if fetch fails
             fetch_and_cache_inflation(session)
             row2 = _latest_row_for_category(session, cat)
             if row2 is not None:
@@ -311,24 +414,65 @@ def get_inflation_rate(session: Session, category: str) -> float:
 
 
 def get_goal_inflation_rate(session: Session, goal: Goal) -> float:
-    """Resolve annual inflation % for simulation / decomposition for this goal."""
+    """Resolve annual inflation % for simulation / decomposition for this goal.
+
+    Priority:
+      1. ``goal_specific_inflation_rate`` when set.
+      2. ``0`` for loan-payoff style goals (no price-level adjustment).
+      3. Otherwise an **EMA of IMF monthly CPI YoY** (same value for all subtypes
+         until sector indices are wired — see :func:`cpi_general_yoy_ema_pct`).
+    """
     if goal.goal_specific_inflation_rate is not None:
         return float(goal.goal_specific_inflation_rate)
     st = (goal.goal_subtype or "CUSTOM").strip().upper()
-    mapped = GOAL_INFLATION_MAP.get(st, "CPI_GENERAL")
-    if mapped is None:
+    if GOAL_INFLATION_MAP.get(st, "CPI_GENERAL") is None:
         return 0.0
-    return get_inflation_rate(session, mapped)
+    return cpi_general_yoy_ema_pct(session)
 
 
 def merge_rates_from_db(session: Session) -> dict[str, float]:
-    """Latest DB value per category, else INFLATION_DEFAULTS (no HTTP)."""
+    """Latest DB value per category, else INFLATION_DEFAULTS (no live fetch)."""
     out: dict[str, float] = dict(INFLATION_DEFAULTS)
     for cat in INFLATION_DEFAULTS:
         row = _latest_row_for_category(session, cat)
         if row is not None:
             out[cat] = float(row.rate)
     return out
+
+
+def list_cpi_general_monthly_history_payload(
+    session: Session,
+    *,
+    limit: int = 240,
+) -> dict[str, Any]:
+    """JSON-friendly history + sync metadata."""
+    rows = session.exec(
+        select(InflationRate)
+        .where(
+            InflationRate.category == "CPI_GENERAL",
+            InflationRate.user_id == "system",
+        )
+        .order_by(col(InflationRate.period).desc())
+        .limit(max(1, min(limit, 600)))
+    ).all()
+    sync_ts = None
+    out_list: list[dict[str, Any]] = []
+    for r in rows:
+        if sync_ts is None:
+            sync_ts = r.fetched_at.isoformat()
+        out_list.append(
+            {
+                "period": r.period,
+                "yoy_pct": float(r.rate),
+                "source": r.source,
+            }
+        )
+    return {
+        "series": "IND_CPI_ALL_ITEMS_YOY_PCT",
+        "synced_at": sync_ts,
+        "count": len(out_list),
+        "months": out_list,
+    }
 
 
 def all_current_rates_with_meta(session: Session) -> dict[str, Any]:

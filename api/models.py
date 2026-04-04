@@ -469,7 +469,7 @@ class GoalLink(SQLModel, table=True):
 
 
 class InflationRate(SQLModel, table=True):
-    """Cached inflation rate data fetched from external sources (e.g. MoSPI)."""
+    """Cached inflation: one row per category, or for ``CPI_GENERAL`` one row per ``YYYY-MM`` (IMF monthly YoY)."""
 
     __tablename__ = "inflation_rates"
 

@@ -41,6 +41,10 @@ from api.services.goal_decomposer import (
     spec_to_goal_row,
 )
 from api.services.goal_graph import validate_link
+from api.services.inflation_service import (
+    get_goal_inflation_rate,
+    simulation_inflation_ema_span,
+)
 from api.services.surplus_calculator import compute_surplus
 from api.services.activation_engine import (
     ConditionParseError,
@@ -567,8 +571,20 @@ def decompose_goal(
             if goal.target_date is None:
                 raise ValueError("target_date is required for debt decomposition")
             result = decompose_debt_goal(goal, body.loan_params)
+            inflation_sim: dict | None = None
         else:
-            result = decompose_point_in_time_goal(goal, surplus)
+            # Blended IMF CPI YoY (trailing mean) — same scalar for all subtypes until sector series exist.
+            general_cpi = get_goal_inflation_rate(session, goal)
+            result = decompose_point_in_time_goal(
+                goal,
+                surplus,
+                general_cpi=general_cpi,
+            )
+            inflation_sim = {
+                "annual_pct": general_cpi,
+                "ema_span": simulation_inflation_ema_span(),
+                "method": "ema_of_imf_cpi_monthly_yoy",
+            }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -576,6 +592,7 @@ def decompose_goal(
         "decomposition": result.model_dump(mode="json"),
         "surplus_headline": surplus,
         "surplus_warnings": surplus_res.warnings,
+        "simulation_inflation": inflation_sim,
     }
 
     if not body.auto_create:

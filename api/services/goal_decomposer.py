@@ -210,6 +210,11 @@ def decompose_point_in_time_goal(
 
     ``goal.target_amount`` and ``goal.target_date`` must be set; ``surplus`` is the
     headline monthly surplus from :func:`api.services.surplus_calculator.compute_surplus`.
+
+    ``general_cpi`` is the annual % used when ``goal.goal_specific_inflation_rate`` is
+    unset. API routes pass :func:`api.services.inflation_service.get_goal_inflation_rate`
+    (EMA of IMF monthly CPI YoY). The default ``6.0`` keeps unit tests and offline
+    scripts stable without a database.
     """
     if goal.target_amount is None or goal.target_date is None:
         raise ValueError("target_amount and target_date are required for decomposition")

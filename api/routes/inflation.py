@@ -2,16 +2,22 @@
 Inflation rates API (Sub-Plan F).
 
 GET  /api/inflation         — current rates + metadata
-POST /api/inflation/refresh — force re-fetch from data.gov.in
+GET  /api/inflation/history  — monthly India CPI YoY series (newest first)
+POST /api/inflation/refresh — full IMF history sync + snapshot
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.services.inflation_service import all_current_rates_with_meta, fetch_and_cache_inflation
+from api.services.inflation_service import (
+    all_current_rates_with_meta,
+    list_cpi_general_monthly_history_payload,
+    merge_rates_from_db,
+    sync_imf_cpi_history,
+)
 from sqlmodel import Session
 
 router = APIRouter()
@@ -27,14 +33,26 @@ def get_inflation(
     return all_current_rates_with_meta(session)
 
 
+@router.get("/history")
+def get_inflation_history(
+    limit: int = Query(240, ge=1, le=600, description="Max months to return (newest first)"),
+    *,
+    session: Session = Depends(get_session),
+    _user: str = Depends(get_current_user),
+) -> dict:
+    """Stored monthly YoY % for India CPI (all items), one row per ``YYYY-MM``."""
+    return list_cpi_general_monthly_history_payload(session, limit=limit)
+
+
 @router.post("/refresh")
 def refresh_inflation(
     *,
     session: Session = Depends(get_session),
     _user: str = Depends(get_current_user),
 ) -> dict:
-    """Force a CPI fetch (if API key set) and return updated snapshot."""
-    merged = fetch_and_cache_inflation(session)
+    """Run full IMF monthly history sync (no API key) and return snapshot + sync summary."""
+    summary = sync_imf_cpi_history(session)
     snap = all_current_rates_with_meta(session)
-    snap["refreshed_headline"] = merged
+    snap["sync"] = summary
+    snap["refreshed_headline"] = merge_rates_from_db(session)
     return snap

@@ -64,6 +64,11 @@ def test_decompose_preview_returns_json(client: TestClient, engine):
     assert "decomposition" in data
     assert data["decomposition"]["mode"] == "POINT_IN_TIME"
     assert data["decomposition"]["monthly_required"] > 0
+    sim = data.get("simulation_inflation")
+    assert sim is not None
+    assert sim["method"] == "ema_of_imf_cpi_monthly_yoy"
+    assert sim["ema_span"] >= 1
+    assert "annual_pct" in sim
 
 
 def test_decompose_auto_create_makes_links(client: TestClient, engine):

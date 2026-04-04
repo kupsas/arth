@@ -21,6 +21,7 @@ from fastapi.responses import RedirectResponse
 from api.auth import get_current_user
 from api.database import get_engine, init_db
 from api.routes import metrics, pipeline, transactions
+from api.services.inflation_service import sync_imf_cpi_history
 from api.services.price_feed import run_startup_price_sync
 from api.routes.auth import router as auth_router
 from api.routes.goal_links import router as goal_links_router
@@ -67,6 +68,35 @@ async def _run_startup_prices_in_thread() -> None:
         raise
 
 
+async def _run_startup_inflation_in_thread() -> None:
+    """IMF CPI fetch can be slow — keep it off the event loop like price sync."""
+
+    logger.info(
+        "Startup inflation sync: background job started (IMF monthly CPI YoY → DB)"
+    )
+
+    def _sync_inflation() -> None:
+        try:
+            if os.getenv("INFLATION_DISABLE_IMF", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                logger.info("INFLATION_DISABLE_IMF — skipping startup inflation sync")
+                return
+            with Session(get_engine()) as session:
+                sync_imf_cpi_history(session)
+        except Exception:
+            logger.exception(
+                "Startup inflation sync failed — will retry on weekly job or refresh"
+            )
+
+    try:
+        await asyncio.to_thread(_sync_inflation)
+    except asyncio.CancelledError:
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle for the Arth API server.
@@ -80,9 +110,11 @@ async def lifespan(app: FastAPI):
          then refresh marks **in the background**. Uvicorn used to await this before
          ``yield``, which left "Waiting for application startup" for minutes when NSE
          or AMFI was slow or unreachable.
+      5. Sub-Plan F — IMF India CPI monthly YoY history sync **in the background**
+         (weekly job also scheduled in ``scraper.scheduler``).
 
     Shutdown:
-      5. Clean up the APScheduler background thread so the process exits cleanly.
+      6. Clean up the APScheduler background thread so the process exits cleanly.
     """
     setup_logging()
     logger.info("Arth API starting up...")
@@ -91,7 +123,10 @@ async def lifespan(app: FastAPI):
     # Schedule price sync without awaiting — server becomes ready immediately.
     # Keep a reference on app.state so the task is not GC'd before it runs (asyncio footgun).
     app.state.startup_price_sync_task = asyncio.create_task(_run_startup_prices_in_thread())
-    logger.info("Arth API ready (startup price sync runs in background)")
+    app.state.startup_inflation_sync_task = asyncio.create_task(
+        _run_startup_inflation_in_thread()
+    )
+    logger.info("Arth API ready (startup price + inflation sync run in background)")
     yield
     logger.info("Arth API shutting down...")
     shutdown_scheduler()

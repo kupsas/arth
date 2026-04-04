@@ -13,6 +13,12 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _disable_imf_network_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Startup + scheduler inflation sync use IMF SDMX; tests should not depend on it."""
+    monkeypatch.setenv("INFLATION_DISABLE_IMF", "1")
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BENCHMARK_FIXTURE = REPO_ROOT / "data" / "test" / "benchmark_20.json"
 GOLDEN_FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"

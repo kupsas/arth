@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import threading
 from zoneinfo import ZoneInfo
 
@@ -40,6 +41,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlmodel import Session
 
 from api.database import get_engine
+from api.services.inflation_service import sync_imf_cpi_history
 from pipeline.config import LLM_MODEL  # noqa: F401 — imported for context; not used directly here
 from scraper.config import GMAIL_TOKEN_PATH, POLL_INTERVAL_MINUTES
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
@@ -267,6 +269,26 @@ def _run_daily_price_job() -> None:
             _is_price_job_running = False
 
 
+def _run_inflation_sync_job() -> None:
+    """Refresh IMF India CPI monthly YoY rows in ``inflation_rates`` (weekly / manual)."""
+    if os.getenv("INFLATION_DISABLE_IMF", "").strip().lower() in ("1", "true", "yes"):
+        logger.debug("INFLATION_DISABLE_IMF — skipping scheduled inflation sync")
+        return
+    try:
+        with Session(get_engine()) as session:
+            summary = sync_imf_cpi_history(session)
+        if summary.get("ok"):
+            logger.info(
+                "Scheduled inflation sync OK — months_written=%s latest_period=%s",
+                summary.get("months_written"),
+                summary.get("latest_period"),
+            )
+        else:
+            logger.warning("Scheduled inflation sync incomplete: %s", summary)
+    except Exception:
+        logger.exception("Scheduled inflation sync failed")
+
+
 def _ensure_email_scrape_job() -> None:
     """Register Gmail polling if the token file exists and the job is not yet present."""
     global _scheduler
@@ -313,6 +335,17 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
         misfire_grace_time=_DAILY_PRICE_MISFIRE_GRACE_SEC,
         coalesce=True,
     )
+    # Sub-Plan F — keep CPI_GENERAL monthly history fresh without hitting IMF on every request.
+    _scheduler.add_job(
+        _run_inflation_sync_job,
+        trigger=CronTrigger(
+            day_of_week="sun", hour=7, minute=0, timezone=_DAILY_PRICE_TZ
+        ),
+        id="weekly_inflation",
+        replace_existing=True,
+        misfire_grace_time=_DAILY_PRICE_MISFIRE_GRACE_SEC,
+        coalesce=True,
+    )
 
     if GMAIL_TOKEN_PATH.exists():
         _scheduler.add_job(
@@ -333,7 +366,8 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
 
     _scheduler.start()
     logger.info(
-        "Scheduler started — daily prices 18:30 IST; email poll every %d min (%s)",
+        "Scheduler started — daily prices 18:30 IST; weekly inflation Sun 07:00 IST; "
+        "email poll every %d min (%s)",
         interval_minutes,
         "on" if GMAIL_TOKEN_PATH.exists() else "off until OAuth",
     )
