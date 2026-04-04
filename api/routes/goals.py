@@ -27,11 +27,21 @@ from typing import TypeGuard
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import Goal
+from api.models import Goal, GoalLink
+from api.services.goal_decomposer import (
+    LoanParams,
+    decompose_debt_goal,
+    decompose_point_in_time_goal,
+    parent_has_decompose_children,
+    spec_to_goal_row,
+)
+from api.services.goal_graph import validate_link
+from api.services.surplus_calculator import compute_surplus
 from api.services.activation_engine import (
     ConditionParseError,
     check_and_update_activations,
@@ -43,6 +53,7 @@ from api.services.chart_metrics import (
     validate_chart_key_for_goal,
 )
 from api.services.goal_evaluator import compute_progress
+from api.services.priority_scorer import PriorityResult, compute_priority_scores
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -88,6 +99,19 @@ class GoalCreate(BaseModel):
     expected_return_rate: float | None = Field(default=None, ge=0, le=50)
     starting_balance: float | None = Field(default=None, ge=0)
     goal_subtype: str | None = Field(default=None, max_length=64)
+
+
+class GoalReorderItem(BaseModel):
+    """Single entry in a priority reorder request (Sub-Plan E)."""
+
+    goal_id: int = Field(ge=1)
+    allocation_priority: int = Field(ge=1, le=100)
+
+
+class GoalReorderBody(BaseModel):
+    """New surplus funding order; does not change ``system_priority_score``."""
+
+    goal_order: list[GoalReorderItem] = Field(min_length=1)
 
 
 class GoalUpdate(BaseModel):
@@ -500,6 +524,156 @@ def list_goals(
         progress = compute_progress(goal, session)
         result.append(_goal_to_dict(goal, progress))
     return result
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# POST /{id}/decompose — preview or create sub-goals (Sub-Plan D)
+# Registered before /priorities and /{goal_id} static siblings.
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class DecomposeRequest(BaseModel):
+    """Preview decomposition or persist child goals + DECOMPOSES_INTO links."""
+
+    auto_create: bool = False
+    loan_params: LoanParams | None = None
+    surplus_months: int = Field(default=6, ge=3, le=12)
+
+
+@router.post("/{goal_id}/decompose")
+def decompose_goal(
+    goal_id: int,
+    body: DecomposeRequest,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict:
+    """Break a goal into sub-goals (PMT / down payment + EMI) with optional persist."""
+    goal = session.get(Goal, goal_id)
+    if not _goal_owned(goal, current_user):
+        raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
+
+    if parent_has_decompose_children(session, goal_id, current_user):
+        raise HTTPException(
+            status_code=400,
+            detail="This goal already has DECOMPOSES_INTO children — remove links first.",
+        )
+
+    surplus_res = compute_surplus(session, current_user, months=body.surplus_months)
+    surplus = float(surplus_res.monthly_surplus)
+
+    try:
+        if body.loan_params is not None:
+            if goal.target_date is None:
+                raise ValueError("target_date is required for debt decomposition")
+            result = decompose_debt_goal(goal, body.loan_params)
+        else:
+            result = decompose_point_in_time_goal(goal, surplus)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    out: dict = {
+        "decomposition": result.model_dump(mode="json"),
+        "surplus_headline": surplus,
+        "surplus_warnings": surplus_res.warnings,
+    }
+
+    if not body.auto_create:
+        return out
+
+    created_ids: list[int] = []
+    for spec in result.sub_goals:
+        child = spec_to_goal_row(spec, user_id=current_user)
+        session.add(child)
+        session.flush()
+        if child.id is None:
+            raise HTTPException(status_code=500, detail="Failed to allocate child goal id")
+        validate_link(session, goal_id, child.id, current_user)
+        link = GoalLink(
+            parent_goal_id=goal_id,
+            child_goal_id=child.id,
+            link_type="DECOMPOSES_INTO",
+            user_id=current_user,
+            description="Created by goal decomposition",
+        )
+        session.add(link)
+        try:
+            session.flush()
+        except IntegrityError as e:
+            session.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail="Could not create decomposition link (duplicate or constraint).",
+            ) from e
+        created_ids.append(child.id)
+
+    session.commit()
+    out["created_goal_ids"] = created_ids
+    return out
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# GET /priorities — system priority scores (Sub-Plan E)
+# POST /reorder — user-defined allocation_priority order
+# Static paths must be registered before /{goal_id}.
+# ───────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/priorities", response_model=PriorityResult)
+def get_goal_priorities(
+    persist: bool = Query(
+        True,
+        description="If true, persist system_priority_score on each active goal.",
+    ),
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> PriorityResult:
+    """Compute 4-dimension priority scores and suggested ranks for all active goals."""
+    return compute_priority_scores(session, current_user, persist=persist)
+
+
+@router.post("/reorder")
+def reorder_goals(
+    body: GoalReorderBody,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> list[dict]:
+    """
+    Update ``allocation_priority`` for the given goals.
+
+    Does **not** modify ``system_priority_score`` (that is only set by GET /priorities).
+    """
+    ranks = [x.allocation_priority for x in body.goal_order]
+    if len(ranks) != len(set(ranks)):
+        raise HTTPException(
+            status_code=400,
+            detail="allocation_priority values must be unique within the request.",
+        )
+
+    updated: list[dict] = []
+    for item in body.goal_order:
+        goal = session.get(Goal, item.goal_id)
+        if not _goal_owned(goal, current_user):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Goal {item.goal_id} not found",
+            )
+        goal.allocation_priority = item.allocation_priority
+        goal.updated_at = datetime.datetime.now(datetime.UTC)
+        session.add(goal)
+        updated.append(
+            {
+                "id": goal.id,
+                "name": goal.name,
+                "allocation_priority": goal.allocation_priority,
+                "system_priority_score": goal.system_priority_score,
+            }
+        )
+
+    session.commit()
+    return updated
 
 
 # ───────────────────────────────────────────────────────────────────────────
