@@ -364,6 +364,15 @@ def create_goal(
     resolved_ck = _default_chart_key_on_create(
         body.goal_type, body.linked_category, body.chart_key
     )
+    # investment_net is unique per user; additional INVESTMENT goals stay unlinked (chart_key=None).
+    if body.goal_type == "INVESTMENT" and resolved_ck == CHART_KEY_INVESTMENT_NET:
+        q_inv = (
+            select(Goal)
+            .where(Goal.user_id == current_user)
+            .where(Goal.chart_key == CHART_KEY_INVESTMENT_NET)
+        )
+        if session.exec(q_inv).first():
+            resolved_ck = None
     try:
         validate_chart_key_for_goal(body.goal_type, resolved_ck)
     except ValueError as e:

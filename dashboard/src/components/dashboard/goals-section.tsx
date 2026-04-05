@@ -1,15 +1,8 @@
 /**
- * GoalsSection — displays all financial goals with live progress bars.
+ * GoalsSection — compact list of financial goals (name, goal “kind”, target, progress, notes).
  *
- * Phase 4.5d: Goals Table + API
- *
- * Shows each goal with:
- *   - Name + goal type badge
- *   - Progress bar (current value / target amount)
- *   - Status badge (ON_TRACK / AT_RISK / BEHIND / ACHIEVED / PAUSED)
- *   - Days until deadline (if set)
- *
- * Also includes a "+ Add Goal" sheet for creating goals and a pencil "Edit" sheet per row.
+ * The sheet uses `goal_class`-style choices (one-time, recurring, growth, spending cap);
+ * the client maps each choice to API `goal_type` + `goal_class` on create/update.
  */
 
 "use client"
@@ -18,7 +11,6 @@ import * as React from "react"
 import {
   CheckCircle2,
   Clock,
-  Layers,
   Pencil,
   Plus,
   Target,
@@ -28,7 +20,6 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
@@ -48,38 +39,39 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import {
   useCreateGoal,
   useDeleteGoal,
-  useGoalTree,
   useGoals,
-  useLifeEvents,
   useUpdateGoal,
-  useUpdateLifeEvent,
 } from "@/hooks/use-goals"
 import {
-  CHART_KEY_EXPENSE_NEED_WANT_STACK,
-  CHART_KEY_INVESTMENT_NET,
-  categoryChartKey,
-} from "@/lib/chart-keys"
+  GOAL_UI_KIND_LABELS,
+  addGoalFormToCreatePayload,
+  defaultAddGoalForm,
+  inferGoalUiKind,
+  labelGoalUiKind,
+  prefillAddFormForChartKey,
+  type AddGoalFormState,
+  type GoalUiKind,
+} from "@/lib/goal-ui-kind"
 import { formatCurrency, cn } from "@/lib/utils"
-import type {
-  DashboardCategorySeries,
-  Goal,
-  GoalActivationStatus,
-  GoalCreate,
-  GoalFundingMode,
-  GoalStatus,
-  GoalTier,
-  GoalTree,
-  GoalType,
-  GoalUpdate,
-  LifeEvent,
-  ProgressCadence,
-  SensitivityToReturns,
-} from "@/lib/types"
+import type { Goal, GoalStatus, GoalUpdate } from "@/lib/types"
+
+/** Optional subtype for recurring goals — must match api/routes/goals.py _VALID_GOAL_SUBTYPES. */
+const GOAL_SUBTYPE_OPTIONS = [
+  { value: "", label: "None" },
+  { value: "LOAN_PAYOFF", label: "Loan payoff" },
+  { value: "HOME_PURCHASE", label: "Home purchase" },
+  { value: "VEHICLE", label: "Vehicle" },
+  { value: "RETIREMENT", label: "Retirement" },
+  { value: "CHILD_EDUCATION", label: "Child education" },
+  { value: "EMERGENCY_FUND", label: "Emergency fund" },
+  { value: "WEDDING", label: "Wedding" },
+  { value: "TRAVEL", label: "Travel" },
+  { value: "CUSTOM", label: "Custom" },
+] as const
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Status helpers
@@ -101,170 +93,72 @@ const STATUS_LABELS: Record<GoalStatus, string> = {
   PAUSED:   "Paused",
 }
 
-const GOAL_TYPE_LABELS: Record<GoalType, string> = {
-  SAVINGS:        "Savings",
-  EXPENSE_LIMIT:  "Expense Limit",
-  EMERGENCY_FUND: "Emergency Fund",
-  INVESTMENT:     "Investment",
-  DEBT_PAYOFF:    "Debt Payoff",
-  INSURANCE:      "Insurance",
-  TAX:            "Tax",
-}
-
-/** Category mini-charts on the dashboard — labels match CategoryTrendGrid. */
-const DASHBOARD_CATEGORY_SERIES: { id: DashboardCategorySeries; label: string }[] = [
-  { id: "swiggy_instamart", label: "Swiggy Instamart" },
-  { id: "swiggy_food", label: "Swiggy Food" },
-  { id: "food_and_dining", label: "Food & dining + Swiggy Dineout" },
-  { id: "shopping", label: "Shopping & e‑commerce" },
-  { id: "transport", label: "Transport & fuel" },
-  { id: "travel", label: "Travel & stay" },
-  { id: "gifts", label: "Gifts & personal transfers" },
-]
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase B.5 — pyramid tiers, activation lifecycle, tree helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Maps each API tier bucket to a short label and a left-border accent (Tailwind). */
-const TIER_PANELS: {
-  treeKey: keyof Pick<GoalTree, "l1" | "l2" | "l3" | "l4" | "untiered">
-  label: string
-  borderClass: string
-}[] = [
-  { treeKey: "l1", label: "L1 · Vision", borderClass: "border-l-violet-500" },
-  { treeKey: "l2", label: "L2 · Strategy", borderClass: "border-l-blue-500" },
-  { treeKey: "l3", label: "L3 · Tactic", borderClass: "border-l-emerald-600" },
-  { treeKey: "l4", label: "L4 · Operational", borderClass: "border-l-amber-500" },
-  { treeKey: "untiered", label: "Untiered", borderClass: "border-l-muted-foreground" },
-]
-
-const ACTIVATION_STATUS_LABELS: Record<string, string> = {
-  PENDING: "Pending",
-  ACTIVE: "Active",
-  COMPLETED: "Completed",
-  PAUSED: "Paused",
-}
-
-const ACTIVATION_STATUS_STYLES: Record<string, string> = {
-  PENDING: "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
-  ACTIVE: "border-green-500/40 bg-green-500/10 text-green-800 dark:text-green-300",
-  COMPLETED: "border-blue-500/40 bg-blue-500/10 text-blue-800 dark:text-blue-300",
-  PAUSED: "border-muted-foreground/40 bg-muted text-muted-foreground",
-}
-
-const GOAL_TIERS: GoalTier[] = ["L1", "L2", "L3", "L4"]
-const GOAL_TIME_HORIZONS = [
-  "MONTHLY",
-  "QUARTERLY",
-  "ANNUAL",
-  "MULTI_YEAR",
-  "DECADE",
-] as const
-const GOAL_FUNDING_MODES: GoalFundingMode[] = [
-  "ACCUMULATION",
-  "CONSTRAINT",
-  "EVENT",
-  "MAINTENANCE",
-]
-const GOAL_ACTIVATION_STATUSES: GoalActivationStatus[] = [
-  "PENDING",
-  "ACTIVE",
-  "COMPLETED",
-  "PAUSED",
-]
-const SENSITIVITY_OPTIONS: SensitivityToReturns[] = ["LOW", "MEDIUM", "HIGH"]
-
-/** Build id → goal for every node returned in GET /api/goals/tree. */
-function goalsByIdFromTree(tree: GoalTree): Map<number, Goal> {
-  const m = new Map<number, Goal>()
-  for (const g of tree.l1) m.set(g.id, g)
-  for (const g of tree.l2) m.set(g.id, g)
-  for (const g of tree.l3) m.set(g.id, g)
-  for (const g of tree.l4) m.set(g.id, g)
-  for (const g of tree.untiered) m.set(g.id, g)
-  return m
-}
-
-/**
- * Parent goals (higher pyramid) point *to* children via GoalLink rows.
- * For a given goal, list human-readable parent labels for "Feeds:" lines.
- */
-function parentLabelsForGoal(goalId: number, tree: GoalTree, byId: Map<number, Goal>): string[] {
-  const labels: string[] = []
-  for (const link of tree.links) {
-    if (link.child_goal_id !== goalId) continue
-    const p = byId.get(link.parent_goal_id)
-    if (p) {
-      labels.push(p.pyramid_id ? `${p.pyramid_id} · ${p.name}` : p.name)
-    }
-  }
-  return labels
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// EditGoalSheet — change name, targets, notes (goal type is fixed after create)
+// EditGoalSheet — fields depend on inferred goal “kind” (goal_class + legacy goal_type)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function EditGoalSheet({ goal }: { goal: Goal }) {
   const [open, setOpen] = React.useState(false)
   const { mutate: patchGoal, isPending } = useUpdateGoal()
+  const uiKind = inferGoalUiKind(goal)
 
-  // Form state — re-seed whenever the sheet opens so you always edit fresh server data.
   const [name, setName] = React.useState(goal.name)
   const [targetAmount, setTargetAmount] = React.useState(
     goal.target_amount != null ? String(goal.target_amount) : "",
   )
   const [targetDate, setTargetDate] = React.useState(goal.target_date ?? "")
-  const [linkedCategory, setLinkedCategory] = React.useState(goal.linked_category ?? "")
-  /** Non-empty = bind to dashboard chart_key; empty = use linked category name (legacy). */
-  const [expenseChartBind, setExpenseChartBind] = React.useState(goal.chart_key ?? "")
-  const [progressCadence, setProgressCadence] = React.useState<ProgressCadence>(
-    goal.progress_cadence ?? "MONTHLY",
-  )
   const [notes, setNotes] = React.useState(goal.notes ?? "")
-  // Phase B — pyramid / activation (optional on legacy goals)
-  const [pyramidId, setPyramidId] = React.useState(goal.pyramid_id ?? "")
-  const [tier, setTier] = React.useState(goal.tier ?? "")
-  const [timeHorizon, setTimeHorizon] = React.useState(goal.time_horizon ?? "")
-  const [fundingMode, setFundingMode] = React.useState(goal.funding_mode ?? "")
-  const [activationStatus, setActivationStatus] = React.useState(
-    (goal.activation_status as GoalActivationStatus | undefined) ?? "ACTIVE",
+  const [startingBalance, setStartingBalance] = React.useState(
+    goal.starting_balance != null ? String(goal.starting_balance) : "",
   )
-  const [monthlyAllocation, setMonthlyAllocation] = React.useState(
-    goal.monthly_allocation != null ? String(goal.monthly_allocation) : "",
+  const [goalInflation, setGoalInflation] = React.useState(
+    goal.goal_specific_inflation_rate != null ? String(goal.goal_specific_inflation_rate) : "",
   )
-  const [allocationPriority, setAllocationPriority] = React.useState(
-    goal.allocation_priority != null ? String(goal.allocation_priority) : "",
+  const [expectedReturn, setExpectedReturn] = React.useState(
+    goal.expected_return_rate != null ? String(goal.expected_return_rate) : "",
   )
-  const [activationCondition, setActivationCondition] = React.useState(
-    goal.activation_condition ?? "",
+  const [recurrenceAmount, setRecurrenceAmount] = React.useState(
+    goal.recurrence_amount != null ? String(goal.recurrence_amount) : "",
   )
-  const [interruptible, setInterruptible] = React.useState(goal.interruptible !== false)
-  const [sensitivity, setSensitivity] = React.useState(goal.sensitivity_to_returns ?? "")
+  const [recurrenceFrequency, setRecurrenceFrequency] = React.useState(
+    (goal.recurrence_frequency as AddGoalFormState["recurrence_frequency"]) ?? "MONTHLY",
+  )
+  const [recurrenceStart, setRecurrenceStart] = React.useState(goal.recurrence_start ?? "")
+  const [recurrenceEnd, setRecurrenceEnd] = React.useState(goal.recurrence_end ?? "")
+  const [goalSubtype, setGoalSubtype] = React.useState(goal.goal_subtype ?? "")
+  const [progressCadence, setProgressCadence] = React.useState(
+    (goal.progress_cadence as "MONTHLY" | "ANNUAL") ?? "MONTHLY",
+  )
 
   React.useEffect(() => {
     if (!open) return
     setName(goal.name)
     setTargetAmount(goal.target_amount != null ? String(goal.target_amount) : "")
     setTargetDate(goal.target_date ?? "")
-    setLinkedCategory(goal.linked_category ?? "")
-    setExpenseChartBind(goal.chart_key ?? "")
-    setProgressCadence(goal.progress_cadence ?? "MONTHLY")
     setNotes(goal.notes ?? "")
-    setPyramidId(goal.pyramid_id ?? "")
-    setTier(goal.tier ?? "")
-    setTimeHorizon(goal.time_horizon ?? "")
-    setFundingMode(goal.funding_mode ?? "")
-    setActivationStatus((goal.activation_status as GoalActivationStatus | undefined) ?? "ACTIVE")
-    setMonthlyAllocation(goal.monthly_allocation != null ? String(goal.monthly_allocation) : "")
-    setAllocationPriority(goal.allocation_priority != null ? String(goal.allocation_priority) : "")
-    setActivationCondition(goal.activation_condition ?? "")
-    setInterruptible(goal.interruptible !== false)
-    setSensitivity(goal.sensitivity_to_returns ?? "")
+    setStartingBalance(goal.starting_balance != null ? String(goal.starting_balance) : "")
+    setGoalInflation(
+      goal.goal_specific_inflation_rate != null ? String(goal.goal_specific_inflation_rate) : "",
+    )
+    setExpectedReturn(goal.expected_return_rate != null ? String(goal.expected_return_rate) : "")
+    setRecurrenceAmount(goal.recurrence_amount != null ? String(goal.recurrence_amount) : "")
+    setRecurrenceFrequency(
+      (goal.recurrence_frequency as AddGoalFormState["recurrence_frequency"]) ?? "MONTHLY",
+    )
+    setRecurrenceStart(goal.recurrence_start ?? "")
+    setRecurrenceEnd(goal.recurrence_end ?? "")
+    setGoalSubtype(goal.goal_subtype ?? "")
+    setProgressCadence((goal.progress_cadence as "MONTHLY" | "ANNUAL") ?? "MONTHLY")
   }, [open, goal])
 
-  const isExpenseLimit = goal.goal_type === "EXPENSE_LIMIT"
+  const isExpenseLimit = uiKind === "EXPENSE_LIMIT"
+
+  function parseOptFloat(s: string): number | null | undefined {
+    const t = s.trim()
+    if (t === "") return undefined
+    const n = parseFloat(t)
+    return Number.isNaN(n) ? undefined : n
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -276,7 +170,6 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
       notes: notes.trim() ? notes.trim() : null,
     }
 
-    // Empty target field → clear limit/target on the server
     if (targetAmount.trim() === "") {
       update.target_amount = null
     } else {
@@ -284,37 +177,33 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
       if (!Number.isNaN(n)) update.target_amount = n
     }
 
-    if (isExpenseLimit) {
-      if (expenseChartBind.trim()) {
-        update.chart_key = expenseChartBind.trim()
-        update.linked_category = null
-      } else {
-        update.chart_key = null
-        update.linked_category = linkedCategory.trim() ? linkedCategory.trim() : null
+    if (uiKind === "POINT_IN_TIME") {
+      const sb = parseOptFloat(startingBalance)
+      if (sb !== undefined) update.starting_balance = sb
+      const inf = parseOptFloat(goalInflation)
+      if (inf !== undefined) update.goal_specific_inflation_rate = inf
+    }
+    if (uiKind === "GROWTH") {
+      const sb = parseOptFloat(startingBalance)
+      if (sb !== undefined) {
+        update.starting_balance = sb
+        update.current_value = sb
       }
+      const inf = parseOptFloat(goalInflation)
+      if (inf !== undefined) update.goal_specific_inflation_rate = inf
+      const er = parseOptFloat(expectedReturn)
+      if (er !== undefined) update.expected_return_rate = er
+    }
+    if (uiKind === "RECURRING_CASH_FLOW") {
+      const ra = parseOptFloat(recurrenceAmount)
+      if (ra !== undefined) update.recurrence_amount = ra
+      update.recurrence_frequency = recurrenceFrequency
+      update.recurrence_start = recurrenceStart.trim() ? recurrenceStart.trim() : null
+      update.recurrence_end = recurrenceEnd.trim() ? recurrenceEnd.trim() : null
+      update.goal_subtype = goalSubtype.trim() ? goalSubtype.trim() : null
+    }
+    if (uiKind === "EXPENSE_LIMIT") {
       update.progress_cadence = progressCadence
-    }
-
-    // Pyramid & activation — send null when cleared so the API can unset optional fields
-    update.pyramid_id = pyramidId.trim() ? pyramidId.trim() : null
-    update.tier = tier.trim() ? tier.trim().toUpperCase() : null
-    update.time_horizon = timeHorizon.trim() ? timeHorizon.trim().toUpperCase() : null
-    update.funding_mode = fundingMode.trim() ? fundingMode.trim().toUpperCase() : null
-    update.activation_status = activationStatus
-    update.activation_condition = activationCondition.trim() ? activationCondition.trim() : null
-    update.interruptible = interruptible
-    update.sensitivity_to_returns = sensitivity.trim() ? sensitivity.trim().toUpperCase() : null
-    if (monthlyAllocation.trim() === "") {
-      update.monthly_allocation = null
-    } else {
-      const ma = parseFloat(monthlyAllocation)
-      if (!Number.isNaN(ma)) update.monthly_allocation = ma
-    }
-    if (allocationPriority.trim() === "") {
-      update.allocation_priority = null
-    } else {
-      const ap = parseInt(allocationPriority, 10)
-      if (!Number.isNaN(ap)) update.allocation_priority = ap
     }
 
     patchGoal(
@@ -339,308 +228,228 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
         }
       />
       <SheetContent className="flex h-full w-[360px] flex-col sm:w-[400px]">
-        {/* Padded scroll body: SheetHeader + form were edge-to-edge; inputs need inset from sheet chrome */}
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-10 pt-5">
           <SheetHeader className="shrink-0 space-y-2 p-0 pr-12 pb-4">
             <SheetTitle>Edit goal</SheetTitle>
             <SheetDescription>
-              Update this goal&apos;s details. Type is{" "}
+              Kind:{" "}
               <span className="font-medium text-foreground">
-                {GOAL_TYPE_LABELS[goal.goal_type as GoalType] ?? goal.goal_type}
-              </span>{" "}
-              (create a new goal if you need a different type).
+                {labelGoalUiKind(uiKind)}
+              </span>
+              . To switch to a different kind, delete this goal and create a new one.
             </SheetDescription>
           </SheetHeader>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor={`edit-goal-name-${goal.id}`}>Goal name</Label>
-            <Input
-              id={`edit-goal-name-${goal.id}`}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-2">
-              <Label htmlFor={`edit-goal-target-${goal.id}`}>
-                {isExpenseLimit
-                  ? progressCadence === "ANNUAL"
-                    ? "Annual cap (₹)"
-                    : "Monthly cap (₹)"
-                  : "Target amount (₹)"}
-              </Label>
+              <Label htmlFor={`edit-goal-name-${goal.id}`}>Goal name</Label>
               <Input
-                id={`edit-goal-target-${goal.id}`}
-                type="number"
-                placeholder="e.g. 10000"
-                value={targetAmount}
-                onChange={(e) => setTargetAmount(e.target.value)}
+                id={`edit-goal-name-${goal.id}`}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
               />
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor={`edit-goal-date-${goal.id}`}>Deadline (optional)</Label>
-              <Input
-                id={`edit-goal-date-${goal.id}`}
-                type="date"
-                value={targetDate}
-                onChange={(e) => setTargetDate(e.target.value)}
-              />
-            </div>
-          </div>
 
-          {isExpenseLimit && (
-            <>
+            <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-goal-chart-${goal.id}`}>Dashboard chart (recommended)</Label>
-                <Select
-                  value={expenseChartBind || "__legacy__"}
-                  onValueChange={(v) =>
-                    setExpenseChartBind(!v || v === "__legacy__" ? "" : v)
-                  }
-                >
-                  <SelectTrigger id={`edit-goal-chart-${goal.id}`}>
-                    <SelectValue placeholder="Choose chart…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={CHART_KEY_EXPENSE_NEED_WANT_STACK}>
-                      Expense chart — total NEED+WANT
-                    </SelectItem>
-                    {DASHBOARD_CATEGORY_SERIES.map((s) => (
-                      <SelectItem key={s.id} value={categoryChartKey(s.id)}>
-                        Chart — {s.label}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value="__legacy__">Custom — category name only (legacy)</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label htmlFor={`edit-goal-target-${goal.id}`}>
+                  {isExpenseLimit ? "Cap / limit (₹)" : "Target amount (₹)"}
+                </Label>
+                <Input
+                  id={`edit-goal-target-${goal.id}`}
+                  type="number"
+                  placeholder="e.g. 10000"
+                  value={targetAmount}
+                  onChange={(e) => setTargetAmount(e.target.value)}
+                />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-goal-cadence-${goal.id}`}>Progress period</Label>
+                <Label htmlFor={`edit-goal-date-${goal.id}`}>
+                  {uiKind === "RECURRING_CASH_FLOW" ? "End-by date (optional)" : "Deadline (optional)"}
+                </Label>
+                <Input
+                  id={`edit-goal-date-${goal.id}`}
+                  type="date"
+                  value={targetDate}
+                  onChange={(e) => setTargetDate(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {uiKind === "POINT_IN_TIME" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`edit-start-${goal.id}`}>Already saved (₹)</Label>
+                  <Input
+                    id={`edit-start-${goal.id}`}
+                    type="number"
+                    placeholder="0"
+                    value={startingBalance}
+                    onChange={(e) => setStartingBalance(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`edit-infl-${goal.id}`}>Goal inflation % (optional)</Label>
+                  <Input
+                    id={`edit-infl-${goal.id}`}
+                    type="number"
+                    step="0.1"
+                    placeholder="e.g. 6"
+                    value={goalInflation}
+                    onChange={(e) => setGoalInflation(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {uiKind === "GROWTH" && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor={`edit-sb-${goal.id}`}>Current corpus (₹)</Label>
+                    <Input
+                      id={`edit-sb-${goal.id}`}
+                      type="number"
+                      placeholder="0"
+                      value={startingBalance}
+                      onChange={(e) => setStartingBalance(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor={`edit-er-${goal.id}`}>Expected return % (optional)</Label>
+                    <Input
+                      id={`edit-er-${goal.id}`}
+                      type="number"
+                      step="0.1"
+                      placeholder="e.g. 10"
+                      value={expectedReturn}
+                      onChange={(e) => setExpectedReturn(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`edit-ginfl-${goal.id}`}>Goal inflation % (optional)</Label>
+                  <Input
+                    id={`edit-ginfl-${goal.id}`}
+                    type="number"
+                    step="0.1"
+                    value={goalInflation}
+                    onChange={(e) => setGoalInflation(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+
+            {uiKind === "RECURRING_CASH_FLOW" && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor={`edit-ramt-${goal.id}`}>Amount per period (₹)</Label>
+                    <Input
+                      id={`edit-ramt-${goal.id}`}
+                      type="number"
+                      required
+                      value={recurrenceAmount}
+                      onChange={(e) => setRecurrenceAmount(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Frequency</Label>
+                    <Select
+                      value={recurrenceFrequency}
+                      onValueChange={(v) =>
+                        setRecurrenceFrequency(v as AddGoalFormState["recurrence_frequency"])
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="MONTHLY">Monthly</SelectItem>
+                        <SelectItem value="QUARTERLY">Quarterly</SelectItem>
+                        <SelectItem value="ANNUAL">Annual</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor={`edit-rs-${goal.id}`}>First payment (start)</Label>
+                    <Input
+                      id={`edit-rs-${goal.id}`}
+                      type="date"
+                      required
+                      value={recurrenceStart}
+                      onChange={(e) => setRecurrenceStart(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor={`edit-re-${goal.id}`}>Last payment (optional)</Label>
+                    <Input
+                      id={`edit-re-${goal.id}`}
+                      type="date"
+                      value={recurrenceEnd}
+                      onChange={(e) => setRecurrenceEnd(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Subtype (optional)</Label>
+                  <Select
+                    value={goalSubtype || "none"}
+                    onValueChange={(v) =>
+                      setGoalSubtype(v == null || v === "none" ? "" : v)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Optional" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GOAL_SUBTYPE_OPTIONS.map((o) => (
+                        <SelectItem key={o.value || "none"} value={o.value || "none"}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+
+            {uiKind === "EXPENSE_LIMIT" && (
+              <div className="flex flex-col gap-2">
+                <Label>Progress window</Label>
                 <Select
                   value={progressCadence}
-                  onValueChange={(v) => setProgressCadence(v as ProgressCadence)}
+                  onValueChange={(v) => setProgressCadence(v as "MONTHLY" | "ANNUAL")}
                 >
-                  <SelectTrigger id={`edit-goal-cadence-${goal.id}`}>
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="MONTHLY">
-                      Monthly (shows on dashboard &quot;This month so far&quot;)
-                    </SelectItem>
-                    <SelectItem value="ANNUAL">
-                      Annual (Jan 1 — today vs cap; dashboard headline only lists monthly goals)
-                    </SelectItem>
+                    <SelectItem value="MONTHLY">Monthly (vs cap this month)</SelectItem>
+                    <SelectItem value="ANNUAL">Annual (YTD vs cap)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              {!expenseChartBind && (
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor={`edit-goal-category-${goal.id}`}>
-                    Counterparty category (legacy)
-                  </Label>
-                  <Input
-                    id={`edit-goal-category-${goal.id}`}
-                    placeholder="e.g. Food & Dining"
-                    value={linkedCategory}
-                    onChange={(e) => setLinkedCategory(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Matches ``counterparty_category`` only — not the same as combined dashboard
-                    charts (e.g. Food + Dineout).
-                  </p>
-                </div>
-              )}
-            </>
-          )}
-          {goal.goal_type === "INVESTMENT" && (
-            <p className="text-xs text-muted-foreground">
-              Linked to dashboard chart <span className="font-mono text-foreground">{CHART_KEY_INVESTMENT_NET}</span>{" "}
-              (monthly net investment).
-            </p>
-          )}
+            )}
 
-          <div className="rounded-md border border-dashed p-3 space-y-4">
-            <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-              <Layers className="size-3.5" />
-              Pyramid &amp; activation
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-pyramid-${goal.id}`}>Pyramid id</Label>
-                <Input
-                  id={`edit-pyramid-${goal.id}`}
-                  placeholder="e.g. V1"
-                  maxLength={10}
-                  value={pyramidId}
-                  onChange={(e) => setPyramidId(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-tier-${goal.id}`}>Tier</Label>
-                <Select
-                  value={tier || "__none__"}
-                  onValueChange={(v) => setTier(!v || v === "__none__" ? "" : v)}
-                >
-                  <SelectTrigger id={`edit-tier-${goal.id}`}>
-                    <SelectValue placeholder="Not set" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Not set</SelectItem>
-                    {GOAL_TIERS.map((t) => (
-                      <SelectItem key={t} value={t}>{t}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-horizon-${goal.id}`}>Time horizon</Label>
-                <Select
-                  value={timeHorizon || "__none__"}
-                  onValueChange={(v) => setTimeHorizon(!v || v === "__none__" ? "" : v)}
-                >
-                  <SelectTrigger id={`edit-horizon-${goal.id}`}>
-                    <SelectValue placeholder="Not set" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Not set</SelectItem>
-                    {GOAL_TIME_HORIZONS.map((h) => (
-                      <SelectItem key={h} value={h}>{h.replaceAll("_", " ")}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-funding-${goal.id}`}>Funding mode</Label>
-                <Select
-                  value={fundingMode || "__none__"}
-                  onValueChange={(v) => setFundingMode(!v || v === "__none__" ? "" : v)}
-                >
-                  <SelectTrigger id={`edit-funding-${goal.id}`}>
-                    <SelectValue placeholder="Not set" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Not set</SelectItem>
-                    {GOAL_FUNDING_MODES.map((f) => (
-                      <SelectItem key={f} value={f}>{f}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-act-${goal.id}`}>Activation status</Label>
-                <Select
-                  value={activationStatus}
-                  onValueChange={(v) => {
-                    if (v) setActivationStatus(v as GoalActivationStatus)
-                  }}
-                >
-                  <SelectTrigger id={`edit-act-${goal.id}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {GOAL_ACTIVATION_STATUSES.map((s) => (
-                      <SelectItem key={s} value={s}>{ACTIVATION_STATUS_LABELS[s] ?? s}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-sens-${goal.id}`}>Sensitivity to returns</Label>
-                <Select
-                  value={sensitivity || "__none__"}
-                  onValueChange={(v) => setSensitivity(!v || v === "__none__" ? "" : v)}
-                >
-                  <SelectTrigger id={`edit-sens-${goal.id}`}>
-                    <SelectValue placeholder="Not set" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Not set</SelectItem>
-                    {SENSITIVITY_OPTIONS.map((s) => (
-                      <SelectItem key={s} value={s}>{s}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-moalloc-${goal.id}`}>Monthly allocation (₹)</Label>
-                <Input
-                  id={`edit-moalloc-${goal.id}`}
-                  type="number"
-                  min={0}
-                  placeholder="Optional"
-                  value={monthlyAllocation}
-                  onChange={(e) => setMonthlyAllocation(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-prio-${goal.id}`}>Allocation priority (1–100)</Label>
-                <Input
-                  id={`edit-prio-${goal.id}`}
-                  type="number"
-                  min={1}
-                  max={100}
-                  placeholder="Optional"
-                  value={allocationPriority}
-                  onChange={(e) => setAllocationPriority(e.target.value)}
-                />
-              </div>
-            </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor={`edit-actcond-${goal.id}`}>Activation condition (DSL)</Label>
+              <Label htmlFor={`edit-goal-notes-${goal.id}`}>Notes (optional)</Label>
               <Textarea
-                id={`edit-actcond-${goal.id}`}
-                rows={2}
-                className="font-mono text-xs"
-                placeholder='e.g. goal:S5:completed AND goal:S4:completed'
-                value={activationCondition}
-                onChange={(e) => setActivationCondition(e.target.value)}
+                id={`edit-goal-notes-${goal.id}`}
+                rows={3}
+                placeholder="Context, reminders, why this goal exists…"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
               />
-              <p className="text-[11px] text-muted-foreground leading-snug">
-                When <span className="font-medium">activation status</span> is Pending, the API evaluates this expression
-                against your goals&apos; activation states and life events. Atoms:{" "}
-                <code className="rounded bg-muted px-0.5">goal:PYRAMID_ID:status</code>{" "}
-                (status: pending, active, completed, paused) and{" "}
-                <code className="rounded bg-muted px-0.5">event:key</code>. Combine with{" "}
-                <code className="rounded bg-muted px-0.5">AND</code> /{" "}
-                <code className="rounded bg-muted px-0.5">OR</code> and parentheses. Max 500 characters.
-              </p>
             </div>
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id={`edit-interrupt-${goal.id}`}
-                checked={interruptible}
-                onCheckedChange={(c) => setInterruptible(c === true)}
-              />
-              <Label htmlFor={`edit-interrupt-${goal.id}`} className="text-sm font-normal cursor-pointer">
-                Interruptible (safe to pause if surplus drops)
-              </Label>
-            </div>
-          </div>
 
-          <div className="flex flex-col gap-2">
-            <Label htmlFor={`edit-goal-notes-${goal.id}`}>Notes (optional)</Label>
-            <Textarea
-              id={`edit-goal-notes-${goal.id}`}
-              rows={2}
-              placeholder="Why this goal matters…"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
-
-          <Button type="submit" className="mt-1 w-full" disabled={isPending}>
-            {isPending ? "Saving…" : "Save changes"}
-          </Button>
-        </form>
+            <Button type="submit" className="mt-1 w-full" disabled={isPending}>
+              {isPending ? "Saving…" : "Save changes"}
+            </Button>
+          </form>
         </div>
       </SheetContent>
     </Sheet>
@@ -651,24 +460,14 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
 // GoalCard — single goal row
 // ─────────────────────────────────────────────────────────────────────────────
 
-function GoalCard({
-  goal,
-  hierarchyMeta,
-  tierBorderClass,
-}: {
-  goal: Goal
-  /** When set, show pyramid / activation badges and optional "Feeds:" parents (hierarchy tab). */
-  hierarchyMeta?: { parentLabels: string[] }
-  /** e.g. border-l-violet-500 — applied as thick left stripe in hierarchy view */
-  tierBorderClass?: string
-}) {
+function GoalCard({ goal }: { goal: Goal }) {
   const { mutate: updateGoal } = useUpdateGoal()
   const { mutate: deleteGoal } = useDeleteGoal()
   const [editingValue, setEditingValue] = React.useState(false)
   const [newValue, setNewValue] = React.useState(String(goal.current_value ?? ""))
 
-  const isExpenseLimit = goal.goal_type === "EXPENSE_LIMIT"
-  // For expense limits: invert the progress bar (higher spend = closer to limit)
+  const uiKind = inferGoalUiKind(goal)
+  const isExpenseLimit = uiKind === "EXPENSE_LIMIT"
   const progressValue = Math.min(goal.computed_percentage, 100)
 
   const daysLeft = goal.target_date
@@ -683,57 +482,19 @@ function GoalCard({
     setEditingValue(false)
   }
 
-  const act = (goal.activation_status ?? "ACTIVE").toUpperCase()
-
   return (
-    <div
-      className={cn(
-        "rounded-lg border bg-card px-4 py-3 space-y-2.5",
-        hierarchyMeta && tierBorderClass && `border-l-4 ${tierBorderClass}`,
-      )}
-    >
-      {/* Header row */}
+    <div className="rounded-lg border bg-card px-4 py-3 space-y-2.5">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <Target className="size-3.5 shrink-0 text-muted-foreground mt-0.5" />
           <div className="min-w-0">
             <p className="truncate text-sm font-medium">{goal.name}</p>
             <p className="text-xs text-muted-foreground">
-              {GOAL_TYPE_LABELS[goal.goal_type as GoalType] ?? goal.goal_type}
-              {goal.chart_key && ` · ${goal.chart_key}`}
-              {!goal.chart_key && goal.linked_category && ` · ${goal.linked_category}`}
+              {labelGoalUiKind(uiKind)}
             </p>
-            {hierarchyMeta && hierarchyMeta.parentLabels.length > 0 && (
-              <p className="text-[11px] text-muted-foreground mt-1">
-                <span className="font-medium text-foreground/80">Feeds:</span>{" "}
-                {hierarchyMeta.parentLabels.join(" · ")}
-              </p>
-            )}
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-          {hierarchyMeta && goal.pyramid_id && (
-            <Badge variant="secondary" className="text-[10px] px-1 py-0 font-mono">
-              {goal.pyramid_id}
-            </Badge>
-          )}
-          {hierarchyMeta && (
-            <Badge
-              variant="outline"
-              className={cn(
-                "text-[10px] px-1 py-0",
-                ACTIVATION_STATUS_STYLES[act] ?? "border-muted",
-              )}
-            >
-              {ACTIVATION_STATUS_LABELS[act] ?? act}
-            </Badge>
-          )}
-          {goal.goal_type === "EXPENSE_LIMIT" &&
-            (goal.progress_cadence ?? "MONTHLY") === "ANNUAL" && (
-              <Badge variant="secondary" className="text-[10px] px-1 py-0">
-                Annual
-              </Badge>
-            )}
           <Badge
             variant="outline"
             className={cn("text-[11px] px-1.5 py-0", STATUS_STYLES[goal.status as GoalStatus])}
@@ -753,7 +514,6 @@ function GoalCard({
         </div>
       </div>
 
-      {/* Progress bar */}
       <div className="space-y-1">
         <Progress
           value={progressValue}
@@ -769,17 +529,7 @@ function GoalCard({
             {isExpenseLimit ? (
               <>
                 {formatCurrency(goal.computed_current_value)} spent
-                {goal.target_amount ? (
-                  <>
-                    {" "}
-                    of {formatCurrency(goal.target_amount)}
-                    {(goal.progress_cadence ?? "MONTHLY") === "ANNUAL"
-                      ? " annual cap (YTD)"
-                      : " monthly limit"}
-                  </>
-                ) : (
-                  ""
-                )}
+                {goal.target_amount ? <> of {formatCurrency(goal.target_amount)}</> : ""}
               </>
             ) : (
               <>
@@ -802,7 +552,12 @@ function GoalCard({
         </div>
       </div>
 
-      {/* Manual value edit (for non-auto-computed goals) */}
+      {goal.notes && (
+        <p className="text-xs text-muted-foreground border-t border-border/60 pt-2 whitespace-pre-wrap">
+          {goal.notes}
+        </p>
+      )}
+
       {!isExpenseLimit && (
         <div className="flex items-center gap-2">
           {editingValue ? (
@@ -834,117 +589,95 @@ function GoalCard({
   )
 }
 
+/** Inline validation for Add Goal — recurring requires amount + first payment date. */
+type AddGoalFieldErrors = {
+  name?: string
+  recurrence_amount?: string
+  recurrence_start?: string
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AddGoalSheet — slide-in form for creating a new goal
 // ─────────────────────────────────────────────────────────────────────────────
-
-const defaultAddForm = (): Partial<GoalCreate> => ({
-  goal_type: "EXPENSE_LIMIT",
-  priority: 3,
-  linked_layer: 3,
-})
 
 function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) {
   const [open, setOpen] = React.useState(false)
   const { mutate: create, isPending } = useCreateGoal()
 
-  const [form, setForm] = React.useState<Partial<GoalCreate>>(defaultAddForm())
-  /** When set, create/update EXPENSE_LIMIT with this chart_key (else use linked_category). */
-  const [expenseChartBind, setExpenseChartBind] = React.useState("")
-  const [expenseCadence, setExpenseCadence] = React.useState<ProgressCadence>("MONTHLY")
-  const [pyramidId, setPyramidId] = React.useState("")
-  const [tier, setTier] = React.useState("")
-  const [timeHorizon, setTimeHorizon] = React.useState("")
-  const [fundingMode, setFundingMode] = React.useState("")
-  const [activationStatus, setActivationStatus] = React.useState<GoalActivationStatus>("ACTIVE")
-  const [monthlyAllocation, setMonthlyAllocation] = React.useState("")
-  const [allocationPriority, setAllocationPriority] = React.useState("")
-  const [activationCondition, setActivationCondition] = React.useState("")
-  const [interruptible, setInterruptible] = React.useState(true)
-  const [sensitivity, setSensitivity] = React.useState("")
+  const [form, setForm] = React.useState<AddGoalFormState>(() => defaultAddGoalForm())
+  const [fieldErrors, setFieldErrors] = React.useState<AddGoalFieldErrors>({})
 
   function resetAddForm() {
-    setForm(defaultAddForm())
-    setExpenseChartBind("")
-    setExpenseCadence("MONTHLY")
-    setPyramidId("")
-    setTier("")
-    setTimeHorizon("")
-    setFundingMode("")
-    setActivationStatus("ACTIVE")
-    setMonthlyAllocation("")
-    setAllocationPriority("")
-    setActivationCondition("")
-    setInterruptible(true)
-    setSensitivity("")
+    setForm(defaultAddGoalForm())
+    setFieldErrors({})
   }
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
-    if (next && prefillChartKey) {
-      if (prefillChartKey === CHART_KEY_INVESTMENT_NET) {
-        setForm({ ...defaultAddForm(), goal_type: "INVESTMENT" })
-        setExpenseChartBind("")
-      } else {
-        setForm({ ...defaultAddForm(), goal_type: "EXPENSE_LIMIT" })
-        setExpenseChartBind(prefillChartKey)
-      }
+    if (next) {
+      const base = defaultAddGoalForm()
+      const pre = prefillAddFormForChartKey(prefillChartKey)
+      setForm({ ...base, ...pre })
+      setFieldErrors({})
     }
     if (!next) resetAddForm()
   }
 
+  function setField<K extends keyof AddGoalFormState>(key: K, value: AddGoalFormState[K]) {
+    setForm((f) => ({ ...f, [key]: value }))
+  }
+
+  /** Clear the inline error for a field once the user edits it. */
+  function clearFieldError(key: keyof AddGoalFieldErrors) {
+    setFieldErrors((prev) => {
+      if (prev[key] == null) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.name || !form.goal_type) return
 
-    const base: GoalCreate = {
-      name: form.name.trim(),
-      goal_type: form.goal_type,
-      target_amount: form.target_amount,
-      target_date: form.target_date,
-      priority: form.priority ?? 3,
-      linked_layer: form.linked_layer ?? 3,
-      notes: form.notes,
+    const nextErrors: AddGoalFieldErrors = {}
+
+    if (!form.name.trim()) {
+      nextErrors.name = "Enter a name for this goal."
     }
 
-    if (pyramidId.trim()) base.pyramid_id = pyramidId.trim()
-    if (tier) base.tier = tier
-    if (timeHorizon) base.time_horizon = timeHorizon
-    if (fundingMode) base.funding_mode = fundingMode
-    base.activation_status = activationStatus
-    if (activationCondition.trim()) base.activation_condition = activationCondition.trim()
-    base.interruptible = interruptible
-    if (sensitivity) base.sensitivity_to_returns = sensitivity
-    if (monthlyAllocation.trim()) {
-      const ma = parseFloat(monthlyAllocation)
-      if (!Number.isNaN(ma)) base.monthly_allocation = ma
-    }
-    if (allocationPriority.trim()) {
-      const ap = parseInt(allocationPriority, 10)
-      if (!Number.isNaN(ap)) base.allocation_priority = ap
-    }
-
-    if (form.goal_type === "EXPENSE_LIMIT") {
-      base.progress_cadence = expenseCadence
-      if (expenseChartBind.trim()) {
-        base.chart_key = expenseChartBind.trim()
-      } else {
-        base.linked_category = form.linked_category?.trim()
-          ? form.linked_category.trim()
-          : undefined
+    if (form.uiKind === "RECURRING_CASH_FLOW") {
+      const amt = form.recurrence_amount
+      if (amt == null || Number.isNaN(amt)) {
+        nextErrors.recurrence_amount = "Enter how much each payment is (₹)."
+      } else if (amt <= 0) {
+        nextErrors.recurrence_amount = "Use an amount greater than zero."
+      }
+      if (!form.recurrence_start?.trim()) {
+        nextErrors.recurrence_start = "Pick the date of the first payment."
       }
     }
-    if (form.goal_type === "INVESTMENT") {
-      base.chart_key = CHART_KEY_INVESTMENT_NET
+
+    setFieldErrors(nextErrors)
+    if (Object.keys(nextErrors).length > 0) {
+      return
     }
 
-    create(base, {
+    const payload = addGoalFormToCreatePayload({
+      ...form,
+      name: form.name.trim(),
+      notes: form.notes.trim(),
+    })
+
+    create(payload, {
       onSuccess: () => {
         setOpen(false)
         resetAddForm()
       },
     })
   }
+
+  const kind = form.uiKind
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -959,319 +692,324 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
       <SheetContent className="flex h-full w-[360px] flex-col sm:w-[400px]">
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-10 pt-5">
           <SheetHeader className="shrink-0 space-y-2 p-0 pr-12 pb-4">
-            <SheetTitle>New Goal</SheetTitle>
+            <SheetTitle>New goal</SheetTitle>
             <SheetDescription>
-              Set a financial target to track. Progress is computed automatically
-              for Expense Limit goals; enter it manually for everything else.
+              Pick what kind of goal it is, then fill the fields that apply. Spending caps
+              use live transactions; everything else uses manual progress unless noted.
             </SheetDescription>
           </SheetHeader>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="goal-name">Goal name</Label>
-            <Input
-              id="goal-name"
-              placeholder="e.g. Keep food spending under ₹8k"
-              value={form.name ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              required
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label>Goal type</Label>
-            <Select
-              value={form.goal_type}
-              onValueChange={(v) => setForm((f) => ({ ...f, goal_type: v as GoalType }))}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(GOAL_TYPE_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="goal-target">
-                {form.goal_type === "EXPENSE_LIMIT"
-                  ? expenseCadence === "ANNUAL"
-                    ? "Annual cap (₹)"
-                    : "Monthly cap (₹)"
-                  : "Target amount (₹)"}
-              </Label>
+              <Label htmlFor="goal-name">Goal name</Label>
               <Input
-                id="goal-target"
-                type="number"
-                placeholder="e.g. 10000"
-                value={form.target_amount ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    target_amount: e.target.value ? parseFloat(e.target.value) : undefined,
-                  }))
-                }
+                id="goal-name"
+                placeholder="e.g. Emergency fund"
+                value={form.name}
+                aria-invalid={fieldErrors.name ? true : undefined}
+                onChange={(e) => {
+                  setField("name", e.target.value)
+                  clearFieldError("name")
+                }}
               />
+              {fieldErrors.name ? (
+                <p className="text-xs text-destructive" role="alert">
+                  {fieldErrors.name}
+                </p>
+              ) : null}
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="goal-date">Deadline (optional)</Label>
-              <Input
-                id="goal-date"
-                type="date"
-                value={form.target_date ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, target_date: e.target.value || undefined }))}
-              />
-            </div>
-          </div>
 
-          {form.goal_type === "EXPENSE_LIMIT" && (
-            <>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="goal-chart-bind">Cap matches dashboard chart</Label>
-                <Select
-                  value={expenseChartBind || "__legacy__"}
-                  onValueChange={(v) =>
-                    setExpenseChartBind(!v || v === "__legacy__" ? "" : v)
-                  }
-                >
-                  <SelectTrigger id="goal-chart-bind">
-                    <SelectValue placeholder="Choose…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={CHART_KEY_EXPENSE_NEED_WANT_STACK}>
-                      Expense chart — total NEED+WANT per month
-                    </SelectItem>
-                    {DASHBOARD_CATEGORY_SERIES.map((s) => (
-                      <SelectItem key={s.id} value={categoryChartKey(s.id)}>
-                        Category chart — {s.label}
+            <div className="flex flex-col gap-2">
+              <Label>Goal kind</Label>
+              <Select
+                value={form.uiKind}
+                onValueChange={(v) => {
+                  const next = v as GoalUiKind
+                  setField("uiKind", next)
+                  setFieldErrors((prev) => {
+                    if (next !== "RECURRING_CASH_FLOW") {
+                      return { ...prev, recurrence_amount: undefined, recurrence_start: undefined }
+                    }
+                    return prev
+                  })
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.entries(GOAL_UI_KIND_LABELS) as [GoalUiKind, string][]).map(
+                    ([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
                       </SelectItem>
-                    ))}
-                    <SelectItem value="__legacy__">
-                      Custom — single counterparty category (legacy)
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                    ),
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="goal-target">
+                  {kind === "EXPENSE_LIMIT" ? "Cap / limit (₹)" : "Target amount (₹)"}
+                </Label>
+                <Input
+                  id="goal-target"
+                  type="number"
+                  placeholder="e.g. 10000"
+                  value={form.target_amount ?? ""}
+                  onChange={(e) =>
+                    setField(
+                      "target_amount",
+                      e.target.value ? parseFloat(e.target.value) : undefined,
+                    )
+                  }
+                />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="goal-cadence-add">Progress period</Label>
-                <Select
-                  value={expenseCadence}
-                  onValueChange={(v) => setExpenseCadence(v as ProgressCadence)}
-                >
-                  <SelectTrigger id="goal-cadence-add">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="MONTHLY">Monthly (dashboard headline + charts)</SelectItem>
-                    <SelectItem value="ANNUAL">Annual (YTD vs cap; not on dashboard headline)</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label htmlFor="goal-date">
+                  {kind === "RECURRING_CASH_FLOW"
+                    ? "End-by (optional)"
+                    : "Deadline (optional)"}
+                </Label>
+                <Input
+                  id="goal-date"
+                  type="date"
+                  value={form.target_date ?? ""}
+                  onChange={(e) => setField("target_date", e.target.value || undefined)}
+                />
               </div>
-              {!expenseChartBind && (
+            </div>
+
+            {kind === "POINT_IN_TIME" && (
+              <div className="grid grid-cols-2 gap-4">
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="goal-category">Counterparty category name</Label>
+                  <Label htmlFor="add-sb">Already saved (₹)</Label>
                   <Input
-                    id="goal-category"
-                    placeholder="e.g. Food & Dining"
-                    value={form.linked_category ?? ""}
+                    id="add-sb"
+                    type="number"
+                    placeholder="0"
+                    value={form.starting_balance ?? ""}
                     onChange={(e) =>
-                      setForm((f) => ({ ...f, linked_category: e.target.value || undefined }))
+                      setField(
+                        "starting_balance",
+                        e.target.value ? parseFloat(e.target.value) : undefined,
+                      )
                     }
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Empty + legacy mode defaults to the same total as the expense chart (NEED+WANT).
-                  </p>
                 </div>
-              )}
-            </>
-          )}
-          {form.goal_type === "INVESTMENT" && (
-            <p className="text-xs text-muted-foreground">
-              Progress uses monthly <strong>net</strong> investment (purchases − sales), same as the
-              Investments chart.
-            </p>
-          )}
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="add-infl">Goal inflation % (optional)</Label>
+                  <Input
+                    id="add-infl"
+                    type="number"
+                    step="0.1"
+                    placeholder="e.g. 6"
+                    value={form.goal_specific_inflation_rate ?? ""}
+                    onChange={(e) =>
+                      setField(
+                        "goal_specific_inflation_rate",
+                        e.target.value ? parseFloat(e.target.value) : undefined,
+                      )
+                    }
+                  />
+                </div>
+              </div>
+            )}
 
-          <div className="rounded-md border border-dashed p-3 space-y-4">
-            <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-              <Layers className="size-3.5" />
-              Pyramid &amp; activation (optional)
-            </p>
-            <div className="grid grid-cols-2 gap-3">
+            {kind === "GROWTH" && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="add-corpus">Current corpus (₹)</Label>
+                    <Input
+                      id="add-corpus"
+                      type="number"
+                      placeholder="0"
+                      value={form.starting_balance ?? ""}
+                      onChange={(e) =>
+                        setField(
+                          "starting_balance",
+                          e.target.value ? parseFloat(e.target.value) : undefined,
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="add-er">Expected return % (optional)</Label>
+                    <Input
+                      id="add-er"
+                      type="number"
+                      step="0.1"
+                      placeholder="e.g. 10"
+                      value={form.expected_return_rate ?? ""}
+                      onChange={(e) =>
+                        setField(
+                          "expected_return_rate",
+                          e.target.value ? parseFloat(e.target.value) : undefined,
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="add-ginfl">Goal inflation % (optional)</Label>
+                  <Input
+                    id="add-ginfl"
+                    type="number"
+                    step="0.1"
+                    value={form.goal_specific_inflation_rate ?? ""}
+                    onChange={(e) =>
+                      setField(
+                        "goal_specific_inflation_rate",
+                        e.target.value ? parseFloat(e.target.value) : undefined,
+                      )
+                    }
+                  />
+                </div>
+              </>
+            )}
+
+            {kind === "RECURRING_CASH_FLOW" && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="add-ramt">Amount per period (₹)</Label>
+                    <Input
+                      id="add-ramt"
+                      type="number"
+                      min={0.01}
+                      step="any"
+                      aria-invalid={fieldErrors.recurrence_amount ? true : undefined}
+                      aria-describedby={
+                        fieldErrors.recurrence_amount ? "add-ramt-error" : undefined
+                      }
+                      value={form.recurrence_amount ?? ""}
+                      onChange={(e) => {
+                        setField(
+                          "recurrence_amount",
+                          e.target.value ? parseFloat(e.target.value) : undefined,
+                        )
+                        clearFieldError("recurrence_amount")
+                      }}
+                    />
+                    {fieldErrors.recurrence_amount ? (
+                      <p id="add-ramt-error" className="text-xs text-destructive" role="alert">
+                        {fieldErrors.recurrence_amount}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Frequency</Label>
+                    <Select
+                      value={form.recurrence_frequency}
+                      onValueChange={(v) =>
+                        setField("recurrence_frequency", v as AddGoalFormState["recurrence_frequency"])
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="MONTHLY">Monthly</SelectItem>
+                        <SelectItem value="QUARTERLY">Quarterly</SelectItem>
+                        <SelectItem value="ANNUAL">Annual</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="add-rs">First payment (start)</Label>
+                    <Input
+                      id="add-rs"
+                      type="date"
+                      aria-invalid={fieldErrors.recurrence_start ? true : undefined}
+                      aria-describedby={
+                        fieldErrors.recurrence_start ? "add-rs-error" : undefined
+                      }
+                      value={form.recurrence_start ?? ""}
+                      onChange={(e) => {
+                        setField("recurrence_start", e.target.value || undefined)
+                        clearFieldError("recurrence_start")
+                      }}
+                    />
+                    {fieldErrors.recurrence_start ? (
+                      <p id="add-rs-error" className="text-xs text-destructive" role="alert">
+                        {fieldErrors.recurrence_start}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="add-re">Last payment (optional)</Label>
+                    <Input
+                      id="add-re"
+                      type="date"
+                      value={form.recurrence_end ?? ""}
+                      onChange={(e) => setField("recurrence_end", e.target.value || undefined)}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Subtype (optional)</Label>
+                  <Select
+                    value={form.goal_subtype || "none"}
+                    onValueChange={(v) =>
+                      setField(
+                        "goal_subtype",
+                        v == null || v === "none" ? undefined : v,
+                      )
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Optional" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GOAL_SUBTYPE_OPTIONS.map((o) => (
+                        <SelectItem key={o.value || "none"} value={o.value || "none"}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+
+            {kind === "EXPENSE_LIMIT" && (
               <div className="flex flex-col gap-2">
-                <Label htmlFor="add-pyramid">Pyramid id</Label>
-                <Input
-                  id="add-pyramid"
-                  placeholder="e.g. O5"
-                  maxLength={10}
-                  value={pyramidId}
-                  onChange={(e) => setPyramidId(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="add-tier">Tier</Label>
+                <Label>Progress window</Label>
                 <Select
-                  value={tier || "__none__"}
-                  onValueChange={(v) => setTier(!v || v === "__none__" ? "" : v)}
+                  value={form.progress_cadence}
+                  onValueChange={(v) => setField("progress_cadence", v as "MONTHLY" | "ANNUAL")}
                 >
-                  <SelectTrigger id="add-tier">
-                    <SelectValue placeholder="Not set" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Not set</SelectItem>
-                    {GOAL_TIERS.map((t) => (
-                      <SelectItem key={t} value={t}>{t}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="add-horizon">Time horizon</Label>
-                <Select
-                  value={timeHorizon || "__none__"}
-                  onValueChange={(v) => setTimeHorizon(!v || v === "__none__" ? "" : v)}
-                >
-                  <SelectTrigger id="add-horizon">
-                    <SelectValue placeholder="Not set" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Not set</SelectItem>
-                    {GOAL_TIME_HORIZONS.map((h) => (
-                      <SelectItem key={h} value={h}>{h.replaceAll("_", " ")}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="add-funding">Funding mode</Label>
-                <Select
-                  value={fundingMode || "__none__"}
-                  onValueChange={(v) => setFundingMode(!v || v === "__none__" ? "" : v)}
-                >
-                  <SelectTrigger id="add-funding">
-                    <SelectValue placeholder="Not set" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Not set</SelectItem>
-                    {GOAL_FUNDING_MODES.map((f) => (
-                      <SelectItem key={f} value={f}>{f}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="add-act">Activation status</Label>
-                <Select
-                  value={activationStatus}
-                  onValueChange={(v) => {
-                    if (v) setActivationStatus(v as GoalActivationStatus)
-                  }}
-                >
-                  <SelectTrigger id="add-act">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {GOAL_ACTIVATION_STATUSES.map((s) => (
-                      <SelectItem key={s} value={s}>{ACTIVATION_STATUS_LABELS[s] ?? s}</SelectItem>
-                    ))}
+                    <SelectItem value="MONTHLY">Monthly (vs cap this month)</SelectItem>
+                    <SelectItem value="ANNUAL">Annual (YTD vs cap)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="add-sens">Sensitivity to returns</Label>
-                <Select
-                  value={sensitivity || "__none__"}
-                  onValueChange={(v) => setSensitivity(!v || v === "__none__" ? "" : v)}
-                >
-                  <SelectTrigger id="add-sens">
-                    <SelectValue placeholder="Not set" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Not set</SelectItem>
-                    {SENSITIVITY_OPTIONS.map((s) => (
-                      <SelectItem key={s} value={s}>{s}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="add-moalloc">Monthly allocation (₹)</Label>
-                <Input
-                  id="add-moalloc"
-                  type="number"
-                  min={0}
-                  placeholder="Optional"
-                  value={monthlyAllocation}
-                  onChange={(e) => setMonthlyAllocation(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="add-prio">Allocation priority (1–100)</Label>
-                <Input
-                  id="add-prio"
-                  type="number"
-                  min={1}
-                  max={100}
-                  placeholder="Optional"
-                  value={allocationPriority}
-                  onChange={(e) => setAllocationPriority(e.target.value)}
-                />
-              </div>
-            </div>
+            )}
+
             <div className="flex flex-col gap-2">
-              <Label htmlFor="add-actcond">Activation condition (DSL)</Label>
+              <Label htmlFor="goal-notes">Notes (optional)</Label>
               <Textarea
-                id="add-actcond"
-                rows={2}
-                className="font-mono text-xs"
-                placeholder="Leave empty unless this goal should wait on others"
-                value={activationCondition}
-                onChange={(e) => setActivationCondition(e.target.value)}
+                id="goal-notes"
+                rows={3}
+                placeholder="Context, reminders…"
+                value={form.notes}
+                onChange={(e) => setField("notes", e.target.value)}
               />
-              <p className="text-[11px] text-muted-foreground leading-snug">
-                Use <code className="rounded bg-muted px-0.5">goal:ID:completed</code>,{" "}
-                <code className="rounded bg-muted px-0.5">event:employed</code>, with{" "}
-                <code className="rounded bg-muted px-0.5">AND</code> /{" "}
-                <code className="rounded bg-muted px-0.5">OR</code>. Validated on save.
-              </p>
             </div>
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="add-interrupt"
-                checked={interruptible}
-                onCheckedChange={(c) => setInterruptible(c === true)}
-              />
-              <Label htmlFor="add-interrupt" className="text-sm font-normal cursor-pointer">
-                Interruptible
-              </Label>
-            </div>
-          </div>
 
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="goal-notes">Notes (optional)</Label>
-            <Textarea
-              id="goal-notes"
-              rows={2}
-              placeholder="Why this goal matters…"
-              value={form.notes ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value || undefined }))}
-            />
-          </div>
-
-          <Button type="submit" className="mt-1 w-full" disabled={isPending}>
-            {isPending ? "Creating…" : "Create goal"}
-          </Button>
-        </form>
+            <Button type="submit" className="mt-1 w-full" disabled={isPending}>
+              {isPending ? "Creating…" : "Create goal"}
+            </Button>
+          </form>
         </div>
       </SheetContent>
     </Sheet>
@@ -1288,106 +1026,8 @@ interface Props {
   initialChartKey?: string | null
 }
 
-/** Renders tier buckets from GET /api/goals/tree with parent “Feeds:” labels. */
-function GoalsHierarchyPanels({ tree }: { tree: GoalTree }) {
-  const byId = React.useMemo(() => goalsByIdFromTree(tree), [tree])
-  const totalInBuckets = TIER_PANELS.reduce((n, p) => n + tree[p.treeKey].length, 0)
-
-  if (totalInBuckets === 0) {
-    return (
-      <p className="text-sm text-muted-foreground py-6 text-center">
-        No goals returned from the hierarchy endpoint.
-      </p>
-    )
-  }
-
-  return (
-    <div className="space-y-2">
-      {TIER_PANELS.map(({ treeKey, label, borderClass }) => {
-        const bucket = tree[treeKey]
-        if (bucket.length === 0) return null
-        return (
-          <details key={treeKey} open className="rounded-lg border bg-card/30">
-            <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
-              <span>{label}</span>
-              <Badge variant="secondary" className="text-[10px] font-normal">
-                {bucket.length}
-              </Badge>
-            </summary>
-            <div className="space-y-2 px-2 pb-3 pt-1">
-              {bucket.map((g) => (
-                <GoalCard
-                  key={g.id}
-                  goal={g}
-                  hierarchyMeta={{ parentLabels: parentLabelsForGoal(g.id, tree, byId) }}
-                  tierBorderClass={borderClass}
-                />
-              ))}
-            </div>
-          </details>
-        )
-      })}
-    </div>
-  )
-}
-
-function formatEventKeyLabel(key: string): string {
-  return key.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-/** Checkboxes for life-event rows — flipping &quot;occurred&quot; can auto-activate pending goals server-side. */
-function LifeEventsPanel({ events }: { events: LifeEvent[] }) {
-  const { mutate, isPending } = useUpdateLifeEvent()
-
-  if (events.length === 0) {
-    return (
-      <p className="text-xs text-muted-foreground px-1 py-2">
-        No life events yet. They are created by the seed script or API and referenced in activation conditions
-        as <code className="rounded bg-muted px-0.5">event:key</code>.
-      </p>
-    )
-  }
-
-  return (
-    <ul className="space-y-2 px-1 py-1">
-      {events.map((ev) => (
-        <li key={ev.id} className="flex items-start gap-2 text-sm">
-          <Checkbox
-            id={`life-ev-${ev.id}`}
-            checked={ev.occurred}
-            disabled={isPending}
-            onCheckedChange={(c) => {
-              const checked = c === true
-              mutate({
-                id: ev.id,
-                update: {
-                  occurred: checked,
-                  occurred_date: checked
-                    ? new Date().toISOString().slice(0, 10)
-                    : null,
-                },
-              })
-            }}
-          />
-          <div className="min-w-0 flex-1">
-            <Label htmlFor={`life-ev-${ev.id}`} className="font-medium cursor-pointer leading-tight">
-              {formatEventKeyLabel(ev.event_key)}
-            </Label>
-            <p className="text-[11px] text-muted-foreground font-mono mt-0.5">{ev.event_key}</p>
-            {ev.occurred_date && (
-              <p className="text-[11px] text-muted-foreground">Date: {ev.occurred_date}</p>
-            )}
-          </div>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
 export function GoalsSection({ className, initialChartKey = null }: Props) {
   const { data: goals, isLoading } = useGoals()
-  const { data: tree, isLoading: treeLoading, isError: treeError } = useGoalTree()
-  const { data: lifeEvents } = useLifeEvents()
 
   const activeGoals = (goals ?? []).filter((g) => g.status !== "ACHIEVED" && g.status !== "PAUSED")
   const achievedGoals = (goals ?? []).filter((g) => g.status === "ACHIEVED")
@@ -1399,81 +1039,44 @@ export function GoalsSection({ className, initialChartKey = null }: Props) {
           <div>
             <CardTitle className="text-sm font-medium">Goals</CardTitle>
             <p className="text-xs text-muted-foreground">
-              {goals ? `${goals.length} goal${goals.length !== 1 ? "s" : ""}` : "Track your financial targets"}
+              {goals ? `${goals.length} goal${goals.length !== 1 ? "s" : ""}` : "Targets and notes"}
             </p>
           </div>
           <AddGoalSheet prefillChartKey={initialChartKey} />
         </div>
       </CardHeader>
 
-      <CardContent>
-        <Tabs defaultValue="flat" className="w-full">
-          <TabsList variant="line" className="mb-3 h-8 w-full min-w-0 justify-start">
-            <TabsTrigger value="flat" className="text-xs">
-              Flat
-            </TabsTrigger>
-            <TabsTrigger value="hierarchy" className="text-xs gap-1">
-              <Layers className="size-3" />
-              Hierarchy
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="flat" className="space-y-2 mt-0">
-            {isLoading ? (
-              <div className="space-y-3">
-                {[...Array(3)].map((_, i) => (
-                  <Skeleton key={i} className="h-20" />
-                ))}
-              </div>
-            ) : (goals ?? []).length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center text-sm text-muted-foreground gap-2">
-                <Target className="size-8 opacity-30" />
-                <p>No goals yet.</p>
-                <p className="text-xs">Add your first goal to start tracking progress.</p>
-              </div>
-            ) : (
-              <>
-                {activeGoals.map((goal) => (
+      <CardContent className="space-y-2">
+        {isLoading ? (
+          <div className="space-y-3">
+            {[...Array(3)].map((_, i) => (
+              <Skeleton key={i} className="h-20" />
+            ))}
+          </div>
+        ) : (goals ?? []).length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center text-sm text-muted-foreground gap-2">
+            <Target className="size-8 opacity-30" />
+            <p>No goals yet.</p>
+            <p className="text-xs">Add a goal to get started.</p>
+          </div>
+        ) : (
+          <>
+            {activeGoals.map((goal) => (
+              <GoalCard key={goal.id} goal={goal} />
+            ))}
+            {achievedGoals.length > 0 && (
+              <div className="pt-2">
+                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+                  <CheckCircle2 className="size-3 text-blue-500" />
+                  Achieved
+                </p>
+                {achievedGoals.map((goal) => (
                   <GoalCard key={goal.id} goal={goal} />
                 ))}
-                {achievedGoals.length > 0 && (
-                  <div className="pt-2">
-                    <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                      <CheckCircle2 className="size-3 text-blue-500" />
-                      Achieved
-                    </p>
-                    {achievedGoals.map((goal) => (
-                      <GoalCard key={goal.id} goal={goal} />
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </TabsContent>
-
-          <TabsContent value="hierarchy" className="space-y-3 mt-0">
-            {treeLoading ? (
-              <div className="space-y-3">
-                {[...Array(4)].map((_, i) => (
-                  <Skeleton key={i} className="h-24" />
-                ))}
               </div>
-            ) : treeError ? (
-              <p className="text-sm text-destructive">
-                Could not load goal tree. Check that the API is running and you are logged in.
-              </p>
-            ) : tree ? (
-              <GoalsHierarchyPanels tree={tree} />
-            ) : null}
-
-            <details className="rounded-lg border text-sm">
-              <summary className="cursor-pointer select-none px-3 py-2 font-medium text-muted-foreground list-none [&::-webkit-details-marker]:hidden">
-                Life events (activation DSL)
-              </summary>
-              <LifeEventsPanel events={lifeEvents ?? []} />
-            </details>
-          </TabsContent>
-        </Tabs>
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   )

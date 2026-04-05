@@ -29,6 +29,7 @@ import {
   Target,
   PieChart,
   Settings,
+  LineChart,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -49,6 +50,11 @@ const NAV_ITEMS = [
     label: "Goals",
     href: "/goals",
     icon: Target,
+  },
+  {
+    label: "Simulate",
+    href: "/simulate",
+    icon: LineChart,
   },
   {
     label: "Holdings",

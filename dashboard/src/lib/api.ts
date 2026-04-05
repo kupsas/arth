@@ -70,6 +70,13 @@ import type {
   TransactionFilters,
   TransactionUpdate,
   UploadResponse,
+  SimulationParams,
+  SimulationResult,
+  FromCurrentResponse,
+  SurplusResult,
+  ScenarioComparison,
+  PriorityResult,
+  GoalReorderItem,
 } from "@/lib/types";
 
 import { buildApiUrl } from "@/lib/api-base";
@@ -508,6 +515,55 @@ export function updateGoal(id: number, update: GoalUpdate): Promise<Goal> {
  */
 export function deleteGoal(id: number): Promise<void> {
   return del(`/api/goals/${id}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Simulation sandbox (Sub-Plan H) — /api/simulate, /api/surplus, /api/inflation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** POST /api/simulate — pure projection from JSON params (no DB). */
+export function runSimulation(params: SimulationParams): Promise<SimulationResult> {
+  return post<SimulationResult>("/api/simulate", params);
+}
+
+/** POST /api/simulate/from-current — hydrate params from ACTIVE goals + surplus + inflation. */
+export function fetchSimulateFromCurrent(body?: {
+  simulation_months?: number;
+  surplus_trailing_months?: number;
+  as_of_date?: string | null;
+}): Promise<FromCurrentResponse> {
+  return post<FromCurrentResponse>("/api/simulate/from-current", body ?? {});
+}
+
+/** POST /api/simulate/compare — base vs scenario variants. */
+export function runSimulationCompare(
+  base: SimulationParams,
+  variants: SimulationParams[],
+): Promise<ScenarioComparison[]> {
+  return post<ScenarioComparison[]>("/api/simulate/compare", { base, variants });
+}
+
+/** GET /api/surplus — recurring-income-based monthly surplus (Sub-Plan B). */
+export function fetchSurplus(params?: {
+  user_id?: string;
+  months?: number;
+}): Promise<SurplusResult> {
+  return get<SurplusResult>("/api/surplus", params as QueryParams);
+}
+
+/** GET /api/inflation — merged CPI rates + metadata. */
+export function fetchInflation(): Promise<Record<string, unknown>> {
+  return get<Record<string, unknown>>("/api/inflation");
+}
+
+/** GET /api/goals/priorities — system priority scores (optional persist=false to avoid DB writes). */
+export function fetchPriorities(persist = true): Promise<PriorityResult> {
+  return get<PriorityResult>("/api/goals/priorities", { persist });
+}
+
+/** POST /api/goals/reorder — update allocation_priority ranks only. */
+export function reorderGoals(goalOrder: GoalReorderItem[]): Promise<unknown> {
+  return post<unknown>("/api/goals/reorder", { goal_order: goalOrder });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

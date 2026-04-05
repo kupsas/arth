@@ -88,8 +88,12 @@ def validate_chart_key_for_goal(goal_type: str, chart_key: str | None) -> None:
             raise ValueError("chart_key investment_net is not valid for EXPENSE_LIMIT")
         return
     if goal_type == "INVESTMENT":
-        if chart_key != CHART_KEY_INVESTMENT_NET:
-            raise ValueError("INVESTMENT goals only support chart_key investment_net")
+        # None = not tied to the investment chart (e.g. second+ savings goal). Only one
+        # goal per user should use investment_net so the dashboard chart has a single link.
+        if chart_key is not None and chart_key != CHART_KEY_INVESTMENT_NET:
+            raise ValueError(
+                "INVESTMENT goals only support chart_key 'investment_net' or omit it (unlinked)"
+            )
         return
     if chart_key is not None:
         raise ValueError(f"chart_key is only supported for EXPENSE_LIMIT and INVESTMENT, not {goal_type}")

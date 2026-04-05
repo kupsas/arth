@@ -42,6 +42,10 @@ class AllocateRequest(BaseModel):
         default=None,
         description="Reference month for recurring windows (defaults to today)",
     )
+    general_inflation_rate: float = Field(
+        default=6.0,
+        description="Headline CPI % — used when a goal's inflation_rate is null (same as simulate).",
+    )
 
 
 class CompareRequest(BaseModel):
@@ -151,6 +155,7 @@ def post_allocate(body: AllocateRequest) -> dict[str, float]:
         body.goals,
         body.surplus,
         today=body.as_of_date,
+        general_inflation_rate=body.general_inflation_rate,
     )
 
 

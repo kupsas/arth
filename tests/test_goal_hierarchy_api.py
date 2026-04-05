@@ -233,6 +233,32 @@ class TestGoalsCrudHierarchy:
         resp = client.post("/api/goals", json={**_GOAL_BASE, "activation_status": "ZOMBIE"})
         assert resp.status_code == 400
 
+    def test_second_investment_goal_uses_unlinked_chart_key(self, client):
+        """Only one INVESTMENT goal may use investment_net; the next is stored with chart_key None."""
+        r1 = client.post(
+            "/api/goals",
+            json={
+                "name": "First investment",
+                "goal_type": "INVESTMENT",
+                "target_amount": 100000,
+                "chart_key": "investment_net",
+            },
+        )
+        assert r1.status_code == 201, r1.text
+        assert r1.json()["chart_key"] == "investment_net"
+
+        r2 = client.post(
+            "/api/goals",
+            json={
+                "name": "House — down payment",
+                "goal_type": "INVESTMENT",
+                "target_amount": 500000,
+                "chart_key": "investment_net",
+            },
+        )
+        assert r2.status_code == 201, r2.text
+        assert r2.json()["chart_key"] is None
+
     def test_pyramid_id_uniqueness_enforced(self, client):
         """Two goals cannot share the same pyramid_id for the same user."""
         _create_goal(client, pyramid_id="V1")

@@ -58,11 +58,14 @@ class SimulationGoal(BaseModel):
         le=50,
         description="Nominal annual % for this goal's pot",
     )
-    inflation_rate: float = Field(
-        default=6.0,
+    inflation_rate: float | None = Field(
+        default=None,
         ge=0,
         le=50,
-        description="Annual % — inflates POINT_IN_TIME target over simulation time",
+        description=(
+            "Annual % — inflates POINT_IN_TIME target over simulation time. "
+            "None uses SimulationParams.general_inflation_rate (headline CPI in production)."
+        ),
     )
     recurrence_amount: float | None = None
     recurrence_frequency: str | None = Field(
@@ -80,14 +83,14 @@ class SimulationParams(BaseModel):
     goals: list[SimulationGoal] = Field(default_factory=list)
     monthly_surplus: float = Field(default=0.0, description="Base monthly investable surplus (INR)")
     salary_growth_rate: float = Field(
-        default=0.0,
+        default=5.0,
         ge=0,
         le=50,
         description="Annual % raise applied to monthly_surplus every 12 simulated months",
     )
     general_inflation_rate: float = Field(
         default=6.0,
-        description="Reserved for future cross-goal logic; per-goal inflation uses SimulationGoal.inflation_rate",
+        description="Headline annual % — used when SimulationGoal.inflation_rate is None (R-INF-1 / S4.4).",
     )
     simulation_months: int = Field(default=240, ge=1, le=600)
     one_time_inflows: list[OneTimeEvent] = Field(default_factory=list)
@@ -173,6 +176,13 @@ class ScenarioComparison(BaseModel):
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
+
+
+def _effective_goal_inflation(goal: SimulationGoal, general_inflation_pct: float) -> float:
+    """Annual inflation % for POINT_IN_TIME targets. None → headline/general (CSV R-INF-1)."""
+    if goal.inflation_rate is None:
+        return float(general_inflation_pct)
+    return float(goal.inflation_rate)
 
 
 def _monthly_r(annual_pct: float) -> float:
@@ -266,8 +276,14 @@ def allocate_surplus(
     goals: list[SimulationGoal],
     surplus: float,
     today: datetime.date | None = None,
+    *,
+    general_inflation_rate: float = 6.0,
 ) -> dict[str, float]:
-    """Single-pass priority waterfall — no month loop. For overview / quick UI."""
+    """Single-pass priority waterfall — no month loop. For overview / quick UI.
+
+    When a POINT_IN_TIME goal has ``inflation_rate is None``, *general_inflation_rate*
+    is used (same rule as :func:`simulate`).
+    """
     if not goals:
         return {}
     td = today or datetime.date.today()
@@ -296,7 +312,8 @@ def allocate_surplus(
                 continue
             raw = float(g.target_amount)
             years = n / 12.0
-            adj = raw * (1.0 + g.inflation_rate / 100.0) ** years
+            eff_infl = _effective_goal_inflation(g, general_inflation_rate)
+            adj = raw * (1.0 + eff_infl / 100.0) ** years
             pv = float(g.starting_balance or 0.0)
             r = _monthly_r(g.expected_return_rate)
             fv_pv = pv * (1.0 + r) ** n if r > 0 else pv
@@ -358,7 +375,8 @@ def simulate(params: SimulationParams) -> SimulationResult:
             continue
         raw_target = float(g.target_amount)
         years = n0 / 12.0
-        adj = raw_target * (1.0 + g.inflation_rate / 100.0) ** years
+        eff_infl = _effective_goal_inflation(g, params.general_inflation_rate)
+        adj = raw_target * (1.0 + eff_infl / 100.0) ** years
         pv = float(g.starting_balance or 0.0)
         r = _monthly_r(g.expected_return_rate)
         fv_pv = pv * (1.0 + r) ** n0 if r > 0 else pv
@@ -421,7 +439,8 @@ def simulate(params: SimulationParams) -> SimulationResult:
                 if n_left <= 0:
                     continue
 
-                infl_t = _inflation_target_at_month(raw_target, g.inflation_rate, m)
+                eff_infl = _effective_goal_inflation(g, params.general_inflation_rate)
+                infl_t = _inflation_target_at_month(raw_target, eff_infl, m)
                 r = _monthly_r(g.expected_return_rate)
                 fv_pv = current_value[i] * (1.0 + r) ** n_left if r > 0 else current_value[i]
                 gap = max(0.0, infl_t - fv_pv)
@@ -480,7 +499,8 @@ def simulate(params: SimulationParams) -> SimulationResult:
                 and g.goal_class.upper() == GC_POINT
                 and g.target_amount is not None
             ):
-                infl_t = _inflation_target_at_month(float(g.target_amount), g.inflation_rate, m)
+                eff_infl = _effective_goal_inflation(g, params.general_inflation_rate)
+                infl_t = _inflation_target_at_month(float(g.target_amount), eff_infl, m)
                 if current_value[i] >= infl_t - 1e-6:
                     completed[i] = True
                     completion_date[i] = current_month
@@ -524,9 +544,10 @@ def simulate(params: SimulationParams) -> SimulationResult:
         shortfall = 0.0
 
         if g.goal_class.upper() == GC_POINT and g.target_amount is not None:
+            eff_infl = _effective_goal_inflation(g, params.general_inflation_rate)
             final_target = _inflation_target_at_month(
                 float(g.target_amount),
-                g.inflation_rate,
+                eff_infl,
                 params.simulation_months - 1,
             )
             if completed[i]:

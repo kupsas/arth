@@ -478,6 +478,15 @@ export interface GoalCreate {
   allocation_priority?: number | null;
   interruptible?: boolean | null;
   sensitivity_to_returns?: string | null;
+  goal_class?: string | null;
+  recurrence_amount?: number | null;
+  recurrence_frequency?: string | null;
+  recurrence_start?: string | null;
+  recurrence_end?: string | null;
+  goal_specific_inflation_rate?: number | null;
+  expected_return_rate?: number | null;
+  starting_balance?: number | null;
+  goal_subtype?: string | null;
 }
 
 export interface GoalUpdate {
@@ -502,6 +511,191 @@ export interface GoalUpdate {
   allocation_priority?: number | null;
   interruptible?: boolean | null;
   sensitivity_to_returns?: string | null;
+  /** Goals architecture V2 — mirrors api/routes/goals.py GoalUpdate */
+  goal_class?: string | null;
+  recurrence_amount?: number | null;
+  recurrence_frequency?: string | null;
+  recurrence_start?: string | null;
+  recurrence_end?: string | null;
+  goal_specific_inflation_rate?: number | null;
+  expected_return_rate?: number | null;
+  starting_balance?: number | null;
+  goal_subtype?: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Simulation sandbox (Sub-Plan H) — mirrors api/services/simulation.py
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH */
+export type SimulationGoalClass =
+  | "POINT_IN_TIME"
+  | "RECURRING_CASH_FLOW"
+  | "GROWTH";
+
+/** ON_TRACK | AT_RISK | BEHIND | ACHIEVED | IMPOSSIBLE */
+export type GoalSimStatus =
+  | "ON_TRACK"
+  | "AT_RISK"
+  | "BEHIND"
+  | "ACHIEVED"
+  | "IMPOSSIBLE";
+
+export interface OneTimeEvent {
+  amount: number;
+  date: string;
+  description?: string;
+}
+
+/** Sandbox goal row — mirrors SimulationGoal (JSON uses ISO dates). */
+export interface SimulationGoal {
+  id?: number | null;
+  name: string;
+  goal_class: SimulationGoalClass | string;
+  target_amount?: number | null;
+  target_date?: string | null;
+  starting_balance?: number;
+  allocation_priority?: number;
+  expected_return_rate?: number;
+  /** Annual %; null → use general_inflation_rate on params */
+  inflation_rate?: number | null;
+  recurrence_amount?: number | null;
+  recurrence_frequency?: string | null;
+  recurrence_start?: string | null;
+  recurrence_end?: string | null;
+  goal_subtype?: string | null;
+}
+
+export interface SimulationParams {
+  goals: SimulationGoal[];
+  monthly_surplus: number;
+  salary_growth_rate?: number;
+  general_inflation_rate?: number;
+  simulation_months?: number;
+  one_time_inflows?: OneTimeEvent[];
+  one_time_outflows?: OneTimeEvent[];
+  as_of_date?: string | null;
+}
+
+export interface MonthlySnapshot {
+  month: string;
+  cumulative_value: number;
+  monthly_contribution: number;
+  monthly_return: number;
+  target_at_month?: number | null;
+}
+
+export interface GoalProjection {
+  goal_id: number | null;
+  goal_name: string;
+  monthly_allocation: number;
+  projected_completion_date: string | null;
+  status: GoalSimStatus;
+  projected_final_amount: number;
+  shortfall: number;
+  monthly_trajectory: MonthlySnapshot[];
+}
+
+export interface CascadeEvent {
+  month: string;
+  completed_goal: string;
+  freed_surplus: number;
+  beneficiary_goals: string[];
+}
+
+export interface MonthlyNetWorth {
+  month: string;
+  total_value: number;
+  total_contributions: number;
+  total_returns: number;
+}
+
+export interface SimulationResult {
+  projections: GoalProjection[];
+  surplus_allocation: Record<string, number>;
+  total_surplus_allocated: number;
+  unallocated_surplus: number;
+  cascade_events: CascadeEvent[];
+  net_worth_projection: MonthlyNetWorth[];
+  warnings: string[];
+}
+
+export interface GoalDelta {
+  goal_name: string;
+  base_completion?: string | null;
+  variant_completion?: string | null;
+  base_status?: GoalSimStatus | null;
+  variant_status?: GoalSimStatus | null;
+  months_shifted?: number | null;
+}
+
+export interface ScenarioComparison {
+  scenario_name: string;
+  changes_from_base: Record<string, unknown>;
+  result: SimulationResult;
+  deltas: GoalDelta[];
+}
+
+/** GET /api/surplus — mirrors SurplusResult */
+export interface SurplusMonthDetail {
+  month: string;
+  income: number;
+  expense_category_filtered: number;
+  expense_need: number;
+  expense_want: number;
+  surplus_path_a: number;
+  surplus_path_b: number;
+}
+
+export interface SurplusResult {
+  user_id: string;
+  monthly_income: number;
+  monthly_expense_baseline: number;
+  monthly_surplus: number;
+  surplus_path_a: number;
+  surplus_path_b: number;
+  computation_method: string;
+  months_analyzed: number;
+  month_details: SurplusMonthDetail[];
+  recurring_income_patterns: Record<string, unknown>[];
+  warnings: string[];
+}
+
+/** POST /api/simulate/from-current */
+export interface FromCurrentResponse {
+  params: SimulationParams;
+  meta: Record<string, unknown>;
+  result: SimulationResult;
+}
+
+export interface PriorityBreakdown {
+  time_pressure: number;
+  consequence_severity: number;
+  feasibility_urgency: number;
+  asset_alignment: number;
+}
+
+export interface GoalPriorityRow {
+  goal_id: number;
+  goal_name: string;
+  priority_score: number;
+  suggested_rank: number;
+  breakdown: PriorityBreakdown;
+  explanation: string;
+  needs_revision: boolean;
+}
+
+export interface PriorityResult {
+  user_id: string;
+  priorities: GoalPriorityRow[];
+  monthly_surplus: number;
+  active_goal_count: number;
+  computed_at: string;
+}
+
+export interface GoalReorderItem {
+  goal_id: number;
+  allocation_priority: number;
 }
 
 /** One edge in the goal pyramid — mirrors api/routes/goal_links.py */
