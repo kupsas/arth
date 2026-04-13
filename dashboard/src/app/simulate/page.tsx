@@ -6,8 +6,8 @@
 
 import * as React from "react";
 
-import { GoalCards, defaultHypotheticalGoal } from "@/components/simulation/goal-cards";
-import { RunRateChart } from "@/components/simulation/run-rate-chart";
+import { defaultHypotheticalGoal } from "@/components/simulation/goal-cards";
+import { GoalExplorer } from "@/components/simulation/goal-explorer";
 import { SaveSimulationDialog } from "@/components/simulation/save-dialog";
 import { SliderPanel } from "@/components/simulation/slider-panel";
 import { SurplusWaterfall } from "@/components/simulation/surplus-waterfall";
@@ -29,9 +29,7 @@ export default function SimulatePage() {
     isDirty,
     error,
     updateGlobalParam,
-    updateGoal,
     addHypotheticalGoal,
-    removeGoal,
     reorderGoalsByList,
     reset,
     commitDraftAsBase,
@@ -112,20 +110,16 @@ export default function SimulatePage() {
             isSimulating && "opacity-70 transition-opacity duration-200",
           )}
         >
-          <SurplusWaterfall projections={result.projections} />
-
-          <RunRateChart
+          <SurplusWaterfall
             projections={result.projections}
             netWorthProjection={result.net_worth_projection}
-            goals={draftParams.goals}
           />
 
-          <GoalCards
+          <GoalExplorer
             goals={draftParams.goals}
             projections={result.projections}
             generalInflationRate={draftParams.general_inflation_rate ?? 6}
-            onUpdateGoal={(id, idx, patch) => updateGoal(id, idx, patch)}
-            onRemoveGoal={(id, idx) => removeGoal(id, idx)}
+            asOfDate={draftParams.as_of_date ?? null}
             onReorderList={reorderGoalsByList}
             onAddHypothetical={() => addHypotheticalGoal(defaultHypotheticalGoal())}
           />

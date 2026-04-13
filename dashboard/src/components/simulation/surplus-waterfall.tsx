@@ -25,14 +25,31 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CHART_SERIES_COLORS } from "@/lib/chart-colors";
 import { formatInrChartAxis, formatPercent } from "@/lib/utils";
-import type { GoalProjection } from "@/lib/types";
+import type { GoalProjection, MonthlyNetWorth } from "@/lib/types";
 
 /** Muted fill/stroke for non-focused series when one legend goal is selected. */
 const DIM_SERIES_COLOR = "var(--muted-foreground)";
 
-/** Raw INR per goal for one chart row (before optional % transform). */
+/**
+ * Stacked-area series for surplus that was not assigned to any goal (`unallocated_surplus` from API).
+ * Shown as the top band in grey so it is visible in the chart, not only in the tooltip.
+ */
+const UNALLOCATED_SERIES = "Unallocated";
+
+/** Grey stack segment for unallocated surplus (distinct from goal palette in CHART_SERIES_COLORS). */
+const UNALLOCATED_FILL = "var(--muted)";
+const UNALLOCATED_STROKE = "var(--muted-foreground)";
+
+/**
+ * Raw INR per goal for one chart row (before optional % transform).
+ * `_surplusLeft` / `_totalMonthlySurplus` mirror the simulation engine (from `net_worth_projection`);
+ * prefixed so they never collide with goal names.
+ * `[UNALLOCATED_SERIES]` duplicates unallocated INR for the stack (same value as `_surplusLeft` when present).
+ */
 type InrRow = {
   monthLabel: string;
+  _surplusLeft?: number;
+  _totalMonthlySurplus?: number;
   [goalName: string]: string | number | undefined;
 };
 
@@ -40,10 +57,15 @@ type InrRow = {
 type PercentRow = {
   monthLabel: string;
   _inr: Record<string, number>;
+  _surplusLeft?: number;
+  _totalMonthlySurplus?: number;
   [goalName: string]: string | number | Record<string, number> | undefined;
 };
 
-function buildMonthlyInrRows(projections: GoalProjection[]): InrRow[] {
+function buildMonthlyInrRows(
+  projections: GoalProjection[],
+  netWorth: MonthlyNetWorth[],
+): InrRow[] {
   if (!projections.length) return [];
   const tr = projections[0].monthly_trajectory;
   if (!tr.length) return [];
@@ -53,6 +75,15 @@ function buildMonthlyInrRows(projections: GoalProjection[]): InrRow[] {
     const month = tr[i]?.month;
     if (!month) continue;
     const row: InrRow = { monthLabel: month.slice(0, 7) };
+    const nw = netWorth[i];
+    if (nw) {
+      const left = nw.unallocated_surplus ?? 0;
+      row._surplusLeft = left;
+      row[UNALLOCATED_SERIES] = left;
+      row._totalMonthlySurplus = nw.monthly_surplus_pool ?? 0;
+    } else {
+      row[UNALLOCATED_SERIES] = 0;
+    }
     for (const p of projections) {
       const snap = p.monthly_trajectory[i];
       row[p.goal_name] = snap?.monthly_contribution ?? 0;
@@ -62,13 +93,18 @@ function buildMonthlyInrRows(projections: GoalProjection[]): InrRow[] {
   return rows;
 }
 
-function buildYearlyInrRows(projections: GoalProjection[]): InrRow[] {
+function buildYearlyInrRows(
+  projections: GoalProjection[],
+  netWorth: MonthlyNetWorth[],
+): InrRow[] {
   if (!projections.length) return [];
   const tr = projections[0].monthly_trajectory;
   if (!tr.length) return [];
 
   /** year -> goal -> sum of monthly_contribution */
   const yearMap = new Map<string, Record<string, number>>();
+  /** year -> summed surplus metadata (12 months aggregated for yearly view) */
+  const yearSurplus = new Map<string, { unalloc: number; pool: number }>();
 
   for (let i = 0; i < tr.length; i++) {
     const month = tr[i]?.month;
@@ -77,7 +113,16 @@ function buildYearlyInrRows(projections: GoalProjection[]): InrRow[] {
     if (!yearMap.has(year)) {
       yearMap.set(year, {});
     }
+    if (!yearSurplus.has(year)) {
+      yearSurplus.set(year, { unalloc: 0, pool: 0 });
+    }
     const bucket = yearMap.get(year)!;
+    const sb = yearSurplus.get(year)!;
+    const nw = netWorth[i];
+    if (nw) {
+      sb.unalloc += nw.unallocated_surplus ?? 0;
+      sb.pool += nw.monthly_surplus_pool ?? 0;
+    }
     for (const p of projections) {
       const v = p.monthly_trajectory[i]?.monthly_contribution ?? 0;
       bucket[p.goal_name] = (bucket[p.goal_name] ?? 0) + v;
@@ -88,6 +133,14 @@ function buildYearlyInrRows(projections: GoalProjection[]): InrRow[] {
   return years.map((y) => {
     const bucket = yearMap.get(y)!;
     const row: InrRow = { monthLabel: y };
+    const s = yearSurplus.get(y);
+    if (s) {
+      row._surplusLeft = s.unalloc;
+      row[UNALLOCATED_SERIES] = s.unalloc;
+      row._totalMonthlySurplus = s.pool;
+    } else {
+      row[UNALLOCATED_SERIES] = 0;
+    }
     for (const p of projections) {
       row[p.goal_name] = bucket[p.goal_name] ?? 0;
     }
@@ -97,16 +150,26 @@ function buildYearlyInrRows(projections: GoalProjection[]): InrRow[] {
 
 function toPercentRows(rows: InrRow[], goalNames: string[]): PercentRow[] {
   return rows.map((row) => {
-    const total = goalNames.reduce(
+    const unalloc = Number(row[UNALLOCATED_SERIES]) || 0;
+    const goalsTotal = goalNames.reduce(
       (s, n) => s + (Number(row[n]) || 0),
       0,
     );
-    const out: PercentRow = { monthLabel: row.monthLabel, _inr: {} };
+    // Engine invariant: allocated + unallocated = pool — include unallocated so the stack hits 100%.
+    const total = goalsTotal + unalloc;
+    const out: PercentRow = {
+      monthLabel: row.monthLabel,
+      _inr: {},
+      _surplusLeft: row._surplusLeft,
+      _totalMonthlySurplus: row._totalMonthlySurplus,
+    };
     for (const n of goalNames) {
       const v = Number(row[n]) || 0;
       out._inr[n] = v;
       out[n] = total > 0 ? (v / total) * 100 : 0;
     }
+    out._inr[UNALLOCATED_SERIES] = unalloc;
+    out[UNALLOCATED_SERIES] = total > 0 ? (unalloc / total) * 100 : 0;
     return out;
   });
 }
@@ -122,8 +185,11 @@ type StackMode = "absolute" | "percent";
 
 export function SurplusWaterfall({
   projections,
+  netWorthProjection,
 }: {
   projections: GoalProjection[];
+  /** Same length/order as each goal’s `monthly_trajectory` — supplies per-month surplus pool + unallocated. */
+  netWorthProjection: MonthlyNetWorth[];
 }) {
   const names = projections.map((p) => p.goal_name);
 
@@ -136,23 +202,25 @@ export function SurplusWaterfall({
    */
   const [focusedGoal, setFocusedGoal] = useState<string | null>(null);
 
-  const validGoalNames = useMemo(
-    () => new Set(projections.map((p) => p.goal_name)),
+  /** Goal names plus the unallocated stack — legend focus can isolate any of these. */
+  const validFocusKeys = useMemo(
+    () =>
+      new Set([...projections.map((p) => p.goal_name), UNALLOCATED_SERIES]),
     [projections],
   );
 
   useEffect(() => {
-    if (focusedGoal && !validGoalNames.has(focusedGoal)) {
+    if (focusedGoal && !validFocusKeys.has(focusedGoal)) {
       setFocusedGoal(null);
     }
-  }, [focusedGoal, validGoalNames]);
+  }, [focusedGoal, validFocusKeys]);
 
   const inrRows = useMemo(() => {
     if (!projections.length) return [];
     return cadence === "monthly"
-      ? buildMonthlyInrRows(projections)
-      : buildYearlyInrRows(projections);
-  }, [cadence, projections]);
+      ? buildMonthlyInrRows(projections, netWorthProjection)
+      : buildYearlyInrRows(projections, netWorthProjection);
+  }, [cadence, projections, netWorthProjection]);
 
   /** Recharts row type is permissive; we attach `_inr` only in 100% mode for tooltips. */
   const chartData = useMemo((): Record<string, unknown>[] => {
@@ -166,8 +234,8 @@ export function SurplusWaterfall({
   const description = useMemo(() => {
     if (stackMode === "percent") {
       return cadence === "monthly"
-        ? "Share of total monthly surplus going to each goal (always sums to 100%). Tooltip shows ₹."
-        : "Share of each calendar year’s total surplus by goal (sums to 100% per year). Tooltip shows ₹.";
+        ? "Share of monthly surplus: goals + unallocated (always sums to 100%). Tooltip shows ₹."
+        : "Share of each calendar year’s surplus: goals + unallocated (100% per year). Tooltip shows ₹.";
     }
     return cadence === "monthly"
       ? "Monthly allocation in ₹. Bands shrink when goals complete and cash flows elsewhere."
@@ -268,6 +336,11 @@ export function SurplusWaterfall({
                     ? (point._inr as Record<string, number>)
                     : null;
 
+                const totalMonthlySurplus =
+                  typeof point?._totalMonthlySurplus === "number"
+                    ? point._totalMonthlySurplus
+                    : undefined;
+
                 return (
                   <div className={RECHARTS_TOOLTIP_CARD_CLASS}>
                     <p className="font-medium">{label}</p>
@@ -302,6 +375,18 @@ export function SurplusWaterfall({
                         );
                       })}
                     </ul>
+                    {totalMonthlySurplus !== undefined && (
+                      <ul className="mt-2 space-y-0.5 border-t border-border pt-2 text-xs tabular-nums">
+                        <li className="flex justify-between gap-4">
+                          <span className="text-muted-foreground">
+                            {cadence === "yearly"
+                              ? "Total surplus (year)"
+                              : "Total surplus pool"}
+                          </span>
+                          <span>{formatInrChartAxis(totalMonthlySurplus)}</span>
+                        </li>
+                      </ul>
+                    )}
                   </div>
                 );
               }}
@@ -369,6 +454,29 @@ export function SurplusWaterfall({
                 />
               );
             })}
+            {/* Top of stack: surplus not assigned to goals (same series as tooltip / engine `unallocated_surplus`). */}
+            <Area
+              key={UNALLOCATED_SERIES}
+              type="monotone"
+              name={UNALLOCATED_SERIES}
+              dataKey={UNALLOCATED_SERIES}
+              stackId="1"
+              stroke={
+                focusedGoal === null || focusedGoal === UNALLOCATED_SERIES
+                  ? UNALLOCATED_STROKE
+                  : DIM_SERIES_COLOR
+              }
+              fill={
+                focusedGoal === null || focusedGoal === UNALLOCATED_SERIES
+                  ? UNALLOCATED_FILL
+                  : DIM_SERIES_COLOR
+              }
+              fillOpacity={
+                focusedGoal === null || focusedGoal === UNALLOCATED_SERIES
+                  ? 0.65
+                  : 0.28
+              }
+            />
           </AreaChart>
         </ResponsiveContainer>
       </CardContent>

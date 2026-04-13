@@ -649,3 +649,69 @@ def test_refinement_preserves_mandatory_recurring_totals():
     e0 = next(x for x in inner.projections if x.goal_name == "Loan EMI")
     e1 = next(x for x in out.projections if x.goal_name == "Loan EMI")
     assert abs(e0.monthly_allocation - e1.monthly_allocation) < 0.01
+
+
+def test_recurring_trajectory_has_monthly_need_and_funding_stats():
+    """Recurring goals expose monthly_need per snapshot and aggregate funding_rate."""
+    today = datetime.date(2026, 1, 1)
+    emi = SimulationGoal(
+        id=1,
+        name="Loan EMI",
+        goal_class=GC_RECURRING,
+        goal_subtype="LOAN_PAYOFF",
+        allocation_priority=1,
+        recurrence_amount=20_000.0,
+        recurrence_frequency="MONTHLY",
+        recurrence_start=today,
+        recurrence_end=datetime.date(2046, 1, 1),
+        expected_return_rate=0.0,
+    )
+    p = SimulationParams(
+        goals=[emi],
+        monthly_surplus=50_000.0,
+        simulation_months=6,
+        as_of_date=today,
+    )
+    r = simulate(p)
+    loan = next(x for x in r.projections if x.goal_name == "Loan EMI")
+    for snap in loan.monthly_trajectory:
+        assert snap.monthly_need is not None
+        assert snap.monthly_need > 0
+        assert snap.monthly_contribution <= snap.monthly_need + 1e-6
+    assert loan.periods_total == 6
+    assert loan.periods_funded == 6
+    assert loan.funding_rate is not None
+    assert loan.funding_rate >= 0.99
+    assert loan.total_needed is not None
+    assert loan.total_contributed is not None
+    assert loan.status in ("ACHIEVED", "ON_TRACK")
+
+
+def test_recurring_quarterly_funding_stats_align_to_first_billable_month():
+    """QUARTERLY periods must chunk from first positive need, not simulation month 0."""
+    today = datetime.date(2026, 1, 1)
+    sub = SimulationGoal(
+        id=2,
+        name="Quarterly sub",
+        goal_class=GC_RECURRING,
+        goal_subtype="CUSTOM",
+        allocation_priority=1,
+        recurrence_amount=30_000.0,
+        recurrence_frequency="QUARTERLY",
+        recurrence_start=datetime.date(2026, 4, 1),
+        recurrence_end=datetime.date(2040, 1, 1),
+        expected_return_rate=0.0,
+    )
+    p = SimulationParams(
+        goals=[sub],
+        monthly_surplus=100_000.0,
+        simulation_months=12,
+        as_of_date=today,
+    )
+    r = simulate(p)
+    proj = next(x for x in r.projections if x.goal_name == "Quarterly sub")
+    # Jan–Mar: before recurrence_start → no need; Apr–Dec: three full quarterly windows
+    assert proj.periods_total == 3
+    assert proj.periods_funded == 3
+    assert proj.funding_rate is not None
+    assert proj.funding_rate >= 0.99

@@ -182,6 +182,10 @@ class MonthlySnapshot(BaseModel):
     monthly_contribution: float
     monthly_return: float
     target_at_month: float | None = None
+    monthly_need: float | None = Field(
+        None,
+        description="Engine amortized need this month (PIT dynamic PMT, recurring monthly need, GROWTH 0).",
+    )
 
 
 class GoalProjection(BaseModel):
@@ -196,9 +200,29 @@ class GoalProjection(BaseModel):
     projected_final_amount: float
     shortfall: float = Field(
         ...,
-        description="Positive if behind nominal target at end (POINT_IN_TIME); 0 if on track",
+        description="Positive if behind nominal target at end (POINT_IN_TIME); recurring: max(0, total_needed - total_contributed)",
     )
     monthly_trajectory: list[MonthlySnapshot] = Field(default_factory=list)
+    periods_total: int | None = Field(
+        None,
+        description="RECURRING: billing periods with positive need (chunked by recurrence frequency).",
+    )
+    periods_funded: int | None = Field(
+        None,
+        description="RECURRING: periods where contribution sum >= 95% of need sum.",
+    )
+    funding_rate: float | None = Field(
+        None,
+        description="RECURRING: periods_funded / periods_total when periods_total > 0.",
+    )
+    total_contributed: float | None = Field(
+        None,
+        description="RECURRING: sum of monthly_contribution over the trajectory.",
+    )
+    total_needed: float | None = Field(
+        None,
+        description="RECURRING: sum of monthly_need over the trajectory.",
+    )
 
 
 class CascadeEvent(BaseModel):
@@ -213,6 +237,14 @@ class MonthlyNetWorth(BaseModel):
     total_value: float
     total_contributions: float
     total_returns: float
+    monthly_surplus_pool: float = Field(
+        0.0,
+        description="Investable surplus for this month (before allocation); equals goals + unallocated.",
+    )
+    unallocated_surplus: float = Field(
+        0.0,
+        description="Surplus not allocated to any goal after rules (spill, no sink, etc.).",
+    )
 
 
 class SimulationResult(BaseModel):
@@ -329,6 +361,66 @@ def _recurring_is_active(g: SimulationGoal, month_first: datetime.date) -> bool:
     if re is not None and month_first > re.replace(day=1):
         return False
     return True
+
+
+def _recurrence_period_months(freq: str | None) -> int:
+    """Months per billing period for chunking recurring funding stats."""
+    f = (freq or "MONTHLY").strip().upper()
+    if f == "QUARTERLY":
+        return 3
+    if f in ("ANNUAL", "YEARLY"):
+        return 12
+    return 1
+
+
+def _compute_recurring_funding_stats(
+    goal: SimulationGoal,
+    trajectory: list[MonthlySnapshot],
+) -> tuple[int | None, int | None, float | None, float | None, float | None]:
+    """Aggregate recurring trajectory into period counts and funding_rate (None if no billable periods)."""
+    if goal.goal_class.upper() != GC_RECURRING:
+        return None, None, None, None, None
+    pm = _recurrence_period_months(goal.recurrence_frequency)
+    total_contributed = round(sum(s.monthly_contribution for s in trajectory), 2)
+    total_needed = round(sum(s.monthly_need or 0.0 for s in trajectory), 2)
+
+    # Chunk from the first month with positive amortized need through the last — avoids
+    # misaligned QUARTERLY/ANNUAL windows when recurrence_start is mid-simulation (or after
+    # recurrence_end, trailing months have need 0 and must not dilute the last billing period).
+    start_idx: int | None = None
+    end_idx: int | None = None
+    for j, s in enumerate(trajectory):
+        if (s.monthly_need or 0.0) > 1e-6:
+            start_idx = j
+            break
+    if start_idx is None:
+        return 0, 0, None, total_contributed, total_needed
+    end_idx = start_idx
+    for j in range(len(trajectory) - 1, start_idx - 1, -1):
+        if (trajectory[j].monthly_need or 0.0) > 1e-6:
+            end_idx = j
+            break
+    segment = trajectory[start_idx : end_idx + 1]
+
+    periods_total = 0
+    periods_funded = 0
+    i = 0
+    while i < len(segment):
+        chunk = segment[i : i + pm]
+        i += pm
+        need_sum = sum(s.monthly_need or 0.0 for s in chunk)
+        contrib_sum = sum(s.monthly_contribution for s in chunk)
+        if need_sum <= 1e-6:
+            continue
+        periods_total += 1
+        if contrib_sum + 1e-6 >= need_sum * 0.95:
+            periods_funded += 1
+
+    if periods_total <= 0:
+        return 0, 0, None, total_contributed, total_needed
+
+    fr = round(periods_funded / periods_total, 4)
+    return periods_total, periods_funded, fr, total_contributed, total_needed
 
 
 def _sort_goals_for_allocation(goals: list[SimulationGoal]) -> list[SimulationGoal]:
@@ -1126,6 +1218,10 @@ def _simulate_inner(
 
         sum_unallocated += max(0.0, remaining_surplus) + spill_floor
 
+        monthly_pool = max(0.0, active_surplus + extra)
+        allocated_total = sum(float(alloc_this_month.get(i, 0.0)) for i in range(n_goals))
+        unallocated_this_month = max(0.0, monthly_pool - allocated_total)
+
         # Apply returns then contributions; record snapshots
         total_v = 0.0
         total_c = 0.0
@@ -1151,6 +1247,10 @@ def _simulate_inner(
                 else:
                     tgt_snap = compute_target_at_month(g, m + 1, steady_pmt[i])
 
+            mn = 0.0
+            if not completed[i]:
+                mn = float(need_by_idx.get(i, 0.0))
+
             trajectories[i].append(
                 MonthlySnapshot(
                     month=current_month,
@@ -1158,6 +1258,7 @@ def _simulate_inner(
                     monthly_contribution=round(contrib, 2),
                     monthly_return=round(ret, 2),
                     target_at_month=round(tgt_snap, 2) if tgt_snap is not None else None,
+                    monthly_need=round(mn, 2) if mn > 1e-12 else None,
                 )
             )
             total_v += current_value[i]
@@ -1198,6 +1299,8 @@ def _simulate_inner(
                 total_value=round(total_v, 2),
                 total_contributions=round(total_c, 2),
                 total_returns=round(total_r, 2),
+                monthly_surplus_pool=round(monthly_pool, 2),
+                unallocated_surplus=round(unallocated_this_month, 2),
             )
         )
 
@@ -1213,6 +1316,11 @@ def _simulate_inner(
 
         st: GoalSimStatus = "ON_TRACK"
         shortfall = 0.0
+        periods_total: int | None = None
+        periods_funded: int | None = None
+        funding_rate: float | None = None
+        total_contributed: float | None = None
+        total_needed: float | None = None
 
         if g.goal_class.upper() == GC_POINT and g.target_amount is not None:
             eff_infl = _effective_goal_inflation(g, params.general_inflation_rate)
@@ -1233,8 +1341,20 @@ def _simulate_inner(
                 st = "IMPOSSIBLE"
             shortfall = max(0.0, final_target - final_amt)
         elif g.goal_class.upper() == GC_RECURRING:
-            st = "ON_TRACK"
-            shortfall = 0.0
+            periods_total, periods_funded, funding_rate, total_contributed, total_needed = (
+                _compute_recurring_funding_stats(g, trajectories[i])
+            )
+            shortfall = max(0.0, (total_needed or 0.0) - (total_contributed or 0.0))
+            if funding_rate is None:
+                st = "ON_TRACK"
+            elif funding_rate >= 0.95:
+                st = "ACHIEVED" if (periods_total or 0) > 0 and periods_funded == periods_total else "ON_TRACK"
+            elif funding_rate >= 0.75:
+                st = "AT_RISK"
+            elif funding_rate >= 0.50:
+                st = "BEHIND"
+            else:
+                st = "IMPOSSIBLE"
         else:
             st = "ON_TRACK"
             shortfall = 0.0
@@ -1249,6 +1369,11 @@ def _simulate_inner(
                 projected_final_amount=round(final_amt, 2),
                 shortfall=round(shortfall, 2),
                 monthly_trajectory=trajectories[i],
+                periods_total=periods_total,
+                periods_funded=periods_funded,
+                funding_rate=funding_rate,
+                total_contributed=total_contributed,
+                total_needed=total_needed,
             )
         )
 

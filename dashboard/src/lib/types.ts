@@ -601,6 +601,8 @@ export interface MonthlySnapshot {
   monthly_contribution: number;
   monthly_return: number;
   target_at_month?: number | null;
+  /** Engine amortized need this month (PIT dynamic PMT, recurring monthly need, GROWTH 0). */
+  monthly_need?: number | null;
 }
 
 export interface GoalProjection {
@@ -612,6 +614,16 @@ export interface GoalProjection {
   projected_final_amount: number;
   shortfall: number;
   monthly_trajectory: MonthlySnapshot[];
+  /** RECURRING: billing periods with positive need (chunked by recurrence frequency). */
+  periods_total?: number | null;
+  /** RECURRING: periods where contribution sum >= 95% of need sum. */
+  periods_funded?: number | null;
+  /** RECURRING: periods_funded / periods_total. */
+  funding_rate?: number | null;
+  /** RECURRING: sum of monthly_contribution over the trajectory. */
+  total_contributed?: number | null;
+  /** RECURRING: sum of monthly_need over the trajectory. */
+  total_needed?: number | null;
 }
 
 export interface CascadeEvent {
@@ -626,6 +638,10 @@ export interface MonthlyNetWorth {
   total_value: number;
   total_contributions: number;
   total_returns: number;
+  /** Investable surplus for that month (before allocation); equals sum of goal rows + unallocated. */
+  monthly_surplus_pool?: number;
+  /** Surplus not placed on any goal after allocation rules. */
+  unallocated_surplus?: number;
 }
 
 export interface SimulationResult {

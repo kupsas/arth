@@ -723,8 +723,10 @@ class TestRecurringPlusPointInTime:
         )
         r = simulate(_params([emi, travel, tax, pit], 200_000.0, months=6, as_of=today))
         pit_p = next(p for p in r.projections if p.goal_name == "Save")
-        # 200k − 55k − 12.5k/3 − 400k/12 ≈ 107.5k; PIT takes min(PMT need, remainder)
-        assert pit_p.monthly_allocation == pytest.approx(107_500.0, abs=1.0)
+        # Nominal: 200k − 55k − 12.5k/3 − 400k/12 ≈ 107.5k to PIT — but Travel’s monthly
+        # equivalent (~4.2k) is below MIN_MONTHLY_GOAL_CONTRIBUTION_INR (5k), so the floor
+        # zeros Travel and spills ~4.2k/mo to the PIT sink → ~111.7k average to Save.
+        assert pit_p.monthly_allocation == pytest.approx(111_666.67, abs=1.0)
 
 
 # ── 10. S7.1 … S7.3 ──────────────────────────────────────────────────────────
