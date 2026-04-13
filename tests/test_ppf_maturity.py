@@ -74,10 +74,39 @@ def test_computed_ppf_maturity_from_db() -> None:
         assert effective_ppf_maturity_date(
             session, holding_id=h.id, stored_maturity=None, asset_class=AssetClass.PPF.value
         ) == datetime.date(2036, 3, 31)
-        # Stored wins when present
+        # Statutory from ledger overrides wrong/stale stored maturity
         assert effective_ppf_maturity_date(
             session,
             holding_id=h.id,
             stored_maturity=datetime.date(2040, 1, 1),
             asset_class=AssetClass.PPF.value,
-        ) == datetime.date(2040, 1, 1)
+        ) == datetime.date(2036, 3, 31)
+
+
+def test_effective_ppf_maturity_falls_back_to_stored_when_no_ledger_buy() -> None:
+    """No BUY rows → cannot compute statutory date; keep whatever is on the holding row."""
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        h = Holding(
+            name="PPF",
+            asset_class=AssetClass.PPF.value,
+            account_platform="ICICI PPF",
+            valuation_method=ValuationMethod.FIXED_RETURN.value,
+            liquidity_class=LiquidityClass.ILLIQUID.value,
+            user_id="u1",
+        )
+        session.add(h)
+        session.commit()
+        session.refresh(h)
+        assert h.id is not None
+        want = datetime.date(2031, 3, 31)
+        assert (
+            effective_ppf_maturity_date(
+                session,
+                holding_id=h.id,
+                stored_maturity=want,
+                asset_class=AssetClass.PPF.value,
+            )
+            == want
+        )

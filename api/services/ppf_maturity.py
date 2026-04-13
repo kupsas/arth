@@ -42,9 +42,15 @@ def effective_ppf_maturity_date(
     stored_maturity: datetime.date | None,
     asset_class: str,
 ) -> datetime.date | None:
-    """Use DB value when set; otherwise infer from ledger for PPF only."""
+    """PPF statutory maturity (15 years from FY-end of first subscription) when ledger allows.
+
+    We **prefer** :func:`computed_ppf_maturity_date` over ``stored_maturity`` so a stale or
+    wrongly imported DB date cannot stretch the maturity column / projection (e.g. ~20 years).
+    If there are no BUY rows yet, fall back to the stored value from the holding row.
+    """
     if asset_class != AssetClass.PPF.value:
         return stored_maturity
-    if stored_maturity is not None:
-        return stored_maturity
-    return computed_ppf_maturity_date(session, holding_id)
+    computed = computed_ppf_maturity_date(session, holding_id)
+    if computed is not None:
+        return computed
+    return stored_maturity

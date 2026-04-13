@@ -50,7 +50,7 @@ def compute_earliest_liquidity_date(session: Session, h: Holding, today: datetim
     - **SAVINGS / GOLD:** today.
     - **EQUITY, MUTUAL_FUND, ESOP:** today + 2 business days (T+2 settlement).
     - **FD:** if maturity within 7 days (or past), maturity; else today + 7 days (breakable FD).
-    - **PPF:** ``effective_ppf_maturity_date`` (ledger-backed when DB maturity unset).
+    - **PPF:** ``effective_ppf_maturity_date`` (statutory from ledger when BUY rows exist; else stored).
     - **NPS:** stored ``maturity_date``, else 60th birthday from ``DOB`` env, else far future.
     - **SGB:** maturity date, else far future.
     - **REAL_ESTATE / OTHER:** maturity or far future.
