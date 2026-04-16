@@ -35,6 +35,9 @@ htmlcov/
 # Personal goal pyramid seed (B.4) — household targets and IDs; keep local only
 scripts/seed_goals.py
 
+# Item C dev seed — real names / household PII; run locally only, never commit
+scripts/seed_sashank_classification_dev.py
+
 # Personal financial data (do NOT commit)
 # Note: this is a symlink to Arth/docs/personal-data — trailing slash won't match symlinks
 docs/personal-data

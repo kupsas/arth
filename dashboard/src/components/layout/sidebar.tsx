@@ -30,6 +30,7 @@ import {
   PieChart,
   Settings,
   LineChart,
+  Tags,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -65,6 +66,11 @@ const NAV_ITEMS = [
     label: "Review Queue",
     href: "/review",
     icon: ClipboardList,
+  },
+  {
+    label: "Classification",
+    href: "/classification-rules",
+    icon: Tags,
   },
   {
     label: "Settings",

@@ -279,7 +279,10 @@ def _process_email(
 
         # ── Step 6: rules classifier ─────────────────────────────────────────
         # Fills channel, txn_type, upi_type deterministically from narration patterns.
-        classify_rules(canonical)
+        from api.services.user_classification import pipeline_config_for_account_owner
+
+        ucfg = pipeline_config_for_account_owner(session, account_id)
+        classify_rules(canonical, ucfg)
 
         # ── Step 7: LLM classifier ───────────────────────────────────────────
         # Fills counterparty, counterparty_category, and any remaining gaps.

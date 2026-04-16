@@ -177,6 +177,7 @@ def _run_pipeline_background(
 
     from api.models import Transaction
     from api.services.account_user_map import user_id_for_account
+    from api.services.user_classification import pipeline_config_for_account_owner
 
     if llm_model:
         config.LLM_MODEL = llm_model
@@ -203,7 +204,8 @@ def _run_pipeline_background(
                     currency=source_cfg.get("currency", "INR"),
                     source_statement=source_cfg["source_statement"],
                 )
-                classify_rules(canonical)
+                ucfg = pipeline_config_for_account_owner(session, source_cfg["account_id"])
+                classify_rules(canonical, ucfg)
                 classify_llm(canonical)
 
                 # Stage 5: Write to DB with dedup
@@ -242,6 +244,11 @@ def _run_pipeline_background(
                         ),
                         spend_category=(
                             txn.spend_category.value if txn.spend_category else None
+                        ),
+                        classification_source=(
+                            txn.classification_source.value
+                            if txn.classification_source
+                            else None
                         ),
                         raw_description=txn.raw_description,
                         ref_number=txn.ref_number,
@@ -424,6 +431,7 @@ def _run_upload_background(
 
     from api.models import Transaction
     from api.services.account_user_map import user_id_for_account
+    from api.services.user_classification import pipeline_config_for_account_owner
     from sqlmodel import select as _select
 
     if llm_model:
@@ -449,7 +457,8 @@ def _run_upload_background(
                 currency=source_cfg.get("currency", "INR"),
                 source_statement=input_file.name,
             )
-            classify_rules(canonical)
+            ucfg = pipeline_config_for_account_owner(session, source_cfg["account_id"])
+            classify_rules(canonical, ucfg)
             classify_llm(canonical)
 
             new_count = 0
@@ -487,6 +496,11 @@ def _run_upload_background(
                     ),
                     spend_category=(
                         txn.spend_category.value if txn.spend_category else None
+                    ),
+                    classification_source=(
+                        txn.classification_source.value
+                        if txn.classification_source
+                        else None
                     ),
                     raw_description=txn.raw_description,
                     ref_number=txn.ref_number,

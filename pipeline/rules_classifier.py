@@ -19,64 +19,20 @@ import re
 from pipeline.models import (
     CanonicalTransaction,
     Channel,
+    ClassificationSource,
     CounterpartyCategory,
     Direction,
     SpendCategory,
     TxnType,
     UPIType,
 )
-
-# ---------------------------------------------------------------------------
-# Self-transfer indicators (user's own name / aliases)
-# ---------------------------------------------------------------------------
-_SELF_INDICATORS = [
-    "SASHANK",
-    "MEICICI",         # HDFC's alias for the user's ICICI-linked account
-    "SANDOZ",          # ICICI savings alias used for recurring transfers
-]
-
-_FAMILY_NAMES = [
-    "KUPPA ADI LAKSHMI",
-    "KUPPA SRINIVASA MURTHY",       # appears truncated as "KUPPA SRINIVASA MURT" in UPI
-    "KUPPA VENKATA VINOD KRISHNA",  # appears as "VENKATA VINOD KRISHNA KUPPA" in RDA
-]
-
-# Friends → counterparty_category = "Friends and Family"
-_FRIENDS_NAMES = [
-    "ARYAN KUKREJA",
-    "ADITI ABHAY LOTLIKAR",
-    "SANYAM JAIN",
-    "DEVYANI MODI",
-    "KUSHAGRA MISHRA",
-    "STUTI SINGH",
-    "RUDDHI PRASAD PANDA",
-    "ANUBHAV PANDEY",
-    "VARANASI SHASHANK",
-    "Chinmay Bhatt",   # ICICI BIL/INFT transfers
-]
-
-# Acquaintances → counterparty_category = "Gifts & Personal Transfers"
-_ACQUAINTANCES_NAMES = [
-    "NIMISH GUPTA",
-    "NASEEMA BEGUM",
-    "ASHLESHA NAOKARKAR",
-    "CHINMAY VYAS",
-    "SIDDHANT NARULA",
-    "K V RAMA KRISHNA",
-    "ANUJ KUMAR",
-    "DARIEN SAVIO RODRIGUEZ",
-    "SHANTI DEVI",
-    "RITHU PAUL",
-    "SAMIKSHA GURBAXANI",
-    "SANJANA JAIN",
-    "SATYANSH RAI",
-    "BABUL HUSSAIN LASKAR",
-    "SHAH AAHAN USHIR",
-    "ABBEY ZACHARIAH GEORGE",
-    "LAXMI RUTVIK REDDY",
-    "SAJITH KRISHNAA",
-    "SAHANA NAGARAJA MUDLAPUR"
-]
+from pipeline.user_config import (
+    KnownContact,
+    MerchantRuleSource,
+    UserClassificationConfig,
+    default_user_classification_config,
+    rent_description_matches,
+)
 
 # Business keywords in UPI names — prevents Uber heuristic from firing on merchants.
 # Matching is truncation-safe (prefix comparison) so "PHARMAC" matches "PHARMACY".
@@ -100,7 +56,6 @@ _MERCHANT_NAME_KEYWORDS = [
     "LIQUOR", "WINE", "SPIRITS",
     "CLOTH", "WEAR", "FASHION", "APPAREL",
     "RAZORPAY",
-    "ENSHAF KHAN",  # private LPG provider
 ]
 
 # Hotel/tour/travel keywords — UPI names matching these get Travel & Stay category
@@ -179,14 +134,8 @@ _SKIP_COUNTERPARTY_RULES_TXN_TYPES = frozenset({
     TxnType.EXPENSE_OTHER,
 })
 
-# Salary identifiers (employer payroll platforms)
-_SALARY_INDICATORS = ["TIDEPLATFO", "PAYROLL"]
-
 # Patterns that reliably identify HDFC CC bill payments
 _CARD_PAYMENT_RE = re.compile(r"IB BILLPAY DR", re.IGNORECASE)
-
-# Patterns for rent / standing instruction expenses
-_RENT_RE = re.compile(r"STERLING.*RENT|NET BANKING SI.*RENT", re.IGNORECASE)
 
 # ── ACH dividend company name canonicalisation ────────────────────────────
 # ACH/COMPANY_NAME/REF — the raw company name from the description is
@@ -220,64 +169,57 @@ _ASSET_MARKET_TXN_TYPES = frozenset({
 # the transaction is routed to the Swiggy sub-classifier.
 _SWIGGY_INDICATORS = ("SWIGGY", "INSTAMART", "DINEOUT", "BUNDL TECHNOLOGIES")
 
-# Recurring CC merchants (keyword, counterparty, category).
-# First match wins — put more specific patterns before general ones.
-_CC_MERCHANT_RULES: list[tuple[str, str, CounterpartyCategory]] = [
-    # ── Subscriptions & SaaS ─────────────────────────────────────────
-    ("OPENAI", "OpenAI", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("CHATGPT", "OpenAI", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("CURSOR", "Cursor IDE", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("ELEVENLABS", "ElevenLabs", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("DIGITALOCEAN", "Digital Ocean", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("UIZARD", "Uizard", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("CANVA", "Canva", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("RAILWAY SAN FRANCISC", "Railway", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("MUTV", "MUTV", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("WISPR", "Wispr Flow", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("LINKEDIN", "LinkedIn", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("RELIANCEJIO", "Reliance Jio", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    ("PROXYCURL", "Proxycurl", CounterpartyCategory.MOBILE_OTT_SUBSCRIPTIONS),
-    # ── Travel & Stay ────────────────────────────────────────────────
-    ("INDIGO AIRLINE", "Indigo", CounterpartyCategory.TRAVEL_STAY),
-    ("MAKEMYTRIP", "MakeMyTrip", CounterpartyCategory.TRAVEL_STAY),
-    ("MAKE MY TRIP", "MakeMyTrip", CounterpartyCategory.TRAVEL_STAY),
-    ("M-MAKEMYTRIP", "MakeMyTrip", CounterpartyCategory.TRAVEL_STAY),
-    ("REDBUS", "Redbus", CounterpartyCategory.TRAVEL_STAY),
-    ("AGODA", "Agoda", CounterpartyCategory.TRAVEL_STAY),
-    ("GOIBIBO", "Ibibo Group", CounterpartyCategory.TRAVEL_STAY),
-    ("IBIBO GROUP", "Ibibo Group", CounterpartyCategory.TRAVEL_STAY),
-    ("INDIAN HOTELS", "Taj", CounterpartyCategory.TRAVEL_STAY),
-    # ── Utilities & Internet ─────────────────────────────────────────
-    ("GPAY UTILITIES", "GPay Utilities", CounterpartyCategory.UTILITIES_INTERNET),
-    ("PAYTM PAYMENTS UTILIT", "ACT Internet", CounterpartyCategory.UTILITIES_INTERNET),
-    # ── Food & Dining ────────────────────────────────────────────────
-    ("THIRD WAVE COFFEE", "Third Wave Coffee", CounterpartyCategory.FOOD_DINING),
-    ("TW COFFEE", "Third Wave Coffee", CounterpartyCategory.FOOD_DINING),
-    ("HUBER AND HOLLY", "Huber and Holly", CounterpartyCategory.FOOD_DINING),
-    ("HIMALAYAN CULINARY", "Bao Bengaluru", CounterpartyCategory.FOOD_DINING),
-    ("MC DONALDS", "McDonalds", CounterpartyCategory.FOOD_DINING),
-    ("DOMINOS", "Dominos", CounterpartyCategory.FOOD_DINING),
-    ("HMS HOST", "Food at Airport", CounterpartyCategory.FOOD_DINING),
-    ("MSW*TRAVEL FOOD", "Food at Airport", CounterpartyCategory.FOOD_DINING),
-    ("GMR HOSPITALITY", "Food at Airport", CounterpartyCategory.FOOD_DINING),
-    ("PIZZA 4 PS", "Pizza 4Ps", CounterpartyCategory.FOOD_DINING),
-    ("NAGARJUNA", "Nagarjuna", CounterpartyCategory.FOOD_DINING),
-    ("LEON GRILL", "Leon Grill", CounterpartyCategory.FOOD_DINING),
-    ("CALIFORNIA BURRITO", "California Burrito", CounterpartyCategory.FOOD_DINING),
-    ("TATA STARBUCKS", "Tata Starbucks", CounterpartyCategory.FOOD_DINING),
-    ("LAVONNE", "Lavonne", CounterpartyCategory.FOOD_DINING),
-    # ── Shopping & E-commerce ────────────────────────────────────────
-    ("MICROSOFTRS", "Microsoft", CounterpartyCategory.SHOPPING_ECOMMERCE),
-    ("IND*MICROSOFT", "Microsoft", CounterpartyCategory.SHOPPING_ECOMMERCE),
-    ("AMAZON SELLER SERVICES", "Amazon", CounterpartyCategory.SHOPPING_ECOMMERCE),
-    ("BOOKMYSHOW", "Book My Show", CounterpartyCategory.SHOPPING_ECOMMERCE),
-    ("CROSSWORD", "Crossword", CounterpartyCategory.SHOPPING_ECOMMERCE),
-    ("PLAYSTATIONNETWORK", "Playstation Network", CounterpartyCategory.SHOPPING_ECOMMERCE),
-    ("UNIQLO", "Uniqlo", CounterpartyCategory.SHOPPING_ECOMMERCE),
-    # ── Personal Grooming ────────────────────────────────────────────
-    ("ENRICH", "Enrich", CounterpartyCategory.PERSONAL_GROOMING),
-    ("TATTVA SPA", "Tattva Spa", CounterpartyCategory.PERSONAL_GROOMING),
-]
+
+# ---------------------------------------------------------------------------
+# User-config helpers
+# ---------------------------------------------------------------------------
+
+def _contact_name_list(contacts: list[KnownContact]) -> list[str]:
+    """Flatten KnownContact rows to strings for substring / fuzzy name matching."""
+    out: list[str] = []
+    for c in contacts:
+        out.append(c.display_name)
+        out.extend(c.aliases)
+    return out
+
+
+def _match_contact_display(upi_name: str, contacts: list[KnownContact]) -> str | None:
+    """Return the contact’s display name when the UPI name matches the person."""
+    for c in contacts:
+        for candidate in [c.display_name, *c.aliases]:
+            if _names_match(upi_name, candidate):
+                return c.display_name
+    return None
+
+
+def _find_matching_contact_display(desc: str, contacts: list[KnownContact]) -> str | None:
+    """Bank / RDA narration: resolve which contact matched and return display name."""
+    for c in contacts:
+        for candidate in [c.display_name, *c.aliases]:
+            if _find_person_in_desc(desc, [candidate]):
+                return c.display_name
+    return None
+
+
+def _set_rules_source(txn: CanonicalTransaction, *, user_rule: bool) -> None:
+    txn.classification_source = (
+        ClassificationSource.RULES_USER if user_rule else ClassificationSource.RULES_GENERIC
+    )
+
+
+def _txn_type_rent_matches(desc: str, cfg: UserClassificationConfig) -> bool:
+    """EXPENSE_OTHER rent via standing instruction or optional user regex."""
+    u = desc.upper()
+    if re.search(r"NET BANKING SI.*RENT", u):
+        return True
+    if cfg.rent_pattern:
+        try:
+            if re.search(cfg.rent_pattern, u, re.IGNORECASE):
+                return True
+        except re.error:
+            pass
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -333,20 +275,27 @@ _NO_SPEND_CATEGORY_TXN_TYPES: frozenset[TxnType] = frozenset({
 })
 
 
-def classify_rules(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]:
+def classify_rules(
+    txns: list[CanonicalTransaction],
+    user_config: UserClassificationConfig | None = None,
+) -> list[CanonicalTransaction]:
     """Apply deterministic rules to a list of canonical transactions.
 
     Mutates the transactions in-place (sets channel, txn_type, upi_type,
     and — for known persons / heuristic matches — counterparty,
     counterparty_category, and spend_category) and returns the same list
     for chaining convenience.
+
+    ``user_config`` is normally loaded from SQLite + the merchant starter pack;
+    when omitted (e.g. unit tests), a generic starter-pack-only config is used.
     """
+    cfg = user_config or default_user_classification_config()
     for txn in txns:
         _classify_channel(txn)
-        _classify_txn_type(txn)
+        _classify_txn_type(txn, cfg)
         _classify_upi_type(txn)
         _classify_txn_type_from_upi(txn)   # P2M → UPI_EXPENSE (runs after upi_type is set)
-        _classify_counterparty_category(txn)
+        _classify_counterparty_category(txn, cfg)
         _classify_spend_category(txn)       # NEED/WANT/INVESTMENT (runs last)
     return txns
 
@@ -444,9 +393,9 @@ def _classify_channel(txn: CanonicalTransaction) -> None:
     desc = txn.raw_description.upper()
 
     # ── Credit card account detection ────────────────────────────────────
-    # CC account IDs are "HDFC_CC_1905" and "HDFC_CC_5778".  Check this
-    # FIRST so CC transactions don't accidentally match UPI/BANK prefixes
-    # that can appear in merchant names (e.g. "NEFT" in a description).
+    # CC account IDs use the ``HDFC_CC_*`` prefix.  Check this FIRST so CC
+    # transactions don't accidentally match UPI/BANK prefixes that can appear
+    # in merchant names (e.g. "NEFT" in a description).
     if txn.account_id.startswith("HDFC_CC_"):
         txn.channel = Channel.CARD
         return
@@ -510,13 +459,14 @@ def _classify_channel(txn: CanonicalTransaction) -> None:
 # Transaction type classification
 # ---------------------------------------------------------------------------
 
-def _classify_txn_type(txn: CanonicalTransaction) -> None:
+def _classify_txn_type(txn: CanonicalTransaction, cfg: UserClassificationConfig) -> None:
     desc = txn.raw_description
     desc_upper = desc.upper()
 
     # --- UPI-LITE is always a self-transfer (topping up the LITE wallet) ---
     if txn.channel == Channel.UPI_LITE:
         txn.txn_type = TxnType.SELF_TRANSFER
+        _set_rules_source(txn, user_rule=False)
         return
 
     # ── HDFC Credit Card transactions ────────────────────────────────────
@@ -542,9 +492,13 @@ def _classify_txn_type(txn: CanonicalTransaction) -> None:
 
     # --- Salary (inflow from known payroll platforms) ---
     if txn.direction == Direction.INFLOW and any(
-        kw in desc_upper for kw in _SALARY_INDICATORS
+        kw in desc_upper for kw in cfg.salary_indicators
     ):
         txn.txn_type = TxnType.INCOME_SALARY
+        _set_rules_source(
+            txn,
+            user_rule=(cfg.salary_indicators != ["PAYROLL"]),
+        )
         return
 
     # --- Interest credited by the bank ---
@@ -566,13 +520,14 @@ def _classify_txn_type(txn: CanonicalTransaction) -> None:
         return
 
     # --- Rent via standing instruction / net banking ---
-    if _RENT_RE.search(desc):
+    if _txn_type_rent_matches(desc, cfg):
         txn.txn_type = TxnType.EXPENSE_OTHER
+        _set_rules_source(txn, user_rule=bool(cfg.rent_pattern))
         return
 
     # ── ICICI-specific patterns for BANK channel ─────────────────────────
     if txn.channel == Channel.BANK:
-        icici_result = _classify_txn_type_icici_bank(txn, desc, desc_upper)
+        icici_result = _classify_txn_type_icici_bank(txn, desc, desc_upper, cfg)
         if icici_result:
             return  # ICICI rule fired, txn_type already set
 
@@ -580,8 +535,9 @@ def _classify_txn_type(txn: CanonicalTransaction) -> None:
     # For NEFT/IMPS with own name or aliases, and for family transfers
     # that are classified as SELF_TRANSFER in the ground truth.
     if txn.channel == Channel.BANK:
-        if _is_self_transfer(desc_upper):
+        if _is_self_transfer(desc_upper, cfg):
             txn.txn_type = TxnType.SELF_TRANSFER
+            _set_rules_source(txn, user_rule=bool(cfg.self_aliases))
             return
         # Inflows from RDA (remittance) → INCOME_OTHER
         if desc_upper.startswith("RDA "):
@@ -590,14 +546,17 @@ def _classify_txn_type(txn: CanonicalTransaction) -> None:
 
     # --- UPI with self/family indicators ---
     if txn.channel == Channel.UPI:
-        if _is_self_transfer(desc_upper):
+        if _is_self_transfer(desc_upper, cfg):
             txn.txn_type = TxnType.SELF_TRANSFER
+            _set_rules_source(txn, user_rule=bool(cfg.self_aliases))
             return
         # Family UPI transfers are SELF_TRANSFER in the ground truth
         # (counterparty_category is set to "Friends and Family" later).
         upi_name = _extract_upi_name(desc)
-        if upi_name and _check_against_list(upi_name, _FAMILY_NAMES):
+        fam_strings = _contact_name_list(cfg.family_contacts)
+        if upi_name and _check_against_list(upi_name, fam_strings):
             txn.txn_type = TxnType.SELF_TRANSFER
+            _set_rules_source(txn, user_rule=True)
             return
         # UPI distinction between EXPENSE and TRANSFER is hard with rules
         # alone (requires knowing if counterparty is a merchant or person).
@@ -734,7 +693,10 @@ def _classify_txn_type_broker(
 # ---------------------------------------------------------------------------
 
 def _classify_txn_type_icici_bank(
-    txn: CanonicalTransaction, desc: str, desc_upper: str
+    txn: CanonicalTransaction,
+    desc: str,
+    desc_upper: str,
+    cfg: UserClassificationConfig,
 ) -> bool:
     """Apply ICICI-specific BANK-channel rules.  Returns True if a rule fired."""
 
@@ -757,22 +719,26 @@ def _classify_txn_type_icici_bank(
     # Quant MF and NSDL NEFT inflows are re-routed to BROKER channel by
     # _classify_channel and handled upstream by _classify_txn_type_broker.
 
-    # ── Bike EMI "payment" from ICICI is actually a self-transfer ─────────
-    # The user transfers money from ICICI → HDFC (where the EMI is debited).
-    # From ICICI's perspective the transaction is simply moving money to one's
-    # own HDFC account — the actual loan debit happens at HDFC level.
-    if "BIKEEMI" in desc_upper:
-        txn.txn_type = TxnType.SELF_TRANSFER
-        return True
+    # ── User-defined substrings (e.g. loan nicknames in narration) ───────
+    for cp in cfg.custom_patterns:
+        if cp.substring in desc_upper:
+            txn.txn_type = cp.set_txn_type
+            _set_rules_source(txn, user_rule=True)
+            return True
 
     # ── BIL/INFT (Internal Fund Transfer) to a known person ──────────────
     # If the recipient is someone we recognise (family/friends), it is a
     # genuine bank transfer to that person, NOT a self-transfer.
     # Unknown recipients are left for the LLM.
     if "BIL/INFT/" in desc_upper:
-        all_known = _FAMILY_NAMES + _FRIENDS_NAMES + _ACQUAINTANCES_NAMES
-        if "K ADI LAKSHMI" in desc_upper or _find_person_in_desc(desc, all_known):
+        all_known = (
+            _contact_name_list(cfg.family_contacts)
+            + _contact_name_list(cfg.friend_contacts)
+            + _contact_name_list(cfg.acquaintance_contacts)
+        )
+        if _find_person_in_desc(desc, all_known):
             txn.txn_type = TxnType.BANK_TRANSFER
+            _set_rules_source(txn, user_rule=True)
             return True
 
     # ── Self / family transfers ───────────────────────────────────────────
@@ -794,9 +760,21 @@ def _classify_txn_type_icici_bank(
     return False
 
 
-def _is_self_transfer(desc_upper: str) -> bool:
+def _is_self_transfer(desc_upper: str, cfg: UserClassificationConfig) -> bool:
     """Check if narration indicates a transfer between own accounts."""
-    return any(indicator in desc_upper for indicator in _SELF_INDICATORS)
+    if any(indicator in desc_upper for indicator in cfg.self_aliases):
+        return True
+    return _is_account_hint_transfer(desc_upper, cfg)
+
+
+def _is_account_hint_transfer(desc_upper: str, cfg: UserClassificationConfig) -> bool:
+    """Fallback: masked account fragments / last-4 hints stored by the user."""
+    compact = desc_upper.replace(" ", "").replace("-", "")
+    for hint in cfg.account_id_hints:
+        h = hint.strip().upper().replace(" ", "").replace("-", "")
+        if len(h) >= 4 and h in compact:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1074,33 +1052,38 @@ def _classify_swiggy_sub(desc_upper: str) -> str | None:
 # Credit card counterparty classifier
 # ---------------------------------------------------------------------------
 
-def _classify_cc_counterparty(txn: CanonicalTransaction) -> None:
+def _classify_cc_counterparty(txn: CanonicalTransaction, cfg: UserClassificationConfig) -> None:
     """Set counterparty + category for all CARD channel transactions.
 
     Covers: cashback credits, bill payments, GST/forex fees, EMI
     principal/interest, Swiggy sub-brands, and recurring merchants.
     """
     desc_upper = txn.raw_description.upper()
+    self_label = (cfg.self_name or "").strip() or "Self"
 
     # ── 1. Inflows (cashback, bill payments, refunds) ─────────────────
     if txn.direction == Direction.INFLOW:
         if "CASHBACK" in desc_upper or "REINSTATED" in desc_upper:
             txn.counterparty = "HDFC Bank"
             txn.counterparty_category = CounterpartyCategory.MISCELLANEOUS
+            _set_rules_source(txn, user_rule=False)
             return
         if "NETBANKING TRANSFER" in desc_upper or "CREDIT CARD PAYMENT" in desc_upper:
-            txn.counterparty = "Sashank Sai Kuppa"
+            txn.counterparty = self_label
             txn.counterparty_category = CounterpartyCategory.SELF_TRANSFER
+            _set_rules_source(txn, user_rule=bool(cfg.self_name))
             return
         # Swiggy refund (inflow from a Swiggy entity)
         if any(kw in desc_upper for kw in _SWIGGY_INDICATORS):
             txn.counterparty = "Swiggy"
             txn.counterparty_category = CounterpartyCategory.MISCELLANEOUS
+            _set_rules_source(txn, user_rule=False)
             return
         # HDFC SmartBuy portal reversal/credit (e.g. CT HOTEL VIA SMARTBUY)
         if "VIA SMARTBUY" in desc_upper:
             txn.counterparty = "HDFC Bank"
             txn.counterparty_category = CounterpartyCategory.MISCELLANEOUS
+            _set_rules_source(txn, user_rule=False)
             return
         return  # other inflows → LLM
 
@@ -1144,12 +1127,17 @@ def _classify_cc_counterparty(txn: CanonicalTransaction) -> None:
         if swiggy:
             txn.counterparty = swiggy
             txn.counterparty_category = CounterpartyCategory.SWIGGY
+            _set_rules_source(txn, user_rule=False)
             return
         # 4b. Recurring merchant keyword table (first match wins)
-        for keyword, counterparty, category in _CC_MERCHANT_RULES:
-            if keyword in desc_upper:
-                txn.counterparty = counterparty
-                txn.counterparty_category = category
+        for rule in cfg.merchant_rules:
+            if rule.keyword.upper() in desc_upper:
+                txn.counterparty = rule.display_name
+                txn.counterparty_category = rule.category
+                _set_rules_source(
+                    txn,
+                    user_rule=(rule.source == MerchantRuleSource.USER_DB),
+                )
                 return
         # 4c. Unknown merchant → leave for LLM
 
@@ -1177,7 +1165,10 @@ def _extract_ach_counterparty(desc: str) -> str | None:
 # Counterparty & category classification
 # ---------------------------------------------------------------------------
 
-def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
+def _classify_counterparty_category(
+    txn: CanonicalTransaction,
+    cfg: UserClassificationConfig,
+) -> None:
     """Set counterparty_category (and sometimes counterparty) deterministically.
 
     Priority chain:
@@ -1201,7 +1192,7 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
 
     # ── Credit card: full counterparty classification ─────────────────
     if txn.channel == Channel.CARD:
-        _classify_cc_counterparty(txn)
+        _classify_cc_counterparty(txn, cfg)
         return
 
     # ── Bank interest (savings account credits) ─────────────────────────
@@ -1211,12 +1202,17 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
         txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
         return
 
-    # ── Sterling rent payments always go to Ashlesha Naokarkar ───────────
-    if txn.txn_type == TxnType.EXPENSE_OTHER and txn.channel == Channel.BANK:
-        if "STERLING" in desc_upper and "RENT" in desc_upper:
-            txn.counterparty = "Ashlesha Naokarkar"
-            txn.counterparty_category = CounterpartyCategory.RENT_HOUSING
-            return
+    # ── Rent (user-configured recipient + pattern) ──────────────────────
+    if (
+        txn.txn_type == TxnType.EXPENSE_OTHER
+        and txn.channel == Channel.BANK
+        and cfg.rent_recipient
+        and rent_description_matches(desc_upper, cfg)
+    ):
+        txn.counterparty = cfg.rent_recipient
+        txn.counterparty_category = CounterpartyCategory.RENT_HOUSING
+        _set_rules_source(txn, user_rule=True)
+        return
 
     # ── ICICI savings account interest ───────────────────────────────────
     # "{icici_account_no}:Int.Pd:DD-MM-YYYY to DD-MM-YYYY"
@@ -1229,14 +1225,6 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
     if desc_upper.startswith("DPCHG"):
         txn.counterparty = "ICICI Bank"
         txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
-        return
-
-    # ── BIL/INFT to K Adi Lakshmi (family name truncated in ICICI) ───────
-    # ICICI truncates "KUPPA ADI LAKSHMI" to "K ADI LAKSHMI" in narrations.
-    # Handle this before the generic name-list search which won't match it.
-    if "BIL/INFT/" in desc_upper and "K ADI LAKSHMI" in desc_upper:
-        txn.counterparty = "K Adi Lakshmi"
-        txn.counterparty_category = CounterpartyCategory.FRIENDS_FAMILY
         return
 
     # ── Asset-market transactions (equity / MF buys and sells) ───────────
@@ -1262,17 +1250,27 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
 
     # ── SELF_TRANSFER: distinguish "self" from "family" ──────────────────
     if txn.txn_type == TxnType.SELF_TRANSFER:
+        fam = cfg.family_contacts
         if txn.channel == Channel.UPI:
             upi_name = _extract_upi_name(desc)
-            if upi_name and _check_against_list(upi_name, _FAMILY_NAMES):
+            if upi_name:
+                disp = _match_contact_display(upi_name, fam)
+                if disp:
+                    txn.counterparty = disp
+                    txn.counterparty_category = CounterpartyCategory.FRIENDS_FAMILY
+                    _set_rules_source(txn, user_rule=True)
+                    return
+        else:
+            disp = _find_matching_contact_display(desc, fam)
+            if disp:
+                txn.counterparty = disp
                 txn.counterparty_category = CounterpartyCategory.FRIENDS_FAMILY
+                _set_rules_source(txn, user_rule=True)
                 return
-        elif _find_person_in_desc(desc, _FAMILY_NAMES):
-            txn.counterparty_category = CounterpartyCategory.FRIENDS_FAMILY
-            return
-        # All non-family self-transfers: use the user's own name
-        txn.counterparty = "Sashank Sai Kuppa"
+        self_label = (cfg.self_name or "").strip() or "Self"
+        txn.counterparty = self_label
         txn.counterparty_category = CounterpartyCategory.SELF_TRANSFER
+        _set_rules_source(txn, user_rule=bool(cfg.self_name))
         return
 
     # ── Known merchants: deterministic counterparty + category ───────────
@@ -1284,28 +1282,33 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
         if "BBINSTANT" in upi_name_upper:
             txn.counterparty = "BB Instant"
             txn.counterparty_category = CounterpartyCategory.FOOD_DINING
+            _set_rules_source(txn, user_rule=False)
             return
 
     # ── Named-list matching (family → friends → acquaintances) ───────────
-    ordered_lists = [
-        (_FAMILY_NAMES, CounterpartyCategory.FRIENDS_FAMILY),
-        (_FRIENDS_NAMES, CounterpartyCategory.FRIENDS_FAMILY),
-        (_ACQUAINTANCES_NAMES, CounterpartyCategory.GIFTS_PERSONAL_TRANSFERS),
+    ordered_contact_groups: list[tuple[list[KnownContact], CounterpartyCategory]] = [
+        (cfg.family_contacts, CounterpartyCategory.FRIENDS_FAMILY),
+        (cfg.friend_contacts, CounterpartyCategory.FRIENDS_FAMILY),
+        (cfg.acquaintance_contacts, CounterpartyCategory.GIFTS_PERSONAL_TRANSFERS),
     ]
 
     if txn.channel == Channel.UPI:
         upi_name = _extract_upi_name(desc)
         if upi_name:
-            for name_list, category in ordered_lists:
-                if _check_against_list(upi_name, name_list):
+            for contacts, category in ordered_contact_groups:
+                disp = _match_contact_display(upi_name, contacts)
+                if disp:
+                    txn.counterparty = disp
                     txn.counterparty_category = category
+                    _set_rules_source(txn, user_rule=True)
                     return
     else:
-        for name_list, category in ordered_lists:
-            canonical = _find_person_in_desc(desc, name_list)
-            if canonical:
-                txn.counterparty = canonical
+        for contacts, category in ordered_contact_groups:
+            disp = _find_matching_contact_display(desc, contacts)
+            if disp:
+                txn.counterparty = disp
                 txn.counterparty_category = category
+                _set_rules_source(txn, user_rule=True)
                 return
 
     # ── UPI outflow heuristics ────────────────────────────────────────────

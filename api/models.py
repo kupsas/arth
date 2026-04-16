@@ -146,6 +146,9 @@ class Transaction(SQLModel, table=True):
     # Stored reason: "refund" | "test_transaction" | "duplicate" | "other" or free text for "other".
     exclusion_reason: str | None = Field(default=None)
 
+    # Provenance of last automated classification (RULES_* / LLM); USER_REVIEWED when edited in UI.
+    classification_source: str | None = Field(default=None, index=True)
+
     # ── Phase A.0: link bank rows (e.g. INCOME_DIVIDEND) to a holding ────────
     holding_id: int | None = Field(default=None, foreign_key="holdings.id")
 
@@ -717,3 +720,71 @@ class Price(SQLModel, table=True):
     date: datetime.date
     close_price: float
     source: str = "nse"
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# User classification — contacts, merchant rules, per-user settings (Item C)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class UserContact(SQLModel, table=True):
+    """Family / friends / acquaintances used for deterministic UPI & bank name matching."""
+
+    __tablename__ = "user_contacts"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(index=True)
+    display_name: str
+    # JSON array of alternate strings (truncated bank names, nicknames).
+    aliases_json: str = Field(default="[]")
+    # SELF | FAMILY | FRIEND | ACQUAINTANCE
+    relationship: str = Field(index=True)
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class UserMerchantRule(SQLModel, table=True):
+    """Keyword → counterparty/category; starter pack rows + user-learned overrides."""
+
+    __tablename__ = "user_merchant_rules"
+    __table_args__ = (
+        Index("ix_user_merchant_rules_user_keyword", "user_id", "keyword"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str
+    keyword: str
+    display_name: str
+    counterparty_category: str
+    # STARTER_PACK | USER_CORRECTION | MANUAL
+    source: str
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class UserClassificationSettings(SQLModel, table=True):
+    """One row per user: self-name, rent regex, salary tokens, custom txn-type patterns."""
+
+    __tablename__ = "user_classification_settings"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(unique=True, index=True)
+    self_name: str = Field(default="")
+    self_aliases_json: str = Field(default="[]")
+    rent_recipient: str | None = None
+    rent_pattern: str | None = None
+    salary_indicators_json: str = Field(default='["PAYROLL"]')
+    # JSON list of {"substring": "...", "txn_type": "SELF_TRANSFER"}
+    custom_patterns_json: str = Field(default="[]")
+    account_hints_json: str = Field(default="[]")
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )

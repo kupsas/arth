@@ -18,7 +18,7 @@ from sqlmodel import Session, col, func, select
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import Transaction
+from api.models import Transaction, UserMerchantRule
 from api.services.query_helpers import _for_user
 
 router = APIRouter()
@@ -38,6 +38,8 @@ class TransactionUpdate(BaseModel):
     is_reviewed: bool | None = None
     exclude_from_analytics: bool | None = None
     exclusion_reason: str | None = None
+    # When True with counterparty/category changes, persist a user_merchant_rules row.
+    apply_to_future: bool | None = None
 
 
 class BulkUpdateRequest(BaseModel):
@@ -211,8 +213,14 @@ def update_transaction(
     if not txn or txn.user_id != current_user:
         raise HTTPException(status_code=404, detail=f"Transaction {txn_id} not found")
 
+    apply_future = body.apply_to_future is True
     _apply_update(txn, body)
+    txn.classification_source = "USER_REVIEWED"
     session.add(txn)
+    if apply_future and (
+        body.counterparty is not None or body.counterparty_category is not None
+    ):
+        _upsert_learned_merchant_rule(session, current_user, txn)
     session.commit()
     session.refresh(txn)
     return _txn_to_dict(txn)
@@ -227,6 +235,7 @@ def _apply_update(txn: Transaction, update: TransactionUpdate) -> None:
     import datetime as _dt
 
     update_data = update.model_dump(exclude_unset=True)
+    update_data.pop("apply_to_future", None)
     # Turning off analytics exclusion clears the reason (keeps DB tidy).
     if update_data.get("exclude_from_analytics") is False:
         update_data["exclusion_reason"] = None
@@ -234,6 +243,42 @@ def _apply_update(txn: Transaction, update: TransactionUpdate) -> None:
         setattr(txn, field, value)
     if update_data:
         txn.updated_at = _dt.datetime.now(_dt.UTC)
+
+
+def _upsert_learned_merchant_rule(
+    session: Session,
+    user_id: str,
+    txn: Transaction,
+) -> None:
+    """Store a keyword rule from a corrected counterparty for future pipeline runs."""
+    keyword = (txn.counterparty or "").strip().upper()
+    if len(keyword) < 2:
+        return
+    cat = txn.counterparty_category
+    if not cat:
+        return
+    existing = session.exec(
+        select(UserMerchantRule).where(
+            UserMerchantRule.user_id == user_id,
+            UserMerchantRule.keyword == keyword,
+        )
+    ).first()
+    disp = (txn.counterparty or keyword).strip()
+    if existing:
+        existing.display_name = disp
+        existing.counterparty_category = cat
+        existing.source = "USER_CORRECTION"
+        session.add(existing)
+        return
+    session.add(
+        UserMerchantRule(
+            user_id=user_id,
+            keyword=keyword,
+            display_name=disp,
+            counterparty_category=cat,
+            source="USER_CORRECTION",
+        )
+    )
 
 
 def _txn_to_dict(txn: Transaction) -> dict:
@@ -258,6 +303,7 @@ def _txn_to_dict(txn: Transaction) -> dict:
         "counterparty": txn.counterparty,
         "counterparty_category": txn.counterparty_category,
         "spend_category": txn.spend_category,
+        "classification_source": getattr(txn, "classification_source", None),
         "raw_description": txn.raw_description,
         "ref_number": txn.ref_number,
         "closing_balance": txn.closing_balance,

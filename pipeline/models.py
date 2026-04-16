@@ -102,6 +102,15 @@ class SpendCategory(str, Enum):
     INVESTMENT = "INVESTMENT"
 
 
+class ClassificationSource(str, Enum):
+    """Where the latest automated classification pass attributed this row."""
+
+    RULES_GENERIC = "RULES_GENERIC"   # starter pack or non-personal heuristics
+    RULES_USER = "RULES_USER"         # DB-backed user merchant / contact rules
+    LLM = "LLM"
+    USER_REVIEWED = "USER_REVIEWED"     # set when the user edits a stored row (API)
+
+
 # ---------------------------------------------------------------------------
 # Asset / portfolio enums (Phase A.0 — Layer 1 net worth)
 # Stored as strings in SQLite; use these values in API and parsers.
@@ -264,6 +273,7 @@ class CanonicalTransaction(BaseModel):
     counterparty: str | None = None
     counterparty_category: CounterpartyCategory | None = None
     spend_category: SpendCategory | None = None   # NEED / WANT / INVESTMENT  (NULL for INFLOW + Friends & Family)
+    classification_source: ClassificationSource | None = None
 
     # --- Raw / audit ---
     raw_description: str

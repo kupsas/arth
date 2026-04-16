@@ -11,6 +11,7 @@ injection to point at an in-memory SQLite database instead.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine
 
 from pipeline.config import DB_PATH, REPO_ROOT
+
+logger = logging.getLogger(__name__)
 
 # `check_same_thread=False` is required because FastAPI serves requests
 # across multiple threads, but SQLite's default is single-thread only.
@@ -309,6 +312,19 @@ def _apply_sqlite_patches() -> None:
                 text("CREATE INDEX ix_transactions_user_id ON transactions (user_id)")
             )
 
+        if not _column_exists(conn, "transactions", "classification_source"):
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN classification_source TEXT"))
+
+
+def _merge_starter_pack_for_all_users() -> None:
+    """Seed ``user_merchant_rules`` from ``data/merchant_starter_pack.json`` for each user."""
+    try:
+        from api.services.user_classification import merge_starter_pack_for_all_users
+
+        merge_starter_pack_for_all_users()
+    except Exception:
+        logger.exception("Starter merchant pack merge skipped or failed")
+
 
 def _chmod_owner_rw_only(path: Path) -> None:
     """Best-effort ``0o600`` (owner read/write only). No-op if missing or OS rejects chmod."""
@@ -332,6 +348,7 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(_engine)
     _apply_sqlite_patches()
+    _merge_starter_pack_for_all_users()
     # Phase A.5 — limit exposure of local secrets (SQLite file + Gmail OAuth token).
     _chmod_owner_rw_only(DB_PATH)
     _chmod_owner_rw_only(REPO_ROOT / "data" / "gmail_token.json")

@@ -30,6 +30,7 @@ from pipeline.config import (
 from pipeline.models import (
     CanonicalTransaction,
     Channel,
+    ClassificationSource,
     CounterpartyCategory,
     Direction,
     SpendCategory,
@@ -318,37 +319,47 @@ def _apply_results(
     for idx, item in zip(indices, items):
         txn = txns[idx]
         r = result_map.get(item["id"], {})
+        llm_touched = False
 
         if "txn_type" in r and txn.txn_type is None:
             try:
                 txn.txn_type = TxnType(r["txn_type"])
+                llm_touched = True
             except ValueError:
                 pass
 
         if "upi_type" in r and txn.upi_type is None:
             try:
                 txn.upi_type = UPIType(r["upi_type"])
+                llm_touched = True
             except ValueError:
                 pass
 
         if "counterparty" in r and txn.counterparty is None:
             txn.counterparty = str(r["counterparty"]).strip()
+            llm_touched = True
 
         if "counterparty_category" in r and txn.counterparty_category is None:
             try:
                 txn.counterparty_category = CounterpartyCategory(r["counterparty_category"])
+                llm_touched = True
             except ValueError:
                 cat_val = str(r["counterparty_category"]).strip()
                 for member in CounterpartyCategory:
                     if member.value.lower() == cat_val.lower():
                         txn.counterparty_category = member
+                        llm_touched = True
                         break
 
         if "spend_category" in r and txn.spend_category is None:
             try:
                 txn.spend_category = SpendCategory(r["spend_category"])
+                llm_touched = True
             except ValueError:
                 pass  # LLM returned an invalid value — leave None, don't crash
+
+        if llm_touched:
+            txn.classification_source = ClassificationSource.LLM
 
         _enforce_consistency(txn)
 

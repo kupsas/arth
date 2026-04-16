@@ -76,7 +76,19 @@ def _run_single_source(
 
     # ── Stage 3: Rules classify ─────────────────────────────────────
     logger.info("[3/5] Rules classifier...")
-    classify_rules(canonical)
+    if write_to_csv:
+        from pipeline.user_config import default_user_classification_config
+
+        _ucfg = default_user_classification_config()
+    else:
+        from api.database import get_engine, init_db
+        from api.services.user_classification import pipeline_config_for_account_owner
+        from sqlmodel import Session
+
+        init_db()
+        with Session(get_engine()) as _session:
+            _ucfg = pipeline_config_for_account_owner(_session, source_cfg["account_id"])
+    classify_rules(canonical, _ucfg)
     filled_type = sum(1 for t in canonical if t.txn_type)
     filled_ch = sum(1 for t in canonical if t.channel)
     logger.info("[3/5] Done — txn_type filled: %d/%d  channel filled: %d/%d",
@@ -98,11 +110,10 @@ def _run_single_source(
         write_csv(canonical, csv_path)
     else:
         logger.info("[5/5] Writing to SQLite DB...")
-        from api.database import get_engine, init_db
+        from api.database import get_engine
         from pipeline.db_writer import write_to_db
         from sqlmodel import Session
 
-        init_db()
         with Session(get_engine()) as session:
             run = write_to_db(
                 canonical,

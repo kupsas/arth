@@ -33,7 +33,7 @@ from sqlmodel import Session, col, select
 
 from api.models import PipelineRun, Transaction
 from api.services.account_user_map import user_id_for_account
-from pipeline.models import CanonicalTransaction
+from pipeline.models import CanonicalTransaction, ClassificationSource
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,8 @@ _BACKFILL_FIELDS: list[tuple[str, str]] = [
     ("upi_type",              "upi_type"),
     ("counterparty",          "counterparty"),
     ("counterparty_category", "counterparty_category"),
+    ("spend_category",        "spend_category"),
+    ("classification_source", "classification_source"),
 ]
 
 
@@ -71,6 +73,8 @@ def _resolve_value(txn: CanonicalTransaction, attr: str) -> str | None:
     val = getattr(txn, attr, None)
     if val is None:
         return None
+    if isinstance(val, ClassificationSource):
+        return val.value
     return val.value if hasattr(val, "value") else str(val)
 
 
@@ -444,6 +448,10 @@ def write_to_db(
             counterparty=txn.counterparty,
             counterparty_category=(
                 txn.counterparty_category.value if txn.counterparty_category else None
+            ),
+            spend_category=txn.spend_category.value if txn.spend_category else None,
+            classification_source=(
+                txn.classification_source.value if txn.classification_source else None
             ),
             raw_description=txn.raw_description,
             ref_number=txn.ref_number,

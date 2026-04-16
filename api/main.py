@@ -20,7 +20,7 @@ from fastapi.responses import RedirectResponse
 
 from api.auth import get_current_user
 from api.database import get_engine, init_db
-from api.routes import metrics, pipeline, transactions
+from api.routes import metrics, pipeline, transactions, user_config
 from api.services.inflation_service import sync_imf_cpi_history
 from api.services.price_feed import run_startup_price_sync
 from api.routes.auth import router as auth_router
@@ -191,6 +191,12 @@ app.include_router(goals_router,        prefix="/api/goals",         tags=["Goal
 app.include_router(goal_links_router,   prefix="/api/goal-links",   tags=["Goal links"],    dependencies=_auth)
 app.include_router(life_events_router, prefix="/api/life-events",   tags=["Life events"],   dependencies=_auth)
 app.include_router(settings_router,    prefix="/api/settings",      tags=["Settings"],      dependencies=_auth)
+app.include_router(
+    user_config.router,
+    prefix="/api/user",
+    tags=["User classification"],
+    dependencies=_auth,
+)
 app.include_router(holdings_router,           prefix="/api/holdings",                  tags=["Holdings"],                  dependencies=_auth)
 app.include_router(investment_transactions_router, prefix="/api/investment-transactions", tags=["Investment transactions"], dependencies=_auth)
 app.include_router(liabilities_router,       prefix="/api/liabilities",               tags=["Liabilities"],               dependencies=_auth)
