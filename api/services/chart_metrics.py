@@ -124,10 +124,16 @@ def expense_limit_sum_for_chart_key(
     chart_key: str,
     date_from,
     date_to,
+    user_id: str,
 ) -> float:
     """Sum OUTFLOW amounts for EXPENSE_LIMIT goals tied to chart_key (metrics filters)."""
     # Late import: metrics imports this module; avoid circular import at load time.
-    from api.services.query_helpers import _analytics_only, _date_where, _expense_where
+    from api.services.query_helpers import (
+        _analytics_only,
+        _date_where,
+        _expense_where,
+        _for_user,
+    )
 
     if chart_key == CHART_KEY_EXPENSE_NEED_WANT_STACK:
         base = _expense_where(
@@ -135,7 +141,7 @@ def expense_limit_sum_for_chart_key(
                 col(Transaction.spend_category).in_(["NEED", "WANT"])
             )
         )
-        q = _date_where(_analytics_only(base), date_from, date_to)
+        q = _for_user(_date_where(_analytics_only(base), date_from, date_to), user_id)
         return float(session.exec(q).one() or 0)
 
     series = parse_category_chart_key(chart_key)
@@ -144,7 +150,7 @@ def expense_limit_sum_for_chart_key(
         base = _expense_where(
             select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(cond)
         )
-        q = _date_where(_analytics_only(base), date_from, date_to)
+        q = _for_user(_date_where(_analytics_only(base), date_from, date_to), user_id)
         return float(session.exec(q).one() or 0)
 
     raise ValueError(f"Not an expense chart_key: {chart_key!r}")

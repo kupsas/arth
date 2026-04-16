@@ -30,7 +30,7 @@ import os
 
 import bcrypt
 from dotenv import load_dotenv
-from fastapi import Cookie, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, Query, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 load_dotenv()
@@ -138,3 +138,20 @@ def get_current_user(
             detail="Not authenticated",
         )
     return verify_session_token(arth_session)
+
+
+def effective_user_id(
+    user_id: str | None = Query(
+        None,
+        description="Optional; when set must match the logged-in user (same string as username).",
+    ),
+    current_user: str = Depends(get_current_user),
+) -> str:
+    """Resolve the Arth user id for data-scoped endpoints (session wins; param is checked)."""
+    out = (user_id or "").strip() or current_user
+    if out != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="user_id must match the authenticated user.",
+        )
+    return out

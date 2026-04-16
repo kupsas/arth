@@ -366,7 +366,7 @@ def generate_explanation(
 
 def compute_priority_scores(
     session: Session,
-    user_id: str = "sashank",
+    user_id: str,
     *,
     persist: bool = True,
     today: datetime.date | None = None,
@@ -377,7 +377,9 @@ def compute_priority_scores(
     Optionally persists ``Goal.system_priority_score`` (does not change
     ``allocation_priority`` — user reorder is separate).
     """
-    uid = user_id.strip() or "sashank"
+    uid = user_id.strip()
+    if not uid:
+        raise ValueError("user_id is required")
     as_of = today or datetime.datetime.now(datetime.UTC).date()
 
     goals = list(

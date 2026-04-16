@@ -26,6 +26,7 @@ from api.services.chart_metrics import (
     CHART_KEY_EXPENSE_NEED_WANT_STACK,
     expense_limit_sum_for_chart_key,
 )
+from api.services.query_helpers import _analytics_only, _date_where, _expense_where, _for_user
 
 logger = logging.getLogger(__name__)
 
@@ -41,20 +42,22 @@ def expense_limit_spent_for_goal(
     Prefer ``chart_key``; else legacy ``linked_category``; if neither, use NEED+WANT
     total (same as the dashboard expense stack chart).
     """
+    uid = goal.user_id
     if goal.chart_key:
         return expense_limit_sum_for_chart_key(
-            session, goal.chart_key, date_from, date_to
+            session, goal.chart_key, date_from, date_to, uid
         )
     if goal.linked_category:
-        from api.services.query_helpers import _analytics_only, _date_where, _expense_where
-
-        base = _expense_where(
-            select(func.coalesce(func.sum(Transaction.amount), 0.0))
-        ).where(Transaction.counterparty_category == goal.linked_category)
+        base = _for_user(
+            _expense_where(
+                select(func.coalesce(func.sum(Transaction.amount), 0.0))
+            ).where(Transaction.counterparty_category == goal.linked_category),
+            uid,
+        )
         q = _date_where(_analytics_only(base), date_from, date_to)
         return float(session.exec(q).one() or 0)
     return expense_limit_sum_for_chart_key(
-        session, CHART_KEY_EXPENSE_NEED_WANT_STACK, date_from, date_to
+        session, CHART_KEY_EXPENSE_NEED_WANT_STACK, date_from, date_to, uid
     )
 
 

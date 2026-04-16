@@ -537,6 +537,7 @@ class TestB2bPdfSkipsWhenInstaAlertExists:
         alert = Transaction(
             txn_date=d,
             account_id="HDFC_SAL_3703",
+            user_id="sashank",
             amount=2000.0,
             direction="INFLOW",
             raw_description="UPI: abhignya2410-1@okaxis BARU ABHIGNYA",

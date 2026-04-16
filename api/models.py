@@ -81,6 +81,7 @@ class Transaction(SQLModel, table=True):
             "ix_txn_reconciliation",
             "account_id", "amount", "txn_date", "source_type",
         ),
+        Index("ix_transactions_user_id", "user_id"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -91,6 +92,9 @@ class Transaction(SQLModel, table=True):
     # Core fields (mirror CanonicalTransaction)
     txn_date: datetime.date = Field(index=True)
     account_id: str = Field(index=True)
+    # Arth user who owns this row (same string as auth username). Set on insert from
+    # account→user mapping; API filters all reads by session user.
+    user_id: str | None = Field(default=None)
     source_statement: str
     direction: str = Field(index=True)                  # INFLOW / OUTFLOW
     amount: float
@@ -214,7 +218,7 @@ class RecurringPattern(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
 
-    user_id: str = Field(default="sashank", index=True)  # "sashank" | "aditi" — inferred from txns
+    user_id: str = Field(index=True)
 
     counterparty: str = Field(index=True)
     counterparty_category: str | None = None
@@ -304,7 +308,7 @@ class Goal(SQLModel, table=True):
     # MONTHLY: cap / progress per calendar month (default). ANNUAL: EXPENSE_LIMIT only — YTD vs target.
     progress_cadence: str = Field(default="MONTHLY", index=True)
 
-    user_id: str = Field(default="sashank", index=True)  # "sashank" or "aditi"
+    user_id: str = Field(index=True)  # always set from authenticated user on create
 
     # Manual override for non-auto-computable goals (updated by PATCH /api/goals/{id})
     current_value: float | None = None
@@ -457,7 +461,7 @@ class GoalLink(SQLModel, table=True):
     link_type: str = Field(max_length=32)
     description: str | None = Field(default=None, max_length=500)
     contribution_amount: float | None = Field(default=None, ge=0)
-    user_id: str = Field(default="sashank", index=True)
+    user_id: str = Field(index=True)
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
@@ -498,7 +502,7 @@ class LifeEvent(SQLModel, table=True):
     event_key: str = Field(index=True, max_length=64)
     occurred: bool = Field(default=False)
     occurred_date: datetime.date | None = None
-    user_id: str = Field(default="sashank", index=True)
+    user_id: str = Field(index=True)
     notes: str | None = Field(default=None, max_length=2000)
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
@@ -519,7 +523,7 @@ class Reminder(SQLModel, table=True):
     __tablename__ = "reminders"
 
     id: int | None = Field(default=None, primary_key=True)
-    user_id: str = Field(default="sashank", index=True)
+    user_id: str = Field(index=True)
     name: str
     due_day_of_month: int = Field(ge=1, le=31)
     amount: float | None = None
@@ -598,7 +602,7 @@ class Holding(SQLModel, table=True):
         description="Earliest date value becomes accessible (Sub-Plan C). NULL = unknown.",
     )
 
-    user_id: str = Field(default="sashank", index=True)
+    user_id: str = Field(index=True)
     is_active: bool = Field(default=True, index=True)
     notes: str | None = None
     created_at: datetime.datetime = Field(
@@ -688,7 +692,7 @@ class Liability(SQLModel, table=True):
     tenure_remaining_months: int | None = None
     emi_start_date: datetime.date | None = None
     emi_end_date: datetime.date | None = None
-    user_id: str = Field(default="sashank", index=True)
+    user_id: str = Field(index=True)
     is_active: bool = Field(default=True, index=True)
     notes: str | None = None
     created_at: datetime.datetime = Field(

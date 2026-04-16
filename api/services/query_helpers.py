@@ -15,6 +15,12 @@ from sqlmodel import col
 
 from api.models import Transaction
 
+
+def _for_user(q, user_id: str):
+    """Restrict a query to rows owned by this Arth user (session username)."""
+    return q.where(Transaction.user_id == user_id)
+
+
 # txn_types excluded from income totals (these inflows aren't real income)
 _INCOME_EXCLUSIONS: tuple[str, ...] = ("SELF_TRANSFER",)
 

@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, select
 
+from api.auth import effective_user_id, get_current_user
 from api.database import get_session
 from api.models import Liability
 from api.services.net_worth import liability_summary
@@ -59,7 +60,6 @@ class LiabilityCreate(BaseModel):
     tenure_remaining_months: int | None = Field(default=None, ge=0)
     emi_start_date: datetime.date | None = None
     emi_end_date: datetime.date | None = None
-    user_id: str = "sashank"
     is_active: bool = True
     notes: str | None = Field(default=None, max_length=10_000)
 
@@ -81,7 +81,7 @@ class LiabilityUpdate(BaseModel):
 def list_liabilities(
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
     is_active: bool | None = None,
 ):
     q = select(Liability).where(Liability.user_id == user_id)
@@ -92,7 +92,9 @@ def list_liabilities(
 
 
 @router.get("/summary", response_model=LiabilitySummaryOut)
-def liabilities_summary(*, session: Session = Depends(get_session), user_id: str = Query(default="sashank")):
+def liabilities_summary(
+    *, session: Session = Depends(get_session), user_id: str = Depends(effective_user_id)
+):
     rows = list(
         session.exec(
             select(Liability).where(
@@ -115,7 +117,7 @@ def get_liability(
     liability_id: int,
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
 ):
     row = session.get(Liability, liability_id)
     if not row or row.user_id != user_id:
@@ -124,7 +126,12 @@ def get_liability(
 
 
 @router.post("/", response_model=LiabilityOut, status_code=201)
-def create_liability(body: LiabilityCreate, *, session: Session = Depends(get_session)):
+def create_liability(
+    body: LiabilityCreate,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
     if body.liability_type not in _VALID_LIAB:
         raise HTTPException(status_code=400, detail=f"Invalid liability_type: {body.liability_type!r}")
     today = datetime.datetime.now(datetime.UTC).date()
@@ -140,7 +147,7 @@ def create_liability(body: LiabilityCreate, *, session: Session = Depends(get_se
         tenure_remaining_months=body.tenure_remaining_months,
         emi_start_date=body.emi_start_date,
         emi_end_date=body.emi_end_date,
-        user_id=body.user_id,
+        user_id=current_user,
         is_active=body.is_active,
         notes=body.notes,
     )
@@ -156,7 +163,7 @@ def patch_liability(
     body: LiabilityUpdate,
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
 ):
     row = session.get(Liability, liability_id)
     if not row or row.user_id != user_id:
@@ -182,7 +189,7 @@ def delete_liability(
     liability_id: int,
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
 ):
     row = session.get(Liability, liability_id)
     if not row or row.user_id != user_id:

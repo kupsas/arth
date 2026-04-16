@@ -101,6 +101,31 @@ def _backfill_goal_chart_keys(conn) -> None:
         conn.execute(text(sql))
 
 
+def _backfill_transaction_user_ids(conn) -> None:
+    """Set transactions.user_id from account→user mapping (legacy DBs + any NULL rows)."""
+    if not _column_exists(conn, "transactions", "user_id"):
+        return
+    from api.services.account_user_map import user_id_for_account
+
+    rows = conn.execute(
+        text(
+            "SELECT DISTINCT account_id FROM transactions "
+            "WHERE user_id IS NULL OR TRIM(user_id) = ''"
+        )
+    ).fetchall()
+    for (account_id,) in rows:
+        if not account_id:
+            continue
+        uid = user_id_for_account(str(account_id))
+        conn.execute(
+            text(
+                "UPDATE transactions SET user_id = :uid "
+                "WHERE account_id = :aid AND (user_id IS NULL OR TRIM(user_id) = '')"
+            ),
+            {"uid": uid, "aid": str(account_id)},
+        )
+
+
 def _apply_sqlite_patches() -> None:
     """Add columns/tables introduced after the DB was first created (SQLite ALTER)."""
     with _engine.begin() as conn:
@@ -273,6 +298,15 @@ def _apply_sqlite_patches() -> None:
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_recurring_pattern_user_cp_dir_freq "
                     "ON recurring_patterns (user_id, counterparty, direction, frequency)"
                 )
+            )
+
+        # Desktop pre-req: explicit user on each bank txn row (was inferred via account_id only).
+        if not _column_exists(conn, "transactions", "user_id"):
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN user_id TEXT"))
+        _backfill_transaction_user_ids(conn)
+        if not _index_exists(conn, "ix_transactions_user_id"):
+            conn.execute(
+                text("CREATE INDEX ix_transactions_user_id ON transactions (user_id)")
             )
 
 

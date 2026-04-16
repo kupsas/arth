@@ -176,6 +176,7 @@ def _run_pipeline_background(
     from pipeline.db_writer import compute_content_hash
 
     from api.models import Transaction
+    from api.services.account_user_map import user_id_for_account
 
     if llm_model:
         config.LLM_MODEL = llm_model
@@ -212,8 +213,13 @@ def _run_pipeline_background(
 
                 for txn in canonical:
                     content_hash = compute_content_hash(txn)
+                    row_uid = user_id_for_account(txn.account_id)
                     existing = session.exec(
-                        select(Transaction).where(Transaction.content_hash == content_hash)
+                        select(Transaction).where(
+                            Transaction.content_hash == content_hash,
+                            Transaction.account_id == txn.account_id,
+                            Transaction.user_id == row_uid,
+                        )
                     ).first()
                     if existing is not None:
                         continue
@@ -222,6 +228,7 @@ def _run_pipeline_background(
                         content_hash=content_hash,
                         txn_date=txn.txn_date,
                         account_id=txn.account_id,
+                        user_id=row_uid,
                         source_statement=txn.source_statement,
                         direction=txn.direction.value,
                         amount=float(txn.amount),
@@ -416,6 +423,7 @@ def _run_upload_background(
     from pipeline.db_writer import compute_content_hash
 
     from api.models import Transaction
+    from api.services.account_user_map import user_id_for_account
     from sqlmodel import select as _select
 
     if llm_model:
@@ -450,8 +458,13 @@ def _run_upload_background(
 
             for txn in canonical:
                 content_hash = compute_content_hash(txn)
+                row_uid = user_id_for_account(txn.account_id)
                 existing = session.exec(
-                    _select(Transaction).where(Transaction.content_hash == content_hash)
+                    _select(Transaction).where(
+                        Transaction.content_hash == content_hash,
+                        Transaction.account_id == txn.account_id,
+                        Transaction.user_id == row_uid,
+                    )
                 ).first()
                 if existing is not None:
                     continue
@@ -460,6 +473,7 @@ def _run_upload_background(
                     content_hash=content_hash,
                     txn_date=txn.txn_date,
                     account_id=txn.account_id,
+                    user_id=row_uid,
                     source_statement=input_file.name,
                     direction=txn.direction.value,
                     amount=float(txn.amount),
