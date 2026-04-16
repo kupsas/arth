@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
+from api.auth import effective_user_id, get_current_user
 from api.database import get_session
 from api.models import RecurringPattern, Transaction
 from api.services import recurring_detector
@@ -88,14 +89,21 @@ def run_detection(*, session: Session = Depends(get_session)) -> dict:
 # ───────────────────────────────────────────────────────────────────────────
 
 @router.get("/summary", response_model=RecurringSummary)
-def get_recurring_summary(*, session: Session = Depends(get_session)) -> RecurringSummary:
+def get_recurring_summary(
+    *,
+    session: Session = Depends(get_session),
+    user_id: str = Depends(effective_user_id),
+) -> RecurringSummary:
     """Return aggregate stats about recurring patterns.
 
     Used by the dashboard's "Recurring" card to show total fixed monthly
     costs and total recurring income at a glance.
     """
     active_patterns = session.exec(
-        select(RecurringPattern).where(RecurringPattern.is_active == True)  # noqa: E712
+        select(RecurringPattern).where(
+            RecurringPattern.user_id == user_id,
+            RecurringPattern.is_active == True,  # noqa: E712
+        )
     ).all()
 
     today = datetime.date.today()
@@ -135,17 +143,15 @@ def list_patterns(
     direction: str | None = Query(None, description="INFLOW or OUTFLOW"),
     frequency: str | None = Query(None, description="WEEKLY, MONTHLY, QUARTERLY, YEARLY"),
     is_active: bool | None = Query(None),
-    user_id: str | None = Query(None, description="If set, only patterns for this user"),
     *,
     session: Session = Depends(get_session),
+    user_id: str = Depends(effective_user_id),
 ) -> list[RecurringPatternOut]:
     """List recurring patterns with optional filters."""
-    query = select(RecurringPattern)
+    query = select(RecurringPattern).where(RecurringPattern.user_id == user_id)
 
     if direction is not None:
         query = query.where(RecurringPattern.direction == direction)
-    if user_id is not None:
-        query = query.where(RecurringPattern.user_id == user_id)
     if frequency is not None:
         query = query.where(RecurringPattern.frequency == frequency)
     if is_active is not None:
@@ -164,15 +170,21 @@ def list_patterns(
 # ───────────────────────────────────────────────────────────────────────────
 
 @router.get("/{pattern_id}")
-def get_pattern(pattern_id: int, *, session: Session = Depends(get_session)) -> dict:
+def get_pattern(
+    pattern_id: int,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict:
     """Get a single recurring pattern and the transactions that match it."""
     pattern = session.get(RecurringPattern, pattern_id)
-    if not pattern:
+    if not pattern or pattern.user_id != current_user:
         raise HTTPException(status_code=404, detail=f"Pattern {pattern_id} not found")
 
     # Find transactions that match this pattern (same counterparty + direction)
     linked_txns = session.exec(
         select(Transaction)
+        .where(Transaction.user_id == pattern.user_id)
         .where(Transaction.counterparty == pattern.counterparty)
         .where(Transaction.direction == pattern.direction)
         .order_by(col(Transaction.txn_date).desc())
@@ -203,10 +215,11 @@ def update_pattern(
     body: PatternUpdate,
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ) -> RecurringPatternOut:
     """Confirm, dismiss, or adjust a recurring pattern."""
     pattern = session.get(RecurringPattern, pattern_id)
-    if not pattern:
+    if not pattern or pattern.user_id != current_user:
         raise HTTPException(status_code=404, detail=f"Pattern {pattern_id} not found")
 
     update_data = body.model_dump(exclude_unset=True)
@@ -227,7 +240,7 @@ def update_pattern(
 def _pattern_out(p: RecurringPattern) -> RecurringPatternOut:
     return RecurringPatternOut(
         id=p.id or 0,
-        user_id=getattr(p, "user_id", None) or "sashank",
+        user_id=p.user_id or "",
         counterparty=p.counterparty,
         counterparty_category=p.counterparty_category,
         direction=p.direction,

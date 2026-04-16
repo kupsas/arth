@@ -61,7 +61,7 @@ def api_client(engine, monkeypatch):
             yield session
 
     app.dependency_overrides[get_session] = _override_session
-    app.dependency_overrides[get_current_user] = lambda: "test_user"
+    app.dependency_overrides[get_current_user] = lambda: "sashank"
 
     import api.database as _db_mod
 
@@ -437,7 +437,7 @@ def test_investment_transaction_create_and_list(client: TestClient, engine):
 
 
 def test_investment_transactions_user_scoped_via_holding(client: TestClient, engine):
-    """Rows for another user's holdings must not appear when user_id is set (F2.0)."""
+    """Session user only sees investment txns linked to their own holdings (JOIN)."""
     with Session(engine) as s:
         h_sash = Holding(
             name="Sash Equity",
@@ -466,37 +466,42 @@ def test_investment_transactions_user_scoped_via_holding(client: TestClient, eng
         s.commit()
         s.refresh(h_sash)
         s.refresh(h_other)
-
-    for hid, sym in [(h_sash.id, "SASH1"), (h_other.id, "PART1")]:
-        r = client.post(
-            "/api/investment-transactions/",
-            json={
-                "txn_date": "2025-02-01",
-                "symbol": sym,
-                "txn_type": InvestmentTxnType.BUY.value,
-                "quantity": 1.0,
-                "price_per_unit": 100.0,
-                "total_amount": 100.0,
-                "account_platform": "Test",
-                "holding_id": hid,
-            },
+        assert h_sash.id is not None and h_other.id is not None
+        s.add(
+            InvestmentTransaction(
+                txn_date=datetime.date(2025, 2, 1),
+                symbol="SASH1",
+                txn_type=InvestmentTxnType.BUY.value,
+                quantity=1.0,
+                price_per_unit=100.0,
+                total_amount=100.0,
+                account_platform="Test",
+                holding_id=h_sash.id,
+            )
         )
-        assert r.status_code == 201
+        s.add(
+            InvestmentTransaction(
+                txn_date=datetime.date(2025, 2, 1),
+                symbol="PART1",
+                txn_type=InvestmentTxnType.BUY.value,
+                quantity=1.0,
+                price_per_unit=100.0,
+                total_amount=100.0,
+                account_platform="Test",
+                holding_id=h_other.id,
+            )
+        )
+        s.commit()
 
-    scoped = client.get("/api/investment-transactions", params={"user_id": "sashank"})
+    scoped = client.get("/api/investment-transactions")
     assert scoped.status_code == 200
     rows = scoped.json()["items"]
     assert len(rows) == 1
     assert rows[0]["symbol"] == "SASH1"
 
-    scoped_p = client.get("/api/investment-transactions", params={"user_id": "partner"})
-    assert scoped_p.status_code == 200
-    assert len(scoped_p.json()["items"]) == 1
-    assert scoped_p.json()["items"][0]["symbol"] == "PART1"
-
 
 def test_investment_transactions_orphan_only_when_unscoped(client: TestClient, engine):
-    """Rows with holding_id NULL are listed only when user_id filter is omitted."""
+    """Rows with holding_id NULL are excluded (list is always JOINed to holdings for scope)."""
     with Session(engine) as s:
         s.add(
             InvestmentTransaction(
@@ -512,13 +517,9 @@ def test_investment_transactions_orphan_only_when_unscoped(client: TestClient, e
         )
         s.commit()
 
-    unscoped = client.get("/api/investment-transactions")
-    assert unscoped.status_code == 200
-    assert any(r["symbol"] == "ORPH" for r in unscoped.json()["items"])
-
-    scoped = client.get("/api/investment-transactions", params={"user_id": "sashank"})
-    assert scoped.status_code == 200
-    assert not any(r["symbol"] == "ORPH" for r in scoped.json()["items"])
+    r = client.get("/api/investment-transactions")
+    assert r.status_code == 200
+    assert not any(row.get("symbol") == "ORPH" for row in r.json()["items"])
 
 
 def test_investment_transaction_patch_and_is_reviewed_filter(client: TestClient, engine):

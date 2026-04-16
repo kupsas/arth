@@ -16,8 +16,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session, col, func, select
 
+from api.auth import get_current_user
 from api.database import get_session
 from api.models import Transaction
+from api.services.query_helpers import _for_user
 
 router = APIRouter()
 
@@ -90,9 +92,10 @@ def list_transactions(
     sort_order: SortOrder = Query(SortOrder.desc),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """List transactions with optional filters, pagination, and sorting."""
-    query = select(Transaction)
+    query = _for_user(select(Transaction), current_user)
 
     # Apply filters
     if date_from:
@@ -154,6 +157,7 @@ def bulk_update_transactions(
     body: BulkUpdateRequest,
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """Apply the same update to multiple transactions at once."""
     updated = []
@@ -161,7 +165,7 @@ def bulk_update_transactions(
 
     for txn_id in body.ids:
         txn = session.get(Transaction, txn_id)
-        if not txn:
+        if not txn or txn.user_id != current_user:
             not_found.append(txn_id)
             continue
         _apply_update(txn, body.update)
@@ -177,10 +181,15 @@ def bulk_update_transactions(
 # ───────────────────────────────────────────────────────────────────────────
 
 @router.get("/{txn_id}")
-def get_transaction(txn_id: int, *, session: Session = Depends(get_session)):
+def get_transaction(
+    txn_id: int,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
     """Fetch a single transaction by its database ID."""
     txn = session.get(Transaction, txn_id)
-    if not txn:
+    if not txn or txn.user_id != current_user:
         raise HTTPException(status_code=404, detail=f"Transaction {txn_id} not found")
     return _txn_to_dict(txn)
 
@@ -195,10 +204,11 @@ def update_transaction(
     body: TransactionUpdate,
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """Update user-editable fields on a single transaction."""
     txn = session.get(Transaction, txn_id)
-    if not txn:
+    if not txn or txn.user_id != current_user:
         raise HTTPException(status_code=404, detail=f"Transaction {txn_id} not found")
 
     _apply_update(txn, body)
@@ -235,6 +245,7 @@ def _txn_to_dict(txn: Transaction) -> dict:
     return {
         "id": txn.id,
         "content_hash": txn.content_hash,
+        "user_id": txn.user_id,
         "txn_date": txn.txn_date.isoformat() if txn.txn_date else None,
         "account_id": txn.account_id,
         "source_statement": txn.source_statement,

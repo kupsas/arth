@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from api.auth import effective_user_id
 from api.database import get_session
 from api.services.surplus_calculator import MonthDetail, SurplusResult, compute_surplus
 
@@ -27,7 +28,6 @@ class MonthlyOnlyResponse(BaseModel):
 
 @router.get("", response_model=SurplusResult)
 def get_surplus(
-    user_id: str = Query(default="sashank", description="Arth user id (sashank | aditi)"),
     months: int = Query(
         default=6,
         ge=3,
@@ -36,20 +36,21 @@ def get_surplus(
     ),
     *,
     session: Session = Depends(get_session),
+    user_id: str = Depends(effective_user_id),
 ) -> SurplusResult:
     """Compute monthly surplus from recurring income + category-filtered spend."""
-    return compute_surplus(session, user_id.strip() or "sashank", months)
+    return compute_surplus(session, user_id, months)
 
 
 @router.get("/monthly", response_model=MonthlyOnlyResponse)
 def get_surplus_monthly(
-    user_id: str = Query(default="sashank"),
     months: int = Query(default=6, ge=3, le=12),
     *,
     session: Session = Depends(get_session),
+    user_id: str = Depends(effective_user_id),
 ) -> MonthlyOnlyResponse:
     """Return only the per-month breakdown (lighter payload for charts)."""
-    full = compute_surplus(session, user_id.strip() or "sashank", months)
+    full = compute_surplus(session, user_id, months)
     return MonthlyOnlyResponse(
         user_id=full.user_id,
         months_analyzed=full.months_analyzed,

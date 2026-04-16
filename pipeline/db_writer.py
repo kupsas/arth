@@ -28,9 +28,11 @@ import datetime
 import hashlib
 import logging
 
+from sqlalchemy import or_
 from sqlmodel import Session, col, select
 
 from api.models import PipelineRun, Transaction
+from api.services.account_user_map import user_id_for_account
 from pipeline.models import CanonicalTransaction
 
 logger = logging.getLogger(__name__)
@@ -101,9 +103,16 @@ def _find_statement_match_for_email(
     If **more than one** row matches on the **same** calendar date (two Swiggy orders),
     returns ``None`` — safer than dropping a real second charge.
     """
+    uid = user_id_for_account(account_id)
     base = (
         select(Transaction)
         .where(Transaction.account_id == account_id)
+        .where(
+            or_(
+                col(Transaction.user_id) == uid,
+                col(Transaction.user_id).is_(None),
+            )
+        )
         .where(Transaction.amount == float(txn.amount))
         .where(Transaction.direction == txn.direction.value)
         .where(col(Transaction.source_type).in_(["statement", "reconciled"]))
@@ -150,9 +159,16 @@ def _find_prior_email_alert_match_for_pdf(
     if not exclude_gmail_message_id:
         return None
 
+    uid = user_id_for_account(account_id)
     base = (
         select(Transaction)
         .where(Transaction.account_id == account_id)
+        .where(
+            or_(
+                col(Transaction.user_id) == uid,
+                col(Transaction.user_id).is_(None),
+            )
+        )
         .where(Transaction.amount == float(txn.amount))
         .where(Transaction.direction == txn.direction.value)
         .where(Transaction.source_type == "email")
@@ -199,10 +215,15 @@ def _find_email_match(
     will overwrite the raw_description anyway, so the end result is always correct even
     if we matched the "wrong" email row.
     """
+    uid = user_id_for_account(account_id)
     one_day = datetime.timedelta(days=1)
     return session.exec(
         select(Transaction).where(
             Transaction.account_id == account_id,
+            or_(
+                col(Transaction.user_id) == uid,
+                col(Transaction.user_id).is_(None),
+            ),
             Transaction.amount == float(txn.amount),
             Transaction.txn_date >= txn.txn_date - one_day,
             Transaction.txn_date <= txn.txn_date + one_day,
@@ -238,6 +259,8 @@ def _upgrade_email_row(
     existing.is_reviewed = True
     existing.pipeline_run_id = pipeline_run_id
     existing.updated_at = datetime.datetime.now(datetime.UTC)
+    if not existing.user_id:
+        existing.user_id = user_id_for_account(txn.account_id)
 
     # Overwrite classification only if the DB value is still NULL —
     # same conservative logic as the normal backfill path.
@@ -314,18 +337,30 @@ def write_to_db(
 
     for txn in txns:
         content_hash = compute_content_hash(txn)
+        row_user_id = user_id_for_account(txn.account_id)
 
         # ── Path A: exact content_hash match ────────────────────────────────
         # This handles same-source dedup (re-running the same statement file,
         # or the same email coming in twice).  It's the fast path.
+        # Allow legacy rows with NULL user_id (pre-migration) for same account/hash.
         existing = session.exec(
-            select(Transaction).where(Transaction.content_hash == content_hash)
+            select(Transaction).where(
+                Transaction.content_hash == content_hash,
+                Transaction.account_id == txn.account_id,
+                or_(
+                    col(Transaction.user_id) == row_user_id,
+                    col(Transaction.user_id).is_(None),
+                ),
+            )
         ).first()
 
         if existing is not None:
             # Backfill: fill in NULL classification fields without clobbering
             # any values that were set by earlier runs or manual user edits.
             fields_touched = 0
+            if not existing.user_id:
+                existing.user_id = row_user_id
+                fields_touched += 1
             for canon_attr, db_col in _BACKFILL_FIELDS:
                 if getattr(existing, db_col) is not None:
                     continue
@@ -398,6 +433,7 @@ def write_to_db(
             content_hash=content_hash,
             txn_date=txn.txn_date,
             account_id=txn.account_id,
+            user_id=user_id_for_account(txn.account_id),
             source_statement=txn.source_statement,
             direction=txn.direction.value,
             amount=float(txn.amount),

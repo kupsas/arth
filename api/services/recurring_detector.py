@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-from collections import Counter
 from statistics import median, stdev
 
 from sqlmodel import Session, col, select
@@ -68,14 +67,6 @@ _FREQ_RANGES: list[tuple[str, int, int]] = [
 ]
 
 
-def _infer_user_id_from_transactions(group_txns: list[Transaction]) -> str:
-    """Majority vote of account_id -> user_id for transactions in this pattern group."""
-    if not group_txns:
-        return "sashank"
-    votes = [user_id_for_account(t.account_id) for t in group_txns]
-    return Counter(votes).most_common(1)[0][0]
-
-
 def detect_and_upsert(session: Session) -> dict[str, int]:
     """Run full recurring detection and upsert results into the DB.
 
@@ -96,21 +87,24 @@ def detect_and_upsert(session: Session) -> dict[str, int]:
         .order_by(col(Transaction.txn_date))
     ).all()
 
-    # Group by (counterparty, direction) for OUTFLOW.
+    # Group by (user_id, counterparty, direction) for OUTFLOW.
     # For INFLOW, also include txn_type in the key — a single person/entity can
     # send salary, dividends, family transfers, and one-off payments all under the
     # same counterparty name. Without the txn_type split, monthly salary gets
     # buried in frequent small transfers and fails the variance check.
-    groups: dict[tuple[str, str, str | None], list[Transaction]] = {}
+    # user_id comes from Transaction.user_id when set, else account→user map (legacy rows).
+    groups: dict[tuple[str, str, str, str | None], list[Transaction]] = {}
     for txn in txns:
+        rid = (txn.user_id or "").strip()
+        uid = rid or user_id_for_account(txn.account_id)
         txn_type_key = txn.txn_type if txn.direction == "INFLOW" else None
-        key = (txn.counterparty or "", txn.direction, txn_type_key)
+        key = (uid, txn.counterparty or "", txn.direction, txn_type_key)
         groups.setdefault(key, []).append(txn)
 
     created = 0
     updated = 0
 
-    for (counterparty, direction, _txn_type_key), group_txns in groups.items():
+    for (pattern_user_id, counterparty, direction, _txn_type_key), group_txns in groups.items():
         group_txns.sort(key=lambda t: t.txn_date)
 
         raw_dates = [t.txn_date for t in group_txns]
@@ -177,8 +171,6 @@ def detect_and_upsert(session: Session) -> dict[str, int]:
 
         # Use the most recent transaction's counterparty_category as the label
         counterparty_category = group_txns[-1].counterparty_category
-
-        pattern_user_id = _infer_user_id_from_transactions(group_txns)
 
         # ── Step 5: Upsert ─────────────────────────────────────────────────────
         existing = session.exec(

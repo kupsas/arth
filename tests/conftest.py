@@ -82,7 +82,8 @@ def sample_two_pass_category_items(benchmark_fixture_raw: list[dict]) -> list[di
         ("UPI_EXPENSE", "Spotify"),
         ("UPI_EXPENSE", "Amazon"),
         ("UPI_EXPENSE", "Swiggy"),
-        ("INCOME_SALARY", "Sashank Sai Kuppa"),
+        # Fictional name aligned with prompts/classify_two_pass_category.yaml examples.
+        ("INCOME_SALARY", "Rohan K Mehta"),
         ("UPI_EXPENSE", "Apollo Pharmacy"),
     ]
     items = []

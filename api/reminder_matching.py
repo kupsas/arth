@@ -23,6 +23,7 @@ from sqlmodel import Session, col, select
 
 from api.models import Reminder, Transaction
 from api.reminder_anchor_derivation import decode_description_match_anchors
+from api.services.query_helpers import _for_user
 
 # Only drop true internal shuffles; keep CARD_PAYMENT for CC bill-pay matching.
 _REMINDER_TXN_TYPE_EXCLUSIONS: tuple[str, ...] = ("SELF_TRANSFER",)
@@ -89,18 +90,19 @@ def month_date_range(ym: str) -> tuple[datetime.date, datetime.date]:
     return first, last
 
 
-def _reminder_candidate_base():
+def _reminder_candidate_base(user_id: str):
     """OUTFLOW rows eligible for reminder matching (includes CC bill payments)."""
     q = select(Transaction).where(Transaction.direction == "OUTFLOW").where(
         col(Transaction.txn_type).is_(None)
         | col(Transaction.txn_type).not_in(_REMINDER_TXN_TYPE_EXCLUSIONS)
     )
-    return q.where(
+    q = q.where(
         or_(
             col(Transaction.exclude_from_analytics).is_(None),
             col(Transaction.exclude_from_analytics).is_(False),
         )
     )
+    return _for_user(q, user_id)
 
 
 def _normalize_counterparty(value: str | None) -> str | None:
@@ -183,7 +185,7 @@ def compute_reminder_month_status(
 
     anchors = decode_description_match_anchors(reminder.description_match_anchors)
 
-    q = _reminder_candidate_base().where(
+    q = _reminder_candidate_base(reminder.user_id).where(
         Transaction.txn_date >= date_from,
         Transaction.txn_date <= date_to,
     )

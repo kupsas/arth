@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, select
 
+from api.auth import effective_user_id, get_current_user
 from api.database import get_session
 from api.models import Holding
 from api.routes.ingest_utils import parser_input_path, saved_upload_directory
@@ -160,7 +161,6 @@ class HoldingCreate(BaseModel):
     fund_type: str | None = None
     folio_number: str | None = Field(default=None, max_length=128)
     account_identifier: str | None = Field(default=None, max_length=256)
-    user_id: str = Field(default="sashank", min_length=1, max_length=64)
     is_active: bool = True
     notes: str | None = Field(default=None, max_length=10_000)
     earliest_liquidity_date: datetime.date | None = None
@@ -363,7 +363,7 @@ def _holding_out_with_metrics(
 def list_holdings(
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
     asset_class: str | None = None,
     account_platform: str | None = None,
     liquidity_class: str | None = None,
@@ -385,7 +385,7 @@ def list_holdings(
     elif not include_inactive:
         q = q.where(Holding.is_active == True)  # noqa: E712
     q = q.order_by(Holding.name)
-    uid = user_id.strip() or "sashank"
+    uid = user_id
     rows = list(session.exec(q).all())
     # Archived rows are not in total_portfolio_value(); mix active+inactive needs a local denominator.
     if include_inactive:
@@ -408,11 +408,11 @@ def list_holdings(
 def holdings_summary(
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
     as_of: str | None = Query(default=None, description="YYYY-MM-DD; optional historical snapshot"),
 ):
     as_of_d = _parse_opt_date(as_of)
-    uid = user_id.strip() or "sashank"
+    uid = user_id
     tpv, tcb, tog, togp, breakdown = asset_class_breakdown_and_totals(session, uid)
     return HoldingsSummaryOut(
         net_worth=compute_net_worth(session, as_of_date=as_of_d, user_id=uid),
@@ -430,7 +430,7 @@ def holdings_summary(
 def holdings_history(
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
     start_date: str = Query(..., description="YYYY-MM-DD"),
     end_date: str = Query(..., description="YYYY-MM-DD"),
     granularity: str = Query(default="monthly", pattern="^(daily|weekly|monthly)$"),
@@ -441,7 +441,13 @@ def holdings_history(
         raise HTTPException(status_code=400, detail="start_date and end_date are required (YYYY-MM-DD)")
     if sd > ed:
         raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
-    pts = compute_net_worth_history(session, sd, ed, granularity=granularity, user_id=user_id)  # type: ignore[arg-type]
+    pts = compute_net_worth_history(
+        session,
+        sd,
+        ed,
+        granularity=cast(Literal["daily", "weekly", "monthly"], granularity),
+        user_id=user_id,
+    )
     return NetWorthHistoryOut(points=pts, granularity=granularity)
 
 
@@ -449,10 +455,10 @@ def holdings_history(
 def holdings_batch_returns(
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
 ):
     """Returns metrics for every active holding in one round-trip (cached until holdings change)."""
-    uid = user_id.strip() or "sashank"
+    uid = user_id
     raw = compute_batch_returns(session, uid)
     return BatchReturnsOut(returns={str(k): v for k, v in raw.items()})
 
@@ -461,7 +467,7 @@ def holdings_batch_returns(
 def portfolio_value_trend(
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
     range_: str = Query(
         default="12M",
         alias="range",
@@ -474,7 +480,7 @@ def portfolio_value_trend(
     Each point is valued as of the **last calendar day** of that month; for the
     current month, the anchor is **today** (so it matches the live portfolio total).
     """
-    uid = user_id.strip() or "sashank"
+    uid = user_id
     end = datetime.datetime.now(datetime.UTC).date()
     start = portfolio_trend_start_date(end, range_)
     if range_ == "all":
@@ -509,13 +515,13 @@ def portfolio_value_trend(
 def enrich_holdings_endpoint(
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
 ):
     """Backfill ``sector``, ``market_cap_class``, ``fund_category``, ``fund_house`` (Phase B).
 
     Downloads AMFI NAVAll once, calls NSE meta per equity (throttled). Safe to re-run.
     """
-    report = enrich_holdings(session, user_id=user_id.strip() or None)
+    report = enrich_holdings(session, user_id=user_id)
     d = report.as_dict()
     return HoldingsEnrichOut(**d)
 
@@ -525,9 +531,9 @@ def get_holding(
     holding_id: int,
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
 ):
-    uid = user_id.strip() or "sashank"
+    uid = user_id
     h = session.get(Holding, holding_id)
     if not h or h.user_id != uid:
         raise HTTPException(status_code=404, detail="Holding not found")
@@ -544,7 +550,12 @@ def get_holding(
 
 
 @router.post("", response_model=HoldingOut, status_code=201)
-def create_holding(body: HoldingCreate, *, session: Session = Depends(get_session)):
+def create_holding(
+    body: HoldingCreate,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
     _validate_holding_enums(body.asset_class, body.valuation_method, body.liquidity_class, body.fund_type)
     today = datetime.datetime.now(datetime.UTC).date()
     if body.last_valued_date is not None and body.last_valued_date > today:
@@ -570,7 +581,7 @@ def create_holding(body: HoldingCreate, *, session: Session = Depends(get_sessio
         coupon_rate=body.coupon_rate,
         coupon_frequency=body.coupon_frequency,
         fund_type=body.fund_type,
-        user_id=body.user_id,
+        user_id=current_user,
         is_active=body.is_active,
         notes=body.notes,
         earliest_liquidity_date=body.earliest_liquidity_date,
@@ -584,7 +595,7 @@ def create_holding(body: HoldingCreate, *, session: Session = Depends(get_sessio
     enrich_single_equity_classification(session, h)
     session.commit()
     session.refresh(h)
-    uid = body.user_id.strip() or "sashank"
+    uid = current_user
     eq_splits = batch_equity_holding_period_splits(session, [h], as_of=today)
     total_v = total_portfolio_value(session, uid)
     return _holding_out_with_metrics(
@@ -598,7 +609,7 @@ def patch_holding(
     body: HoldingUpdate,
     *,
     session: Session = Depends(get_session),
-    user_id: str = Query(default="sashank"),
+    user_id: str = Depends(effective_user_id),
 ):
     h = session.get(Holding, holding_id)
     if not h or h.user_id != user_id:
@@ -624,8 +635,7 @@ def patch_holding(
     session.add(h)
     session.commit()
     session.refresh(h)
-    uid = user_id.strip() or "sashank"
-    total_v = total_portfolio_value(session, uid)
+    total_v = total_portfolio_value(session, user_id)
     return _holding_out_with_metrics(session, h, total_v)
 
 
@@ -634,9 +644,9 @@ def import_holdings(
     *,
     session: Session = Depends(get_session),
     source: str = Form(..., description="Registry key, e.g. icici_direct_equity"),
-    user_id: str = Form(default="sashank"),
     skip_investment_txns: bool = Form(default=False),
     files: list[UploadFile] = File(...),
+    current_user: str = Depends(get_current_user),
 ):
     sk = source.strip()
     if sk not in IMPORT_SOURCES:
@@ -649,16 +659,16 @@ def import_holdings(
         parser_cls = HOLDING_PARSER_REGISTRY[sk]
         holdings, txns = parser_cls().parse_path(path)
 
-    hstats = ingest_holdings(session, holdings, user_id=user_id.strip() or "sashank", dry_run=False)
+    hstats = ingest_holdings(session, holdings, user_id=current_user, dry_run=False)
     if skip_investment_txns:
         tstats = {"inserted": 0, "skipped_duplicate": 0, "errors": 0, "holdings_synced": 0}
     else:
         tstats = ingest_investment_transactions(
             session,
             txns,
-            user_id=user_id.strip() or "sashank",
+            user_id=current_user,
             dry_run=False,
         )
 
-    logger.info("API holdings import source=%s user=%s h=%s t=%s", sk, user_id, hstats, tstats)
+    logger.info("API holdings import source=%s user=%s h=%s t=%s", sk, current_user, hstats, tstats)
     return ImportResultOut(source=sk, holdings_stats=hstats, investment_txn_stats=tstats)

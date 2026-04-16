@@ -76,7 +76,8 @@ def api_client(engine):
     app.dependency_overrides[get_session] = _override_session
     # Bypass auth for all existing API tests — they test DB/API logic, not auth.
     # Auth-specific behaviour is tested in TestAuth below using a separate fixture.
-    app.dependency_overrides[get_current_user] = lambda: "test_user"
+    # Must match seeded Transaction.user_id and default account→user mapping.
+    app.dependency_overrides[get_current_user] = lambda: "sashank"
 
     # Temporarily neuter init_db() so the lifespan doesn't try to create
     # tables on the production engine (which would touch a real DB file).
@@ -139,6 +140,7 @@ def _seed_db_transaction(session: Session, **overrides) -> Transaction:
         "counterparty_category": "Swiggy",
         "raw_description": "UPI/123456/Swiggy/sbi@ybl",
         "is_reviewed": True,
+        "user_id": "sashank",
     }
     defaults.update(overrides)
     txn = Transaction(**defaults)
@@ -334,6 +336,25 @@ class TestTransactionList:
         assert data["total"] == 5
         assert len(data["items"]) == 2
         assert data["total_pages"] == 3
+
+
+class TestTransactionUserIsolation:
+    """Rows for another Arth user must not appear in list or single-txn reads."""
+
+    def test_list_and_get_hide_other_users_rows(self, client: TestClient, session: Session):
+        mine = _seed_db_transaction(session, content_hash="iso_mine", user_id="sashank")
+        theirs = _seed_db_transaction(
+            session,
+            content_hash="iso_theirs",
+            user_id="bob",
+            account_id="OTHER_ACC",
+        )
+        lst = client.get("/api/transactions")
+        assert lst.status_code == 200
+        ids = {row["id"] for row in lst.json()["items"]}
+        assert mine.id in ids
+        assert theirs.id not in ids
+        assert client.get(f"/api/transactions/{theirs.id}").status_code == 404
 
 
 class TestTransactionGetOne:

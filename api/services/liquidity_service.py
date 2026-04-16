@@ -270,7 +270,9 @@ def refresh_all_liquidity_dates(session: Session, user_id: str, today: datetime.
 
     Liquid sleeves (equity/MF) get a new date each run as ``today`` moves.
     """
-    uid = user_id.strip() or "sashank"
+    uid = user_id.strip()
+    if not uid:
+        raise ValueError("user_id is required")
     as_of = today or datetime.datetime.now(datetime.UTC).date()
     warnings: list[str] = []
 
@@ -345,7 +347,9 @@ def liquidity_summary(session: Session, user_id: str, today: datetime.date | Non
 
     Holdings with NULL stored date are computed on the fly (not persisted here).
     """
-    uid = user_id.strip() or "sashank"
+    uid = user_id.strip()
+    if not uid:
+        raise ValueError("user_id is required")
     as_of = today or datetime.datetime.now(datetime.UTC).date()
 
     rows = list(
@@ -397,7 +401,9 @@ def match_holdings_to_goal(session: Session, goal_id: int, user_id: str, today: 
 
     **GROWTH** goals or goals with no ``target_date``: all active holdings (whole portfolio pool).
     """
-    uid = user_id.strip() or "sashank"
+    uid = user_id.strip()
+    if not uid:
+        raise ValueError("user_id is required")
     as_of = today or datetime.datetime.now(datetime.UTC).date()
 
     g = session.get(Goal, goal_id)
@@ -450,7 +456,9 @@ def suggest_starting_balances(session: Session, user_id: str, today: datetime.da
 
     Same holding may appear for multiple goals — this is intentional (suggestions, not allocation).
     """
-    uid = user_id.strip() or "sashank"
+    uid = user_id.strip()
+    if not uid:
+        raise ValueError("user_id is required")
     as_of = today or datetime.datetime.now(datetime.UTC).date()
 
     goals = list(
@@ -516,7 +524,9 @@ def check_liquidity_mismatch(
 
     If ``claimed_amount`` exceeds that sum, returns a warning string (informational).
     """
-    uid = user_id.strip() or "sashank"
+    uid = user_id.strip()
+    if not uid:
+        raise ValueError("user_id is required")
     as_of = today or datetime.datetime.now(datetime.UTC).date()
 
     g = session.get(Goal, goal_id)

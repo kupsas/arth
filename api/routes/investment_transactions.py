@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -17,6 +16,7 @@ from sqlalchemy import or_
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, col, func, select
 
+from api.auth import effective_user_id, get_current_user
 from api.database import get_session
 from api.models import Holding, InvestmentTransaction
 from api.services.holdings_sync import (
@@ -118,16 +118,14 @@ class ImportInvTxnResultOut(BaseModel):
     investment_txn_stats: dict[str, Any]
 
 
-def _default_user_id_for_inv_sync() -> str:
-    return (os.environ.get("ARTH_USER_ID") or "sashank").strip() or "sashank"
-
-
-def _inv_txn_user_id_for_sync(session: Session, row: InvestmentTransaction) -> str:
+def _inv_txn_user_id_for_sync(
+    session: Session, row: InvestmentTransaction, default_user: str
+) -> str:
     if row.holding_id is not None:
         h = session.get(Holding, row.holding_id)
         if h:
             return h.user_id
-    return _default_user_id_for_inv_sync()
+    return default_user
 
 
 def _validate_inv_update(body: InvestmentTransactionUpdate, *, session: Session | None = None) -> None:
@@ -151,7 +149,7 @@ def _apply_inv_update(row: InvestmentTransaction, body: InvestmentTransactionUpd
 
 def _build_inv_list_query(
     *,
-    user_id: str | None,
+    user_id: str,
     holding_id: int | None,
     txn_type: str | None,
     symbol: str | None,
@@ -163,13 +161,12 @@ def _build_inv_list_query(
     is_reviewed: bool | None,
 ):
     q = select(InvestmentTransaction)
-    uid = user_id.strip() if user_id and user_id.strip() else None
-    if uid is not None:
-        on_holding = cast(
-            ColumnElement[Any],
-            InvestmentTransaction.holding_id == Holding.id,
-        )
-        q = q.join(Holding, on_holding).where(Holding.user_id == uid)
+    uid = user_id.strip()
+    on_holding = cast(
+        ColumnElement[Any],
+        InvestmentTransaction.holding_id == Holding.id,
+    )
+    q = q.join(Holding, on_holding).where(Holding.user_id == uid)
     if holding_id is not None:
         q = q.where(InvestmentTransaction.holding_id == holding_id)
     if txn_type is not None:
@@ -219,11 +216,7 @@ def _build_inv_list_query(
 def list_investment_transactions(
     *,
     session: Session = Depends(get_session),
-    user_id: str | None = Query(
-        default=None,
-        description="When set, only rows linked to a holding owned by this user (via JOIN). "
-        "Omit for an unscoped list (includes rows with no holding_id).",
-    ),
+    user_id: str = Depends(effective_user_id),
     holding_id: int | None = None,
     txn_type: str | None = None,
     symbol: str | None = None,
@@ -287,6 +280,7 @@ def bulk_update_investment_transactions(
     body: BulkInvestmentUpdateRequest,
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """Apply the same update to many investment transactions (e.g. mark all reviewed)."""
     _validate_inv_update(body.update, session=session)
@@ -296,6 +290,13 @@ def bulk_update_investment_transactions(
     for iid in body.ids:
         row = session.get(InvestmentTransaction, iid)
         if not row:
+            not_found.append(iid)
+            continue
+        if row.holding_id is None:
+            not_found.append(iid)
+            continue
+        h = session.get(Holding, row.holding_id)
+        if not h or h.user_id != current_user:
             not_found.append(iid)
             continue
         old_hid = row.holding_id
@@ -320,9 +321,15 @@ def update_investment_transaction(
     body: InvestmentTransactionUpdate,
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     row = session.get(InvestmentTransaction, inv_id)
     if not row:
+        raise HTTPException(status_code=404, detail=f"Investment transaction {inv_id} not found")
+    if row.holding_id is None:
+        raise HTTPException(status_code=404, detail=f"Investment transaction {inv_id} not found")
+    h0 = session.get(Holding, row.holding_id)
+    if not h0 or h0.user_id != current_user:
         raise HTTPException(status_code=404, detail=f"Investment transaction {inv_id} not found")
     _validate_inv_update(body, session=session)
     old_hid = row.holding_id
@@ -345,7 +352,10 @@ def update_investment_transaction(
 
 @router.post("/", response_model=InvestmentTransactionOut, status_code=201)
 def create_investment_transaction(
-    body: InvestmentTransactionCreate, *, session: Session = Depends(get_session)
+    body: InvestmentTransactionCreate,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     if body.txn_type not in _VALID_TXN:
         raise HTTPException(
@@ -358,6 +368,8 @@ def create_investment_transaction(
         h = session.get(Holding, body.holding_id)
         if not h:
             raise HTTPException(status_code=400, detail="holding_id does not exist")
+        if h.user_id != current_user:
+            raise HTTPException(status_code=403, detail="holding_id belongs to another user")
     now = datetime.datetime.now(datetime.UTC)
     it = InvestmentTransaction(
         txn_date=body.txn_date,
@@ -378,7 +390,7 @@ def create_investment_transaction(
     session.add(it)
     session.commit()
     session.refresh(it)
-    uid = _inv_txn_user_id_for_sync(session, it)
+    uid = _inv_txn_user_id_for_sync(session, it, current_user)
     if it.holding_id is None:
         ensure_holding_for_transaction(session, it, user_id=uid)
     session.flush()
@@ -394,8 +406,8 @@ def import_investment_transactions(
     *,
     session: Session = Depends(get_session),
     source: str = Form(...),
-    user_id: str = Form(default="sashank"),
     files: list[UploadFile] = File(...),
+    current_user: str = Depends(get_current_user),
 ):
     sk = source.strip()
     if sk not in IMPORT_SOURCES:
@@ -411,7 +423,7 @@ def import_investment_transactions(
     stats = ingest_investment_transactions(
         session,
         txns,
-        user_id=user_id.strip() or "sashank",
+        user_id=current_user,
         dry_run=False,
     )
     logger.info("API investment txn import source=%s stats=%s", sk, stats)

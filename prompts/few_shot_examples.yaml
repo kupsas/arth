@@ -82,7 +82,7 @@ examples:
 
   - number: 8
     title: "BANK credit card bill payment"
-    desc: "IB BILLPAY DR-HDFC4U-526873XXXXXX1905"
+    desc: "IB BILLPAY DR-HDFC4U-526873XXXXXX4242"
     direction: "OUTFLOW"
     amount: "30000"
     channel: "BANK"
@@ -92,17 +92,17 @@ examples:
 
   - number: 9
     title: "BANK salary (counterparty = the person receiving salary, extracted from narration)"
-    desc: "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN52025020104799811"
+    desc: "NEFT CR-RATN0000999-TIDEPLATFO-ROHAN K MEHTA-RATNN52025020104799811"
     direction: "INFLOW"
     amount: "127557"
     channel: "BANK"
     txn_type: "INCOME_SALARY"
-    counterparty: "Sashank Sai Kuppa"
+    counterparty: "Rohan K Mehta"
     counterparty_category: "Salary & Income"
 
   - number: 10
     title: "BANK tax refund"
-    desc: "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SASHANK KUPPA"
+    desc: "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 ABCPV9999Q-PRIYA N SHARMA"
     direction: "INFLOW"
     amount: "92370"
     channel: "BANK"
@@ -133,7 +133,7 @@ examples:
 
   - number: 13
     title: "UPI inflow from an individual (friend sending money back \u2014 this is UPI_TRANSFER, NOT INCOME_OTHER)"
-    desc: "UPI-SATYANSH RAI-9151178228@PTYES-SBIN0012980-687912494165-SENT USING"
+    desc: "UPI-SATYANSH RAI-9000000000@PTYES-SBIN0012980-687912494165-SENT USING"
     direction: "INFLOW"
     amount: "500"
     channel: "UPI"

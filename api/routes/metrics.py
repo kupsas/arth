@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from sqlalchemy import case, or_
 from sqlmodel import Session, col, func, select
 
+from api.auth import get_current_user
 from api.database import get_session
 from api.models import Goal, Transaction
 from api.routes.transactions import _txn_to_dict
@@ -36,6 +37,7 @@ from api.services.query_helpers import (
     _current_month_range,
     _date_where,
     _expense_where,
+    _for_user,
     _generate_month_labels,
     _income_where,
     _month_start_end,
@@ -158,6 +160,7 @@ def get_summary(
     ),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """
     High-level summary metrics for the given date range.
@@ -170,41 +173,50 @@ def get_summary(
     date_to = date_to or dt
 
     # ── Income ──────────────────────────────────────────────────────────
-    income_q = _date_where(
-        _analytics_only(
-            _income_where(
-                select(
-                    func.coalesce(func.sum(Transaction.amount), 0.0),
-                    func.count(Transaction.id),
+    income_q = _for_user(
+        _date_where(
+            _analytics_only(
+                _income_where(
+                    select(
+                        func.coalesce(func.sum(Transaction.amount), 0.0),
+                        func.count(Transaction.id),
+                    )
                 )
-            )
+            ),
+            date_from, date_to,
         ),
-        date_from, date_to,
+        current_user,
     )
     income_sum, income_count = session.exec(income_q).one()
 
     # ── Expense ─────────────────────────────────────────────────────────
-    expense_q = _date_where(
-        _analytics_only(
-            _expense_where(
-                select(
-                    func.coalesce(func.sum(Transaction.amount), 0.0),
-                    func.count(Transaction.id),
+    expense_q = _for_user(
+        _date_where(
+            _analytics_only(
+                _expense_where(
+                    select(
+                        func.coalesce(func.sum(Transaction.amount), 0.0),
+                        func.count(Transaction.id),
+                    )
                 )
-            )
+            ),
+            date_from, date_to,
         ),
-        date_from, date_to,
+        current_user,
     )
     expense_sum, expense_count = session.exec(expense_q).one()
 
     # ── Savings (OUTFLOW to Asset Markets) ───────────────────────────────
-    savings_q = _date_where(
-        _analytics_only(
-            _savings_where(
-                select(func.coalesce(func.sum(Transaction.amount), 0.0))
-            )
+    savings_q = _for_user(
+        _date_where(
+            _analytics_only(
+                _savings_where(
+                    select(func.coalesce(func.sum(Transaction.amount), 0.0))
+                )
+            ),
+            date_from, date_to,
         ),
-        date_from, date_to,
+        current_user,
     )
     total_savings = round(float(session.exec(savings_q).one() or 0), 2)
 
@@ -237,6 +249,7 @@ def get_by_category(
     ),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """
     Spending (or income) ranked by counterparty_category.
@@ -249,10 +262,13 @@ def get_by_category(
     direction = direction.upper()
 
     # Build the base aggregation query
-    base = select(
-        Transaction.counterparty_category,
-        func.sum(Transaction.amount).label("total"),
-        func.count(Transaction.id).label("count"),
+    base = _for_user(
+        select(
+            Transaction.counterparty_category,
+            func.sum(Transaction.amount).label("total"),
+            func.count(Transaction.id).label("count"),
+        ),
+        current_user,
     )
     base = _date_where(base, date_from, date_to)
 
@@ -294,6 +310,7 @@ def get_top_counterparties(
     limit: int = Query(10, ge=1, le=50, description="Max number of counterparties to return."),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """
     Top merchants/payees ranked by total spend (OUTFLOW only).
@@ -306,18 +323,21 @@ def get_top_counterparties(
     date_from = date_from or df
     date_to = date_to or dt
 
-    q = _date_where(
-        _analytics_only(
-            _expense_where(
-                select(
-                    Transaction.counterparty,
-                    func.max(Transaction.counterparty_category).label("category"),
-                    func.sum(Transaction.amount).label("total"),
-                    func.count(Transaction.id).label("count"),
+    q = _for_user(
+        _date_where(
+            _analytics_only(
+                _expense_where(
+                    select(
+                        Transaction.counterparty,
+                        func.max(Transaction.counterparty_category).label("category"),
+                        func.sum(Transaction.amount).label("total"),
+                        func.count(Transaction.id).label("count"),
+                    )
                 )
-            )
+            ),
+            date_from, date_to,
         ),
-        date_from, date_to,
+        current_user,
     )
 
     q = (
@@ -350,6 +370,7 @@ def get_monthly_trend(
     ),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """
     Month-by-month income vs expense for the last N months.
@@ -372,11 +393,14 @@ def get_monthly_trend(
     month_col = func.strftime("%Y-%m", Transaction.txn_date)
 
     # ── Income by month ──────────────────────────────────────────────────
-    income_q = _analytics_only(
-        _income_where(
-            select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
-        )
-    ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+    income_q = _for_user(
+        _analytics_only(
+            _income_where(
+                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            )
+        ).where(Transaction.txn_date >= cutoff).group_by(month_col),
+        current_user,
+    )
 
     income_by_month: dict[str, float] = {
         row.month: float(row.total or 0)
@@ -384,11 +408,14 @@ def get_monthly_trend(
     }
 
     # ── Expense by month ─────────────────────────────────────────────────
-    expense_q = _analytics_only(
-        _expense_where(
-            select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
-        )
-    ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+    expense_q = _for_user(
+        _analytics_only(
+            _expense_where(
+                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            )
+        ).where(Transaction.txn_date >= cutoff).group_by(month_col),
+        current_user,
+    )
 
     expense_by_month: dict[str, float] = {
         row.month: float(row.total or 0)
@@ -396,11 +423,14 @@ def get_monthly_trend(
     }
 
     # ── Savings by month (OUTFLOW to Asset Markets) ───────────────────────
-    savings_q = _analytics_only(
-        _savings_where(
-            select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
-        )
-    ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+    savings_q = _for_user(
+        _analytics_only(
+            _savings_where(
+                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            )
+        ).where(Transaction.txn_date >= cutoff).group_by(month_col),
+        current_user,
+    )
 
     savings_by_month: dict[str, float] = {
         row.month: float(row.total or 0)
@@ -438,6 +468,7 @@ def get_negative_surplus_months(
     ),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """
     Months where spending exceeded income (net < 0).
@@ -459,22 +490,34 @@ def get_negative_surplus_months(
     income_by_month: dict[str, float] = {
         row.month: float(row.total or 0)
         for row in session.exec(
-            _analytics_only(
-                _income_where(
-                    select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
-                )
-            ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+            _for_user(
+                _analytics_only(
+                    _income_where(
+                        select(
+                            month_col.label("month"),
+                            func.sum(Transaction.amount).label("total"),
+                        )
+                    )
+                ).where(Transaction.txn_date >= cutoff).group_by(month_col),
+                current_user,
+            )
         ).all()
     }
 
     expense_by_month: dict[str, float] = {
         row.month: float(row.total or 0)
         for row in session.exec(
-            _analytics_only(
-                _expense_where(
-                    select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
-                )
-            ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+            _for_user(
+                _analytics_only(
+                    _expense_where(
+                        select(
+                            month_col.label("month"),
+                            func.sum(Transaction.amount).label("total"),
+                        )
+                    )
+                ).where(Transaction.txn_date >= cutoff).group_by(month_col),
+                current_user,
+            )
         ).all()
     }
 
@@ -504,6 +547,7 @@ def get_negative_surplus_months(
 def get_accounts_summary(
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """
     Per-account totals across all time.
@@ -522,14 +566,17 @@ def get_accounts_summary(
     ).label("total_outflow")
 
     q = (
-        _analytics_only(
-            select(
-                Transaction.account_id,
-                func.count(Transaction.id).label("txn_count"),
-                func.max(Transaction.txn_date).label("last_txn_date"),
-                inflow_col,
-                outflow_col,
-            )
+        _for_user(
+            _analytics_only(
+                select(
+                    Transaction.account_id,
+                    func.count(Transaction.id).label("txn_count"),
+                    func.max(Transaction.txn_date).label("last_txn_date"),
+                    inflow_col,
+                    outflow_col,
+                )
+            ),
+            current_user,
         )
         .group_by(Transaction.account_id)
         .order_by(Transaction.account_id)
@@ -570,6 +617,7 @@ def metrics_by_spend_category(
     date_to: datetime.date | None = Query(None),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ) -> list[SpendCategoryRow]:
     """Return OUTFLOW spending broken down by NEED / WANT / SAVING / INVESTMENT.
 
@@ -578,14 +626,17 @@ def metrics_by_spend_category(
 
     This powers the "Spending Breakdown" donut chart on the dashboard.
     """
-    q = _analytics_only(
-        select(
-            Transaction.spend_category,
-            func.sum(Transaction.amount).label("amount"),
-            func.count(Transaction.id).label("txn_count"),
-        )
-        .where(Transaction.direction == "OUTFLOW")
-        .where(Transaction.txn_type.not_in(["CARD_PAYMENT", "SELF_TRANSFER"]))  # type: ignore[union-attr]
+    q = _for_user(
+        _analytics_only(
+            select(
+                Transaction.spend_category,
+                func.sum(Transaction.amount).label("amount"),
+                func.count(Transaction.id).label("txn_count"),
+            )
+            .where(Transaction.direction == "OUTFLOW")
+            .where(Transaction.txn_type.not_in(["CARD_PAYMENT", "SELF_TRANSFER"]))  # type: ignore[union-attr]
+        ),
+        current_user,
     )
 
     if date_from:
@@ -630,35 +681,46 @@ def _adherence_month_labels(n: int = 4) -> list[str]:
     return list(reversed(out))
 
 
-def _total_expenses_month(session: Session, start: datetime.date, end: datetime.date) -> float:
-    q = _date_where(
-        _analytics_only(
-            _expense_where(select(func.coalesce(func.sum(Transaction.amount), 0.0)))
+def _total_expenses_month(
+    session: Session, start: datetime.date, end: datetime.date, user_id: str
+) -> float:
+    q = _for_user(
+        _date_where(
+            _analytics_only(
+                _expense_where(select(func.coalesce(func.sum(Transaction.amount), 0.0)))
+            ),
+            start,
+            end,
         ),
-        start,
-        end,
+        user_id,
     )
     return float(session.exec(q).one() or 0)
 
 
 def _investment_flows_month(
-    session: Session, start: datetime.date, end: datetime.date
+    session: Session, start: datetime.date, end: datetime.date, user_id: str
 ) -> tuple[float, float, float]:
     """Returns (purchases, sales, net) for the month window."""
-    pur_q = _analytics_only(
-        select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
-            Transaction.direction == "OUTFLOW",
-            col(Transaction.txn_type).in_(_PURCHASE_TXN_TYPES),
-        )
+    pur_q = _for_user(
+        _analytics_only(
+            select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
+                Transaction.direction == "OUTFLOW",
+                col(Transaction.txn_type).in_(_PURCHASE_TXN_TYPES),
+            )
+        ),
+        user_id,
     )
     pur_q = _date_where(pur_q, start, end)
     purchases = float(session.exec(pur_q).one() or 0)
 
-    sale_q = _analytics_only(
-        select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
-            Transaction.direction == "INFLOW",
-            col(Transaction.txn_type).in_(_SALE_TXN_TYPES),
-        )
+    sale_q = _for_user(
+        _analytics_only(
+            select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
+                Transaction.direction == "INFLOW",
+                col(Transaction.txn_type).in_(_SALE_TXN_TYPES),
+            )
+        ),
+        user_id,
     )
     sale_q = _date_where(sale_q, start, end)
     sales = float(session.exec(sale_q).one() or 0)
@@ -690,10 +752,13 @@ def get_goal_progress(
     goal_id: int = Query(..., description="Goal id to evaluate"),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     goal = session.get(Goal, goal_id)
     if not goal:
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
+    if goal.user_id != current_user:
+        raise HTTPException(status_code=403, detail="Goal belongs to another user")
 
     today = datetime.date.today()
     cur_start = today.replace(day=1)
@@ -701,11 +766,11 @@ def get_goal_progress(
     target = goal.target_amount
 
     if goal.goal_type == "INVESTMENT":
-        pur, sal, net = _investment_flows_month(session, cur_start, today)
+        pur, sal, net = _investment_flows_month(session, cur_start, today, current_user)
         current = net
         for ym in _adherence_month_labels(4):
             ms, me = _month_start_end(ym)
-            _, _, mnet = _investment_flows_month(session, ms, me)
+            _, _, mnet = _investment_flows_month(session, ms, me, current_user)
             if target is None or target <= 0:
                 adherence.append(AdherenceMonth(month=ym, hit=None, amount=mnet))
             else:
@@ -768,11 +833,12 @@ def get_investment_trend(
     months: int = Query(6, ge=1, le=36),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     out: list[InvestmentTrendRow] = []
     for ym in _generate_month_labels(months):
         ms, me = _month_start_end(ym)
-        pur, sal, net = _investment_flows_month(session, ms, me)
+        pur, sal, net = _investment_flows_month(session, ms, me, current_user)
         out.append(
             InvestmentTrendRow(
                 month=ym,
@@ -795,6 +861,7 @@ def get_expense_trend_stacked(
     months: int = Query(6, ge=1, le=36),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     today = datetime.date.today()
     base_total = today.year * 12 + (today.month - 1)
@@ -804,17 +871,20 @@ def get_expense_trend_stacked(
     month_col = func.strftime("%Y-%m", Transaction.txn_date)
 
     q = (
-        _analytics_only(
-            _expense_where(
-                select(
-                    month_col.label("month"),
-                    Transaction.spend_category,
-                    func.sum(Transaction.amount).label("total"),
-                ).where(col(Transaction.spend_category).in_(["NEED", "WANT"]))
+        _for_user(
+            _analytics_only(
+                _expense_where(
+                    select(
+                        month_col.label("month"),
+                        Transaction.spend_category,
+                        func.sum(Transaction.amount).label("total"),
+                    ).where(col(Transaction.spend_category).in_(["NEED", "WANT"]))
+                )
             )
+            .where(Transaction.txn_date >= cutoff)
+            .group_by(month_col, Transaction.spend_category),
+            current_user,
         )
-        .where(Transaction.txn_date >= cutoff)
-        .group_by(month_col, Transaction.spend_category)
     )
 
     buckets: dict[str, dict[str, float]] = {}
@@ -848,6 +918,7 @@ def get_category_trend(
     months: int = Query(6, ge=1, le=36),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     try:
         cond = category_trend_condition(series)
@@ -862,15 +933,19 @@ def get_category_trend(
     month_col = func.strftime("%Y-%m", Transaction.txn_date)
 
     q = (
-        _analytics_only(
-            _expense_where(
-                select(month_col.label("month"), func.sum(Transaction.amount).label("total")).where(
-                    cond
+        _for_user(
+            _analytics_only(
+                _expense_where(
+                    select(
+                        month_col.label("month"),
+                        func.sum(Transaction.amount).label("total"),
+                    ).where(cond)
                 )
             )
+            .where(Transaction.txn_date >= cutoff)
+            .group_by(month_col),
+            current_user,
         )
-        .where(Transaction.txn_date >= cutoff)
-        .group_by(month_col)
     )
     by_m = {row.month: float(row.total or 0) for row in session.exec(q).all()}
     return [
@@ -889,6 +964,7 @@ def get_top_expenses(
     ),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     today = datetime.date.today()
     if year_month:
@@ -898,12 +974,15 @@ def get_top_expenses(
         end = today
 
     q = (
-        _analytics_only(
-            _expense_where(select(Transaction).where(Transaction.amount >= threshold))
+        _for_user(
+            _analytics_only(
+                _expense_where(select(Transaction).where(Transaction.amount >= threshold))
+            )
+            .where(Transaction.txn_date >= start)
+            .where(Transaction.txn_date <= end)
+            .order_by(col(Transaction.amount).desc()),
+            current_user,
         )
-        .where(Transaction.txn_date >= start)
-        .where(Transaction.txn_date <= end)
-        .order_by(col(Transaction.amount).desc())
     )
     rows = session.exec(q).all()
     return [_txn_to_dict(t) for t in rows]
@@ -925,9 +1004,10 @@ def get_bar_drilldown(
     ),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     start, end = _month_start_end(month)
-    q = select(Transaction)
+    q = _for_user(select(Transaction), current_user)
 
     if chart == "investment_purchase":
         q = q.where(Transaction.direction == "OUTFLOW").where(

@@ -254,7 +254,9 @@ def ensure_holding_for_transaction(
         return None
 
     platform = (txn.account_platform or "").strip()
-    uid = user_id.strip() or "sashank"
+    uid = user_id.strip()
+    if not uid:
+        raise ValueError("user_id is required")
 
     if platform == _PLATFORM_ICICI_EQUITY:
         if not txn.symbol or not str(txn.symbol).strip():
@@ -336,7 +338,9 @@ def ensure_holding_for_transaction(
 
 def sync_holdings_for_user(session: Session, user_id: str) -> dict[str, Any]:
     """Run :func:`sync_holding_from_transactions` for every holding owned by ``user_id``."""
-    uid = user_id.strip() or "sashank"
+    uid = user_id.strip()
+    if not uid:
+        raise ValueError("user_id is required")
     rows = list(
         session.exec(select(Holding).where(Holding.user_id == uid)).all()
     )

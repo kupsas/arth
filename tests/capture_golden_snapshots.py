@@ -57,7 +57,7 @@ def _build_two_pass_cat_items(rows: list[dict]) -> list[dict]:
         ("UPI_EXPENSE", "Spotify"),
         ("UPI_EXPENSE", "Amazon"),
         ("UPI_EXPENSE", "Swiggy"),
-        ("INCOME_SALARY", "Sashank Sai Kuppa"),
+        ("INCOME_SALARY", "Rohan K Mehta"),
         ("UPI_EXPENSE", "Apollo Pharmacy"),
     ]
     items = []

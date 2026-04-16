@@ -46,7 +46,7 @@ def api_client(engine):
             yield session
 
     app.dependency_overrides[get_session] = _override_session
-    app.dependency_overrides[get_current_user] = lambda: "test_user"
+    app.dependency_overrides[get_current_user] = lambda: "sashank"
 
     import api.database as _db_mod
 
@@ -82,6 +82,7 @@ def _txn(
         content_hash=content_hash,
         txn_date=txn_date,
         account_id=account_id,
+        user_id="sashank",
         source_statement="t.csv",
         direction=direction,
         amount=amount,

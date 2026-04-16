@@ -48,7 +48,7 @@ def api_client(engine):
             yield session
 
     app.dependency_overrides[get_session] = _override_session
-    app.dependency_overrides[get_current_user] = lambda: "test_user"
+    app.dependency_overrides[get_current_user] = lambda: "u"
 
     import api.database as _db_mod
 
@@ -71,12 +71,14 @@ def _txn(
     direction: str = "OUTFLOW",
     exclude_from_analytics: bool = False,
     content_hash: str | None = None,
+    user_id: str = "u",
 ) -> Transaction:
     h = content_hash or f"h_{txn_date.isoformat()}_{amount}_{counterparty}"
     t = Transaction(
         content_hash=h,
         txn_date=txn_date,
         account_id="ACC1",
+        user_id=user_id,
         source_statement="s",
         direction=direction,
         amount=amount,
@@ -308,6 +310,7 @@ class TestSettingsAPI:
             content_hash="nocp",
             txn_date=datetime.date(2026, 1, 1),
             account_id="ACC1",
+            user_id="u",
             source_statement="s",
             direction="OUTFLOW",
             amount=100.0,

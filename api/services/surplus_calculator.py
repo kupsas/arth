@@ -24,6 +24,7 @@ from api.services.query_helpers import (
     _analytics_only,
     _date_where,
     _expense_where,
+    _for_user,
     _generate_month_labels,
 )
 
@@ -132,13 +133,13 @@ def _recurring_monthly_income(session: Session, user_id: str) -> tuple[float, li
 
 
 def _allowed_account_ids(session: Session, user_id: str) -> list[str]:
-    """Bank ``account_id`` values mapped to this user (empty = no txns / no accounts)."""
-    from api.services.account_user_map import user_id_for_account
-
-    rows = session.exec(select(Transaction.account_id).distinct()).all()
-    if not rows:
-        return []
-    return [aid for aid in rows if user_id_for_account(aid) == user_id]
+    """Distinct bank ``account_id`` values that have transactions for this user."""
+    rows = session.exec(
+        select(Transaction.account_id)
+        .where(Transaction.user_id == user_id)
+        .distinct()
+    ).all()
+    return [str(aid) for aid in rows if aid]
 
 
 def _expense_path_a_month(
@@ -146,11 +147,13 @@ def _expense_path_a_month(
     date_from: datetime.date,
     date_to: datetime.date,
     allowed_accounts: list[str],
+    user_id: str,
 ) -> float:
     """Path A: recurring-baseline expense from counterparty_category buckets."""
     if not allowed_accounts:
         return 0.0
     q = select(func.coalesce(func.sum(Transaction.amount), 0.0))
+    q = _for_user(q, user_id)
     q = _expense_where(q)
     q = _analytics_only(q)
     q = _date_where(q, date_from, date_to)
@@ -164,6 +167,7 @@ def _expense_need_want_month(
     date_from: datetime.date,
     date_to: datetime.date,
     allowed_accounts: list[str],
+    user_id: str,
 ) -> tuple[float, float]:
     """Path B: NEED and WANT sums for the month."""
     if not allowed_accounts:
@@ -172,6 +176,7 @@ def _expense_need_want_month(
     need_q = select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
         Transaction.spend_category == "NEED"
     )
+    need_q = _for_user(need_q, user_id)
     need_q = _expense_where(need_q)
     need_q = _analytics_only(need_q)
     need_q = _date_where(need_q, date_from, date_to)
@@ -180,6 +185,7 @@ def _expense_need_want_month(
     want_q = select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
         Transaction.spend_category == "WANT"
     )
+    want_q = _for_user(want_q, user_id)
     want_q = _expense_where(want_q)
     want_q = _analytics_only(want_q)
     want_q = _date_where(want_q, date_from, date_to)
@@ -233,8 +239,8 @@ def compute_surplus(
 
     for ym in labels:
         start, end = _month_start_end(ym)
-        exp_a = _expense_path_a_month(session, start, end, allowed)
-        need_b, want_b = _expense_need_want_month(session, start, end, allowed)
+        exp_a = _expense_path_a_month(session, start, end, allowed, user_id)
+        need_b, want_b = _expense_need_want_month(session, start, end, allowed, user_id)
         want_totals.append(want_b)
         s_a = round(monthly_income - exp_a, 2)
         month_details.append(
