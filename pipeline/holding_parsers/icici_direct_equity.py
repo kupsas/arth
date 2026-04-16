@@ -90,6 +90,7 @@ def _row_get(row: dict[str, str | None], *candidates: str) -> str:
 
 def _resolve_nse_symbol(*, isin: str | None, icici_short: str) -> str:
     from pipeline.icici_symbol_overrides import merge_with_disk
+    from pipeline.isin_nse_resolver import lookup_isin_from_nse_bhav
 
     iso_map = merge_with_disk(ISIN_TO_NSE_SYMBOL, "isin_to_nse")
     short_map = merge_with_disk(ICICI_SHORT_TO_NSE, "icici_short_to_nse")
@@ -98,6 +99,10 @@ def _resolve_nse_symbol(*, isin: str | None, icici_short: str) -> str:
         iso = isin.strip().upper()
         if iso in iso_map:
             return iso_map[iso]
+        # Full NSE-listed universe for the latest bhav session (UDIFF ISIN column).
+        sym_bhav = lookup_isin_from_nse_bhav(iso)
+        if sym_bhav:
+            return sym_bhav
     return short_map.get(u, u)
 
 
@@ -110,8 +115,8 @@ def resolve_icici_direct_nse_symbol(
     """Pick the DB/NSE bhav symbol for an equity leg (email PDFs + CSV ingest).
 
     **Priority:** explicit NSE ticker from a PDF column (e.g. *Trades executed at NSE*)
-    wins; else ISIN → :data:`ISIN_TO_NSE_SYMBOL`; else ICICI stock code →
-    :data:`ICICI_SHORT_TO_NSE`; else pass through uppercased broker code.
+    wins; else ISIN → static map / overrides; else ISIN → NSE bhavcopy table; else
+    ICICI stock code → :data:`ICICI_SHORT_TO_NSE`; else pass through uppercased broker code.
 
     Keeps holdings price refresh aligned with :func:`api.services.price_feed.canonical_nse_symbol`.
     """

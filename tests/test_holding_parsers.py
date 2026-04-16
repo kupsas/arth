@@ -20,6 +20,7 @@ from pipeline.holding_parsers.icici_direct_equity import (  # noqa: E402
     parse_annual_trade_csv,
     parse_icici_direct_equity_dir,
     parse_portfolio_summary_csv,
+    resolve_icici_direct_nse_symbol,
 )
 from pipeline.holding_parsers.icici_direct_mf import parse_icici_direct_mf_path  # noqa: E402
 from pipeline.holding_parsers.icici_ppf import parse_icici_ppf_csv  # noqa: E402
@@ -186,3 +187,12 @@ def test_ingest_holdings_round_trip_encrypted_folio(engine) -> None:
         row = session.exec(select(Holding).where(Holding.name == ph.name)).first()
         assert row is not None
         assert row.folio_number_encrypted == "12345"
+
+
+def test_resolve_icici_direct_nse_symbol_isin_bhav_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When static ISIN map misses, :func:`resolve_icici_direct_nse_symbol` uses bhav lookup."""
+    monkeypatch.setattr(
+        "pipeline.isin_nse_resolver.lookup_isin_from_nse_bhav",
+        lambda isin: "NEWSYM" if isin == "INE999Z01099" else None,
+    )
+    assert resolve_icici_direct_nse_symbol(isin="INE999Z01099", icici_short="UNKNOWN") == "NEWSYM"

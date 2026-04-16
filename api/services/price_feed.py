@@ -234,6 +234,29 @@ def fetch_mf_navs(
     return out
 
 
+def _bhav_isin_to_symbol(path: Path) -> dict[str, str]:
+    """Parse UDIFF equity bhavcopy into ``{ISIN: TCKRSYMB}`` (legacy cm bhav has no ISIN)."""
+    out: dict[str, str] = {}
+    with open(path, newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return out
+        hmap = {name.upper(): i for i, name in enumerate(header)}
+        if "ISIN" not in hmap or "TCKRSYMB" not in hmap:
+            return out
+        ii, ti = hmap["ISIN"], hmap["TCKRSYMB"]
+        for row in reader:
+            if len(row) <= max(ii, ti):
+                continue
+            isin = row[ii].strip().upper()
+            sym = row[ti].strip().upper()
+            if isin.startswith("IN") and len(isin) == 12 and sym:
+                out[isin] = sym
+    return out
+
+
 def _bhav_symbol_to_close(path: Path) -> dict[str, float]:
     """Parse NSE equity bhavcopy (legacy or UDIFF) into {SYMBOL: close}."""
     out: dict[str, float] = {}
@@ -291,6 +314,25 @@ def load_nse_equity_bhav_map(trade_date: datetime.date) -> dict[str, float] | No
         return None
     m = _bhav_symbol_to_close(Path(path))
     return m if m else None
+
+
+def load_nse_equity_bhav_isin_map(trade_date: datetime.date) -> dict[str, str] | None:
+    """Same bhav file as :func:`load_nse_equity_bhav_map`, but ``{ISIN: NSE symbol}``.
+
+    Returns ``None`` if the session file lacks ISIN/TCKRSYMB columns or looks incomplete.
+    Used to resolve broker ISINs not present in static maps.
+    """
+    nse = get_nse_client()
+    dt = datetime.datetime.combine(trade_date, datetime.time.min)
+    try:
+        path = nse.equityBhavcopy(dt)
+    except Exception as exc:
+        logger.debug("NSE bhavcopy (ISIN map) failed for %s: %s", trade_date, exc)
+        return None
+    m = _bhav_isin_to_symbol(Path(path))
+    if len(m) < _MIN_EQUITY_BHAV_SYMBOL_ROWS:
+        return None
+    return m
 
 
 def fetch_equity_closes_from_nse_bhav(

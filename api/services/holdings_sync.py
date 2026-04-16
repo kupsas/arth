@@ -3,7 +3,7 @@ Keep ``Holding`` rows aligned with linked ``InvestmentTransaction`` history.
 
 Call :func:`sync_holding_from_transactions` after any insert/update to investment
 transactions. Use :func:`ensure_holding_for_transaction` to auto-create a holding
-for orphan BUY/SIP rows on known platforms (ICICI Direct equity / MF).
+for orphan BUY/SIP rows when platform + symbol (or AMFI code) are sufficient.
 
 NPS holdings are skipped (valuation comes from ``HoldingValueSnapshot``, not txns).
 """
@@ -52,16 +52,24 @@ _OUTFLOW_QTY = frozenset(
     }
 )
 
-# Auto-create only for these platforms (matches linking / parsers).
-_PLATFORM_ICICI_EQUITY = "ICICI Direct"
-_PLATFORM_ICICI_MF = "ICICI Direct MF"
-
 _AUTOCREATE_TXN_TYPES = frozenset(
     {
         InvestmentTxnType.BUY.value,
         InvestmentTxnType.SIP.value,
     }
 )
+
+
+def _skip_autocreate_platform(platform: str) -> bool:
+    """PPF/NPS rows are never auto-created from market ledgers."""
+    p = platform.strip()
+    if not p:
+        return True
+    if p.endswith(" PPF") or p == "ICICI PPF":
+        return True
+    if p == "NPS (CRA)":
+        return True
+    return False
 
 
 def _position_quantity_delta(txn: InvestmentTransaction) -> float:
@@ -243,8 +251,8 @@ def ensure_holding_for_transaction(
     user_id: str,
 ) -> int | None:
     """
-    If ``txn`` has no ``holding_id`` and is BUY/SIP on ICICI Direct or ICICI Direct MF,
-    link to an existing holding or create one.
+    If ``txn`` has no ``holding_id`` and is BUY/SIP, link to an existing holding or
+    create one for any non-PPF/NPS platform (equity by NSE symbol, MF by AMFI code).
 
     Returns new ``holding_id`` if linked/created, else ``None``.
     """
@@ -257,61 +265,32 @@ def ensure_holding_for_transaction(
     uid = user_id.strip()
     if not uid:
         raise ValueError("user_id is required")
+    if _skip_autocreate_platform(platform):
+        return None
 
-    if platform == _PLATFORM_ICICI_EQUITY:
-        if not txn.symbol or not str(txn.symbol).strip():
-            logger.debug("ensure_holding: ICICI Direct txn %s has no symbol — skip", txn.id)
-            return None
-        sym = canonical_nse_symbol(txn.symbol)
-        existing = _find_equity_holding(session, user_id=uid, platform=platform, symbol=sym)
+    sym_raw = (str(txn.symbol).strip() if txn.symbol else "") or ""
+    amfi_from_notes = extract_amfi_scheme_code(txn.notes or "")
+    # AMFI scheme codes are numeric; avoid treating equity legs as MF just because notes
+    # mention a scheme code in parentheses.
+    if sym_raw.isdigit():
+        mf_code = sym_raw
+    elif not sym_raw and amfi_from_notes:
+        mf_code = amfi_from_notes
+    else:
+        mf_code = ""
+
+    if mf_code:
+        existing = _find_mf_holding_by_symbol(
+            session, user_id=uid, platform=platform, amfi_code=mf_code
+        )
         if existing and existing.id is not None:
             txn.holding_id = existing.id
             session.add(txn)
             return existing.id
 
-        name = (txn.notes or "").strip().split("\n")[0].strip() if txn.notes else sym
-        if not name:
-            name = sym
+        name = (txn.notes or "").strip().split("\n")[0].strip() if txn.notes else f"MF {mf_code}"
         h = Holding(
-            symbol=sym,
-            name=name[:512],
-            quantity=None,
-            asset_class=AssetClass.EQUITY.value,
-            account_platform=platform,
-            valuation_method=ValuationMethod.MARKET_PRICE.value,
-            liquidity_class=LiquidityClass.T_PLUS_1.value,
-            user_id=uid,
-            is_active=True,
-            notes="Auto-created from investment transaction ledger",
-        )
-        session.add(h)
-        session.flush()
-        if h.id is None:
-            return None
-        _today = datetime.datetime.now(datetime.UTC).date()
-        h.earliest_liquidity_date = compute_earliest_liquidity_date(session, h, _today)
-        session.add(h)
-        enrich_single_equity_classification(session, h)
-        txn.holding_id = h.id
-        session.add(txn)
-        return h.id
-
-    if platform == _PLATFORM_ICICI_MF:
-        code = (str(txn.symbol).strip() if txn.symbol else "") or extract_amfi_scheme_code(
-            txn.notes or ""
-        )
-        if not code:
-            logger.debug("ensure_holding: ICICI Direct MF txn %s has no AMFI code — skip", txn.id)
-            return None
-        existing = _find_mf_holding_by_symbol(session, user_id=uid, platform=platform, amfi_code=code)
-        if existing and existing.id is not None:
-            txn.holding_id = existing.id
-            session.add(txn)
-            return existing.id
-
-        name = (txn.notes or "").strip().split("\n")[0].strip() if txn.notes else f"MF {code}"
-        h = Holding(
-            symbol=code,
+            symbol=mf_code,
             name=name[:512],
             quantity=None,
             asset_class=AssetClass.MUTUAL_FUND.value,
@@ -333,7 +312,43 @@ def ensure_holding_for_transaction(
         session.add(txn)
         return h.id
 
-    return None
+    if not sym_raw:
+        logger.debug("ensure_holding: txn %s has no symbol — skip", txn.id)
+        return None
+
+    sym = canonical_nse_symbol(sym_raw)
+    existing = _find_equity_holding(session, user_id=uid, platform=platform, symbol=sym)
+    if existing and existing.id is not None:
+        txn.holding_id = existing.id
+        session.add(txn)
+        return existing.id
+
+    name = (txn.notes or "").strip().split("\n")[0].strip() if txn.notes else sym
+    if not name:
+        name = sym
+    h = Holding(
+        symbol=sym,
+        name=name[:512],
+        quantity=None,
+        asset_class=AssetClass.EQUITY.value,
+        account_platform=platform,
+        valuation_method=ValuationMethod.MARKET_PRICE.value,
+        liquidity_class=LiquidityClass.T_PLUS_1.value,
+        user_id=uid,
+        is_active=True,
+        notes="Auto-created from investment transaction ledger",
+    )
+    session.add(h)
+    session.flush()
+    if h.id is None:
+        return None
+    _today = datetime.datetime.now(datetime.UTC).date()
+    h.earliest_liquidity_date = compute_earliest_liquidity_date(session, h, _today)
+    session.add(h)
+    enrich_single_equity_classification(session, h)
+    txn.holding_id = h.id
+    session.add(txn)
+    return h.id
 
 
 def sync_holdings_for_user(session: Session, user_id: str) -> dict[str, Any]:
