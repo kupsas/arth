@@ -70,6 +70,9 @@ def build_email_parser_registry(
         "estatement@icicibank.com": [
             ICICIStatementEmailParser(icici_stmt),
         ],
+        "estatement@icici.bank.in": [
+            ICICIStatementEmailParser(icici_stmt),
+        ],
         "customernotification@icicibank.com": [
             ICICIStatementEmailParser(icici_stmt),
         ],

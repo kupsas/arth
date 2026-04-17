@@ -28,9 +28,23 @@ def test_can_parse_current_monthly_estatement(parser: ICICIStatementEmailParser)
     )
 
 
+def test_can_parse_current_monthly_estatement_bank_in(parser: ICICIStatementEmailParser) -> None:
+    assert parser.can_parse(
+        "estatement@icici.bank.in",
+        "ICICI Bank Statement from 01-03-2025 to 31-03-2025 for ...",
+    )
+
+
 def test_can_parse_legacy_monthly_estatement(parser: ICICIStatementEmailParser) -> None:
     assert parser.can_parse(
         "estatement@icicibank.com",
+        "Your Bank Statement for the period 01-08-2019 to 31-08-2019",
+    )
+
+
+def test_can_parse_legacy_monthly_estatement_bank_in(parser: ICICIStatementEmailParser) -> None:
+    assert parser.can_parse(
+        "estatement@icici.bank.in",
         "Your Bank Statement for the period 01-08-2019 to 31-08-2019",
     )
 

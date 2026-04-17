@@ -50,6 +50,8 @@ _NOISY_LIBS = [
     "openai",
     "apscheduler",
     "multipart",
+    # pdfminer.six (used by pdfplumber) logs every PDF operator at DEBUG.
+    "pdfminer",
 ]
 
 

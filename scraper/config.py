@@ -104,8 +104,13 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
     },
     # ICICI savings statement PDFs (password-protected attachment — not InstaAlerts).
-    # Monthly (current + legacy): often estatement@icicibank.com; annual FY: .com below.
+    # Monthly (current + legacy): estatement may use .com or .bank.in; annual FY: .com below.
     "estatement@icicibank.com": {
+        "parser_key": "icici_statement",
+        "accounts": _ICICI_STATEMENT_ACCOUNTS,
+        "first_run_lookback_days": 45,
+    },
+    "estatement@icici.bank.in": {
         "parser_key": "icici_statement",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,

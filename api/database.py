@@ -508,6 +508,75 @@ def _seed_desktop_prereq_defaults() -> None:
         logger.exception("Desktop prereq seed skipped or failed")
 
 
+def _sync_missing_bank_senders_from_config() -> None:
+    """Insert any ``BANK_SENDERS`` keys that exist in code but not yet in SQLite.
+
+    Initial scraper seed runs only when ``scraper_bank_senders`` is completely
+    empty, so new senders added to :data:`scraper.config.BANK_SENDERS` later would
+    otherwise never be polled. This runs on every ``init_db()`` and only adds
+    missing (user_id, sender_email) rows plus account mappings — idempotent.
+    """
+    from sqlmodel import Session, select
+
+    from api.models import ScraperAccountMapping, ScraperBankSender
+    from scraper.config import BANK_SENDERS
+
+    try:
+        with Session(_engine) as session:
+            # Only users who already use SQLite for scraper config (≥1 row).
+            # Others still get :data:`scraper.config.BANK_SENDERS` in memory — no merge needed.
+            all_rows = session.exec(select(ScraperBankSender)).all()
+            if not all_rows:
+                return
+
+            user_ids = {row.user_id for row in all_rows}
+
+            total_new = 0
+            for uid in sorted(user_ids):
+                existing = {
+                    r.sender_email.strip().lower()
+                    for r in session.exec(
+                        select(ScraperBankSender).where(ScraperBankSender.user_id == uid)
+                    ).all()
+                }
+                for sender_email, cfg in BANK_SENDERS.items():
+                    key = sender_email.strip().lower()
+                    if key in existing:
+                        continue
+                    pk = cfg.get("parser_key")
+                    session.add(
+                        ScraperBankSender(
+                            user_id=uid,
+                            sender_email=key,
+                            parser_key=str(pk) if pk else None,
+                            first_run_lookback_days=cfg.get("first_run_lookback_days"),
+                            enabled=True,
+                        )
+                    )
+                    accounts = cfg.get("accounts") or {}
+                    for last_4, acct in accounts.items():
+                        session.add(
+                            ScraperAccountMapping(
+                                user_id=uid,
+                                sender_email=key,
+                                last_4_digits=str(last_4),
+                                account_id=str(acct["account_id"]),
+                                source_key=str(acct["source_key"]),
+                            )
+                        )
+                    existing.add(key)
+                    total_new += 1
+
+            if total_new:
+                session.commit()
+                logger.info(
+                    "Synced %d new scraper_bank_senders row(s) from scraper.config.BANK_SENDERS",
+                    total_new,
+                )
+    except Exception:
+        logger.exception("Sync of new bank senders from config skipped or failed")
+
+
 def init_db() -> None:
     """Create all tables that don't already exist.
 
@@ -521,6 +590,7 @@ def init_db() -> None:
     SQLModel.metadata.create_all(_engine)
     _apply_sqlite_patches()
     _seed_desktop_prereq_defaults()
+    _sync_missing_bank_senders_from_config()
     _merge_starter_pack_for_all_users()
     # Phase A.5 — limit exposure of local secrets (SQLite file + Gmail OAuth token).
     _chmod_owner_rw_only(DB_PATH)

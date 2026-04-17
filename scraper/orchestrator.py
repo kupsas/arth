@@ -437,7 +437,7 @@ def scrape_new_emails(
         # ── Filter out already-processed emails ───────────────────────────────
         new_messages = [m for m in messages if m.id not in already_done]
         logger.debug(
-            "   %d total, %d already processed, %d new to process",
+            "   %d total, %d already in scraper ledger (dedup), %d new to process",
             len(messages), len(messages) - len(new_messages), len(new_messages),
         )
 
@@ -560,7 +560,7 @@ def run_historical_backfill(
         result.emails_found += len(messages)
         new_messages = [m for m in messages if m.id not in already_done]
         logger.debug(
-            "   %d total, %d already processed, %d new to process",
+            "   %d total, %d already in scraper ledger (dedup), %d new to process",
             len(messages),
             len(messages) - len(new_messages),
             len(new_messages),
