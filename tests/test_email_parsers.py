@@ -1,16 +1,17 @@
 """
 Unit tests for all four email alert parsers.
 
-Each test loads a real HTML fixture captured from a live bank email (stored in
-tests/fixtures/email_samples/) and asserts that the parser produces the correct
-ParsedTransaction output.
+Each test loads HTML fixtures under ``tests/fixtures/email_samples/`` (minimal
+synthetic bodies checked into git; replace via ``scripts/sync_email_parser_fixtures.py``
+when you need fresher bank templates) and asserts parsers emit the expected
+ParsedTransaction rows.
 
-Fixture map (from plan Step 3a discovery):
+Fixture map (filenames kept for paths; ``hdfc_upi_inbound_*`` = HDFC *Account update* template):
     alerts_hdfcbank_net_01.html          → HDFCUPIAlertParser         (UPI outbound ₹951)
     alerts_hdfcbank_net_02..05.html      → HDFCCreditCardAlertParser  (CC swipes, card 1905)
-    hdfc_upi_inbound_01.html             → HDFCAccountUpdateParser    (E-mandate — returns [])
-    hdfc_upi_inbound_02.html             → HDFCAccountUpdateParser    (UPI inbound ₹950 — 1 txn)
-    hdfc_upi_inbound_03.html             → HDFCAccountUpdateParser    (card settings — returns [])
+    hdfc_upi_inbound_01.html             → HDFCAccountUpdateParser    (e-mandate / NACH — not UPI txn → [])
+    hdfc_upi_inbound_02.html             → HDFCAccountUpdateParser    (UPI inbound credit ₹950 — 1 txn)
+    hdfc_upi_inbound_03.html             → HDFCAccountUpdateParser    (card settings — not UPI txn → [])
     icici_bank_in_01.html                → ICICINetBankingParser      (IMPS ₹1)
     icici_bank_in_02.html                → ICICINetBankingParser      (NEFT ₹1)
 """
@@ -34,13 +35,6 @@ from scraper.email_parsers.icici_bank import ICICINetBankingParser
 # ─── Shared constants ─────────────────────────────────────────────────────────
 
 FIXTURES = Path(__file__).parent / "fixtures" / "email_samples"
-
-# These tests require real bank email HTML samples which are gitignored (PII).
-# They run locally but are automatically skipped in CI where those files don't exist.
-pytestmark = pytest.mark.skipif(
-    not FIXTURES.exists(),
-    reason="email_samples fixtures not found (gitignored — local-only tests)",
-)
 
 # Parser instances — one per bank sender, built with the live config so account
 # lookups (last-4 → account_id) use the same values as production.
@@ -212,12 +206,13 @@ class TestHDFCCCAlert:
         assert t.ref_number is None
 
 
-# ─── HDFCAccountUpdateParser: E-mandate (hdfc_upi_inbound_01.html) ────────────
+# ─── HDFCAccountUpdateParser: e-mandate / NACH (hdfc_upi_inbound_01.html) ─────
 
 class TestHDFCEmandateSkipped:
     """
-    E-mandate emails reuse the "Account update" subject but contain NO amount.
-    The parser must return [] rather than raising an error.
+    Same *subject* bucket as UPI inbound ("Account update for your HDFC Bank A/c") but
+    this body is e-mandate / NACH registration — not a credited-to-savings UPI line.
+    Parser must return [] (no crash).
     """
 
     def test_emandate_returns_empty_list(self):
@@ -228,7 +223,7 @@ class TestHDFCEmandateSkipped:
 # ─── HDFCAccountUpdateParser: UPI inbound (hdfc_upi_inbound_02.html) ──────────
 
 class TestHDFCUPIInbound:
-    """UPI inbound credit of ₹950 from sahili.totale-1@okhdfcbank to account 3703."""
+    """UPI inbound credit of ₹950 (synthetic VPA / payee labels in the fixture HTML)."""
 
     def _parse(self):
         return HDFC_ACCT_PARSER.parse(_html("hdfc_upi_inbound_02.html"), RECEIVED)
@@ -247,10 +242,10 @@ class TestHDFCUPIInbound:
         assert self._parse()[0].txn_date == datetime.date(2026, 2, 2)
 
     def test_raw_description(self):
-        assert self._parse()[0].raw_description == "UPI: sahili.totale-1@okhdfcbank SAHILI TOTALE"
+        assert self._parse()[0].raw_description == "UPI: sender.demo@okhdfcbank EXAMPLE RECEIVER"
 
     def test_ref_number(self):
-        assert self._parse()[0].ref_number == "118054190455"
+        assert self._parse()[0].ref_number == "900112233445"
 
     def test_account_id(self):
         assert self._parse()[0].metadata["account_id"] == "HDFC_SAL_3703"
@@ -263,8 +258,9 @@ class TestHDFCUPIInbound:
 
 class TestHDFCCardSettingsSkipped:
     """
-    Card settings modification emails also carry the "Account update" subject.
-    They are NOT transactions — the parser must return [] silently.
+    Card / Visa settings emails use the same "Account update" subject as true UPI
+    credits, but the body is account-service copy only — not an inbound UPI line.
+    Parser returns [].
     """
 
     def test_card_settings_email_returns_empty_list(self):

@@ -75,21 +75,37 @@ _serializer = URLSafeTimedSerializer(_AUTH_SECRET_KEY)
 # ---------------------------------------------------------------------------
 
 def verify_credentials(username: str, password: str) -> bool:
-    """Return True if the username + password match the configured credentials.
+    """Return True if the username + password match stored credentials.
 
-    Uses bcrypt.checkpw which is timing-safe (constant time comparison).
-    We check username first with a plain equality check; if that fails we still
-    run bcrypt so the timing doesn't reveal whether the username was correct.
+    Prefer :class:`api.models.AppUser` rows when present (desktop / multi-user);
+    otherwise fall back to ``AUTH_USERNAME`` / ``AUTH_PASSWORD`` from ``.env``.
     """
+    try:
+        from sqlmodel import Session, select
+
+        from api.database import get_engine
+        from api.models import AppUser
+
+        with Session(get_engine()) as session:
+            user = session.exec(
+                select(AppUser).where(AppUser.username == username)
+            ).first()
+            if user is not None:
+                return bcrypt.checkpw(
+                    password.encode("utf-8"),
+                    user.password_hash.encode("utf-8"),
+                )
+    except Exception:
+        logger.debug("DB credential check failed", exc_info=True)
+
     username_ok = username == _AUTH_USERNAME
-    # Always run bcrypt even if username is wrong — avoids timing side-channel.
     password_ok = bcrypt.checkpw(password.encode("utf-8"), _PASSWORD_HASH)
     return username_ok and password_ok
 
 
-def create_session_token() -> str:
+def create_session_token(username: str) -> str:
     """Create a signed, time-limited session token containing the username."""
-    return _serializer.dumps(_AUTH_USERNAME)
+    return _serializer.dumps(username)
 
 
 def verify_session_token(token: str) -> str:

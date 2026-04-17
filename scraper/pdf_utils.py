@@ -19,12 +19,8 @@ from pathlib import Path
 
 import pikepdf
 
-# Env var names (values live only in ``.env``, never in code). See ``.env.example``
-# and ``docs/personal-data/email-parsers-subject.txt`` for which password goes with
-# which email type.
-#   HDFC_STATEMENT_PASSWORD, HDFC_CC_STATEMENT_PASSWORD
-#   ICICI_STATEMENT_MONTHLY_PASSWORD, ICICI_STATEMENT_ANNUAL_PASSWORD
-#   ICICI_DIRECT_EMAIL_PASSWORD, NSE_TRADES_EXECUTED_PASSWORD
+# Password resolution for statement PDFs is centralized in ``scraper/pdf_passwords.py``
+# (env-key chains + UserSecrets). This module only decrypts bytes given a password string.
 
 
 def decrypt_pdf(pdf_bytes: bytes, password: str) -> Path:

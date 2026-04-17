@@ -3,7 +3,7 @@ One-shot (or cron) backfill of holdings classification columns.
 
 Fills:
   - Mutual funds: ``fund_category``, ``fund_house`` from AMFI NAVAll.txt
-  - Equities / ESOP: ``sector`` from NSE, ``market_cap_class`` from a manual map
+  - Equities / ESOP: ``sector`` from NSE, ``market_cap_class`` from ``pipeline.market_cap_data`` (+ optional JSON)
 
 Prereq: API ``init_db()`` has run so SQLite patches added the columns (or fresh DB).
 

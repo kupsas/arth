@@ -82,7 +82,7 @@ def classify_llm(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]
 
     if llm_model == "auto":
         model_chain = LLM_FALLBACK_CHAIN
-        logger.info("LLM: auto mode — fallback chain: %s", " → ".join(model_chain))
+        logger.debug("LLM: auto mode — fallback chain: %s", " → ".join(model_chain))
     else:
         if llm_model not in LLM_MODEL_MAP:
             raise ValueError(
@@ -128,8 +128,12 @@ def _call_with_fallback(
             response = _call_llm(provider, model_id, system_msg, user_msg)
             results = _parse_response(response.text)
             if results:
-                logger.info("LLM: ✓ %s (%d+%d tokens)",
-                            model_key, response.input_tokens, response.output_tokens)
+                logger.debug(
+                    "LLM: ✓ %s (%d+%d tokens)",
+                    model_key,
+                    response.input_tokens,
+                    response.output_tokens,
+                )
                 return results
             logger.warning("LLM: %s returned empty/unparseable response, trying next...", model_key)
         except Exception as e:

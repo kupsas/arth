@@ -7,7 +7,7 @@ parse subjects that clearly identify the **combined** product).
 
 Steps:
   1. Match subject (see :meth:`HDFCCombinedStatementEmailParser.can_parse`).
-  2. Decrypt attachment with ``HDFC_STATEMENT_PASSWORD`` (see repo ``.env`` reference).
+  2. Decrypt attachment with passwords from :mod:`scraper.pdf_passwords` (see ``.env``).
   3. Parse with :class:`~pipeline.parsers.hdfc_savings_pdf.HDFCSavingsPdfParser`.
   4. Stamp ``account_id`` / ``source_key`` for savings **3703** from the scraper config
      (same tail-key pattern as InstaAlerts).
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 from typing import ClassVar
 
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
@@ -25,6 +24,10 @@ import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.hdfc_savings_pdf import HDFCSavingsPdfParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from scraper.pdf_passwords import (
+    HDFC_COMBINED_STATEMENT_PASSWORD_KEYS,
+    resolve_pdf_password_chain,
+)
 from scraper.pdf_utils import decrypt_pdf
 
 logger = logging.getLogger(__name__)
@@ -50,9 +53,12 @@ class HDFCCombinedStatementEmailParser(BaseStatementEmailParser):
         email_sender: str = "",
         email_subject: str = "",
     ) -> list[ParsedTransaction]:
-        password = os.getenv("HDFC_STATEMENT_PASSWORD", "").strip()
+        password = resolve_pdf_password_chain(*HDFC_COMBINED_STATEMENT_PASSWORD_KEYS)
         if not password:
-            logger.error("HDFC_STATEMENT_PASSWORD is not set — cannot decrypt HDFC combined PDF.")
+            logger.error(
+                "HDFC statement PDF password not set — configure %s (see .env).",
+                " or ".join(HDFC_COMBINED_STATEMENT_PASSWORD_KEYS),
+            )
             return []
 
         # Single savings account in config: last four digits of the account number (3703).

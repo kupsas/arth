@@ -1,5 +1,7 @@
 # SQLCipher evaluation (Work Stream A.5)
 
+**Decision (March 2026): not adopted.** Arth stays on stock SQLite with a plaintext `.db` file; protect the machine and backups instead. This document records the trade study only.
+
 **Date:** March 2026  
 **Context:** Arth stores personal finance data in SQLite (`data/arth.db`). Phase A introduced Fernet encryption for a few PII columns on `holdings`; the database file itself remains unencrypted at rest.
 

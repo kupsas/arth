@@ -5,8 +5,8 @@ Strategy:
   - GmailClient is injected as a MagicMock — no real Gmail API calls.
   - In-memory SQLite (StaticPool) — no filesystem side-effects.
   - LLM is disabled by patching pipeline.config.LLM_MODEL = "none".
-  - Real HTML fixture files are used for email bodies so we test the full
-    parse → transform → classify → write pipeline end-to-end.
+  - HTML fixture files under ``tests/fixtures/email_samples/`` supply email bodies
+    so we exercise the full parse → transform → classify → write path end-to-end.
 
 Four key scenarios:
   1. Transaction email  → ProcessedEmail(status='processed') + Transaction(source_type='email')
@@ -31,13 +31,6 @@ from scraper.gmail_client import GmailMessage
 from scraper.orchestrator import scrape_new_emails
 
 FIXTURES = Path(__file__).parent / "fixtures" / "email_samples"
-
-# These tests require real bank email HTML samples which are gitignored (PII).
-# They run locally but are automatically skipped in CI where those files don't exist.
-pytestmark = pytest.mark.skipif(
-    not FIXTURES.exists(),
-    reason="email_samples fixtures not found (gitignored — local-only tests)",
-)
 
 # Sender addresses that appear in ALL_SENDERS (scraper/config.py)
 HDFC_SENDER  = "alerts@hdfcbank.net"
@@ -142,13 +135,18 @@ class TestTransactionEmailProcessed:
         assert txn.source_type == "email"
 
     def test_transaction_is_unreviewed(self, session):
-        """Email-sourced transactions enter as unreviewed so they appear in the review queue."""
+        """Email-sourced transactions default to unreviewed unless auto-review applies.
+
+        High-confidence rules can set ``is_reviewed=True`` (see ``should_auto_review_email``);
+        patch that off here so this test stays focused on the review-queue path.
+        """
         html = (FIXTURES / "alerts_hdfcbank_net_01.html").read_text()
         msg = _make_msg()
         client = _sender_client(HDFC_SENDER, [msg], body=html)
 
         with patch("pipeline.config.LLM_MODEL", "none"):
-            scrape_new_emails(session=session, client=client)
+            with patch("pipeline.db_writer.should_auto_review_email", return_value=False):
+                scrape_new_emails(session=session, client=client)
 
         txn = session.exec(select(Transaction)).first()
         assert txn.is_reviewed is False

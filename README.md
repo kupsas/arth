@@ -35,8 +35,8 @@ cp .env.example .env
 # 3. Load your bank statements into the database
 python3 -m pipeline.run --all-sources
 
-# 4. Start the API server
-python3 -m uvicorn api.main:app --port 8000 --reload
+# 4. Start the API server (omit access logs for a quieter terminal)
+python3 -m uvicorn api.main:app --port 8000 --reload --no-access-log
 # Swagger UI → http://localhost:8000/docs
 
 # 5. Start the dashboard
@@ -44,7 +44,9 @@ cd dashboard && npm install && npm run dev
 # Dashboard → http://localhost:3000
 ```
 
-For Gmail email scraper setup, see [`scraper/README.md`](scraper/README.md).
+**Where logs go:** application messages from the API, scraper, and scheduled jobs share one setup — see [Logs and terminals](api/README.md#logs-and-terminals) in `api/README.md`. On-disk detail logs: `data/logs/arth.log` (the `data/logs/` folder is kept; `*.log` files are gitignored).
+
+For Gmail email scraper setup, see [`scraper/README.md`](scraper/README.md). **Ingestion policy:** email scraping is primary; file pipeline and uploads are explicit fallbacks — details in [`docs/system-design/INGESTION_PATHS.md`](docs/system-design/INGESTION_PATHS.md).
 
 ---
 

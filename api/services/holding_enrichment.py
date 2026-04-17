@@ -4,8 +4,8 @@ Fill optional classification fields on ``Holding`` rows for the holdings UI (Pha
 **Equity / ESOP / listed gold sleeve (NSE ticker)**
 - ``sector`` — NSE ``equityMetaInfo`` → ``industry``, **or** ``"ETF"`` for symbols ending
   in ``ETF`` / ``BEES`` (throttled ~3 req/s).
-- ``market_cap_class`` — manual NSE-symbol map for now (AMFI cap list is often PDF;
-  replace with a downloaded table when you automate it).
+- ``market_cap_class`` — :class:`api.models.NseEquityReference` when populated by
+  ``refresh_nse_equity_reference``, else :mod:`pipeline.market_cap_data` / overrides JSON.
 
 **Mutual funds**
 - ``fund_category`` / ``fund_house`` — parsed from AMFI ``NAVAll.txt`` section headers
@@ -27,7 +27,8 @@ from typing import Any
 import httpx
 from sqlmodel import Session, col, select
 
-from api.models import Holding
+from api.models import Holding, NseEquityReference
+from pipeline.market_cap_data import market_cap_for_symbol
 from api.services.price_feed import (
     AMFI_NAV_ALL_URL,
     canonical_nse_symbol,
@@ -44,33 +45,6 @@ _NSE_META_MIN_INTERVAL_SEC = 0.34
 # Listed ETF / ETF-like NSE symbols — NSE ``industry`` is often wrong ("Mutual Fund Scheme").
 # Override sector for UI grouping (not an exchange classification).
 SECTOR_LABEL_ETF = "ETF"
-
-# ---------------------------------------------------------------------------
-# Market cap — pragmatic manual seed keyed by canonical NSE symbol.
-# SEBI large/mid/small definitions move over time; refresh when you add names.
-# ---------------------------------------------------------------------------
-_MANUAL_NSE_MARKET_CAP: dict[str, str] = {
-    "APOLLOTYRE": "MID_CAP",
-    "BEL": "LARGE_CAP",
-    "BHEL": "MID_CAP",
-    "HDFCBANK": "LARGE_CAP",
-    "INDIGO": "LARGE_CAP",
-    "IOC": "LARGE_CAP",
-    "KANSAINER": "MID_CAP",
-    "LT": "LARGE_CAP",
-    "MINDACORP": "SMALL_CAP",
-    "RELIANCE": "LARGE_CAP",
-    "STOONE": "SMALL_CAP",
-    "TATAPOWER": "LARGE_CAP",
-    "ZENSARTECH": "SMALL_CAP",
-    # NSE *Trades executed* PDFs / portfolio adds (bhav ticker = key).
-    "BHARTIARTL": "LARGE_CAP",
-    "TATASTEEL": "LARGE_CAP",
-    # Listed gold/silver ETFs — SEBI large/mid/small is equity-fund jargon; tag as large for UI consistency.
-    "GOLDIETF": "LARGE_CAP",
-    "SILVERIETF": "LARGE_CAP",
-}
-
 
 def _normalize_amfi_category_label(raw: str | None) -> str | None:
     """Turn ``Open Ended Schemes(Foo Bar)`` into ``Foo Bar`` for cleaner UI."""
@@ -194,6 +168,7 @@ def enrich_mutual_funds_from_amfi(
 
 
 def _apply_equity_sector_and_cap(
+    session: Session,
     h: Holding,
     nse: Any,
     *,
@@ -201,13 +176,17 @@ def _apply_equity_sector_and_cap(
     throttle: bool,
     last_call_ref: list[float],
 ) -> None:
-    """Set ``market_cap_class``, then ``sector`` (ETF label or NSE industry). Mutates ``h``."""
+    """Set ``market_cap_class``, then ``sector`` (cached NSE ref, ETF label, or live meta)."""
     rep = report
     sym_raw = (h.symbol or "").strip()
     nse_sym = canonical_nse_symbol(sym_raw)
 
+    ref = session.get(NseEquityReference, nse_sym)
+
     cap_changed = False
-    cap = _MANUAL_NSE_MARKET_CAP.get(nse_sym)
+    cap = ref.market_cap_class if ref and ref.market_cap_class else None
+    if cap is None:
+        cap = market_cap_for_symbol(nse_sym)
     if cap is not None and h.market_cap_class != cap:
         h.market_cap_class = cap
         cap_changed = True
@@ -223,9 +202,20 @@ def _apply_equity_sector_and_cap(
         last_call_ref[0] = time.monotonic()
 
     sector_changed = False
+    cached_industry = (
+        ref.industry.strip()
+        if ref and ref.industry and isinstance(ref.industry, str) and ref.industry.strip()
+        else None
+    )
     if is_listed_etf_nse_symbol(nse_sym):
         if h.sector != SECTOR_LABEL_ETF:
             h.sector = SECTOR_LABEL_ETF
+            sector_changed = True
+            if rep is not None:
+                rep.equities_sector_updated += 1
+    elif cached_industry:
+        if h.sector != cached_industry:
+            h.sector = cached_industry
             sector_changed = True
             if rep is not None:
                 rep.equities_sector_updated += 1
@@ -274,7 +264,7 @@ def backfill_etf_sector_labels(session: Session) -> int:
 
 
 def enrich_single_equity_classification(session: Session, h: Holding) -> None:
-    """Classify one equity / ESOP / listed-gold-ETF holding (sector + manual cap).
+    """Classify one equity / ESOP / listed-gold-ETF holding (sector + cap bucket).
 
     Safe to call after auto-create or CSV ingest; no-op if the row is not eligible.
     """
@@ -283,7 +273,7 @@ def enrich_single_equity_classification(session: Session, h: Holding) -> None:
     nse = get_nse_client()
     last_ref = [0.0]
     _apply_equity_sector_and_cap(
-        h, nse, report=None, throttle=True, last_call_ref=last_ref
+        session, h, nse, report=None, throttle=True, last_call_ref=last_ref
     )
     session.add(h)
 
@@ -294,7 +284,7 @@ def enrich_equities_from_nse(
     user_id: str | None = None,
     report: EnrichmentReport | None = None,
 ) -> None:
-    """Set ``sector`` via NSE (or ETF label) and ``market_cap_class`` via manual map."""
+    """Set ``sector`` via NSE (or ETF label) and ``market_cap_class`` via :func:`market_cap_for_symbol`."""
     rep = report if report is not None else EnrichmentReport()
     q = select(Holding).where(
         Holding.is_active == True,  # noqa: E712
@@ -316,7 +306,7 @@ def enrich_equities_from_nse(
 
     for h in holdings:
         _apply_equity_sector_and_cap(
-            h, nse, report=rep, throttle=True, last_call_ref=last_ref
+            session, h, nse, report=rep, throttle=True, last_call_ref=last_ref
         )
         session.add(h)
 

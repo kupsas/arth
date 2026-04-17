@@ -247,3 +247,29 @@ export function txnTypeLabel(txnType: TxnType | string | null | undefined): stri
   return labels[txnType] ?? txnType
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Email-ingest review confidence (HIGH / MEDIUM / LOW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Tailwind classes for a small confidence badge on review cards and the edit sheet. */
+export function reviewConfidenceBadgeClass(
+  tier: string | null | undefined,
+): string {
+  switch (tier) {
+    case "HIGH":
+      return "border border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+    case "MEDIUM":
+      return "border border-amber-500/30 bg-amber-500/15 text-amber-800 dark:text-amber-300"
+    case "LOW":
+      return "border border-rose-500/30 bg-rose-500/15 text-rose-700 dark:text-rose-400"
+    default:
+      return "border border-border bg-muted text-muted-foreground"
+  }
+}
+
+/** Short label for accessibility and tooltips. */
+export function reviewConfidenceLabel(tier: string | null | undefined): string {
+  if (!tier) return "Not scored (pre-feature or statement import)"
+  return `${tier} review confidence`
+}
+

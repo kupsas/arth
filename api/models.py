@@ -14,6 +14,7 @@ Tables:
   - InflationRate     — cached CPI / sector inflation (Goals architecture V2)
   - LifeEvent         — flags for activation DSL (event:...) (Phase B.0)
   - Holding           — portfolio position snapshot (Phase A.0)
+  - NseEquityReference — cached NSE index + bhav snapshot per ticker (cap / industry / instrument kind)
   - InvestmentTransaction — broker/fund ledger rows (Phase A.0)
   - Liability         — loans and recurring obligations (Phase A.0)
   - Price             — daily close/NAV per symbol (Phase A.0)
@@ -36,7 +37,7 @@ Design notes:
 
 import datetime
 
-from sqlalchemy import Column, Index
+from sqlalchemy import Column, Index, String, Text
 from sqlmodel import Field, SQLModel
 
 from api.services.encryption import EncryptedStr
@@ -148,6 +149,9 @@ class Transaction(SQLModel, table=True):
 
     # Provenance of last automated classification (RULES_* / LLM); USER_REVIEWED when edited in UI.
     classification_source: str | None = Field(default=None, index=True)
+
+    # HIGH | MEDIUM | LOW — how much manual review this email-sourced row likely needs.
+    review_confidence: str | None = Field(default=None, index=True)
 
     # ── Phase A.0: link bank rows (e.g. INCOME_DIVIDEND) to a holding ────────
     holding_id: int | None = Field(default=None, foreign_key="holdings.id")
@@ -617,6 +621,43 @@ class Holding(SQLModel, table=True):
 
 
 # ───────────────────────────────────────────────────────────────────────────
+# NseEquityReference — Nifty index + full CM bhav snapshot (cap, industry, instrument kind)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class NseEquityReference(SQLModel, table=True):
+    """One row per NSE **ticker** in the CM bhav universe — populated by ``refresh_nse_equity_reference``.
+
+    The bhav file mixes common stock with NCDs, G-Secs, SGBs, T-bills, InvITs, REITs, etc.
+    ``instrument_kind`` captures that coarse classification (from ``SCTYSRS`` / series).
+
+    ``market_cap_class`` is **only** set for ``instrument_kind=EQUITY``: NIFTY 100 →
+    ``LARGE_CAP``, NIFTY MIDCAP 150 → ``MID_CAP``, other equity-style bhav rows →
+    ``SMALL_CAP``. Non-equities use ``NULL`` here so enrichment does not treat them as small-cap stocks.
+
+    ``reference_json`` stores ``{"index_row": ..., "bhav_row": ...}`` (either side may
+    be null) so future features can read extra NSE fields without new migrations.
+    """
+
+    __tablename__ = "nse_equity_reference"
+
+    symbol: str = Field(primary_key=True, max_length=32)
+    # NULL when the row is not a classified equity (bonds, REITs, etc.).
+    market_cap_class: str | None = Field(default=None, max_length=16, index=True)
+    # Coarse instrument bucket from bhav ``SCTYSRS`` (e.g. EQUITY, REIT, NCD, SGB, …).
+    instrument_kind: str = Field(default="UNKNOWN", max_length=24, index=True)
+    company_name: str | None = Field(default=None, max_length=512)
+    industry: str | None = Field(default=None, max_length=256)
+    isin: str | None = Field(default=None, max_length=16, index=True)
+    last_price: float | None = None
+    ffmc: float | None = None
+    reference_json: str = Field(sa_column=Column(Text, nullable=False))
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
 # InvestmentTransaction — trades, SIPs, switches (Phase A.0)
 # ───────────────────────────────────────────────────────────────────────────
 
@@ -786,5 +827,88 @@ class UserClassificationSettings(SQLModel, table=True):
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
     updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Desktop prep — DB-backed Gmail/scraper config, local users, PDF secrets
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class AppUser(SQLModel, table=True):
+    """Local login identity (replaces single-user .env-only auth when present)."""
+
+    __tablename__ = "app_users"
+
+    id: int | None = Field(default=None, primary_key=True)
+    username: str = Field(unique=True, index=True)
+    password_hash: str = Field(sa_column=Column(String(128)))
+    # NULL until first-run setup wizard completes (banks + OAuth + optional secrets).
+    setup_completed_at: datetime.datetime | None = None
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class UserSecrets(SQLModel, table=True):
+    """Encrypted JSON map of env-style PDF/API secret keys → values (see scraper/pdf_utils)."""
+
+    __tablename__ = "user_secrets"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(unique=True, index=True)
+    secrets_json: str | None = Field(
+        default=None,
+        sa_column=Column("secrets_json", EncryptedStr(), nullable=True),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class ScraperBankSender(SQLModel, table=True):
+    """One row per Gmail From address the scraper should poll for a user."""
+
+    __tablename__ = "scraper_bank_senders"
+    __table_args__ = (
+        Index("ix_scraper_bank_senders_user_sender", "user_id", "sender_email", unique=True),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(index=True)
+    # Normalised lower-case address, e.g. alerts@hdfcbank.net
+    sender_email: str = Field(index=True)
+    # Optional tag for tooling; routing still uses sender_email → parser registry.
+    parser_key: str | None = None
+    first_run_lookback_days: int | None = None
+    enabled: bool = Field(default=True)
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class ScraperAccountMapping(SQLModel, table=True):
+    """Maps last-4 (per sender) to pipeline account_id + source_key for a user."""
+
+    __tablename__ = "scraper_account_mappings"
+    __table_args__ = (
+        Index(
+            "uq_scraper_acct_map_user_sender_l4",
+            "user_id",
+            "sender_email",
+            "last_4_digits",
+            unique=True,
+        ),
+        Index("ix_scraper_acct_map_account_id", "account_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(index=True)
+    sender_email: str = Field(index=True)
+    last_4_digits: str = Field(index=True)
+    account_id: str = Field(index=True)
+    source_key: str
+    created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )

@@ -60,6 +60,114 @@ def _index_exists(conn, name: str) -> bool:
     return row is not None
 
 
+def _table_exists(conn, table: str) -> bool:
+    row = conn.execute(
+        text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :t LIMIT 1"),
+        {"t": table},
+    ).fetchone()
+    return row is not None
+
+
+def _migrate_nse_equity_reference_schema(conn) -> None:
+    """Align ``nse_equity_reference`` with newer ORM: nullable cap + ``instrument_kind``.
+
+    Older DBs stored ``market_cap_class`` as NOT NULL; we need NULL for non-equities.
+    SQLite cannot relax NOT NULL in-place, so we rebuild when that column is still strict.
+    """
+    if not _table_exists(conn, "nse_equity_reference"):
+        return
+    info_rows = conn.execute(text("PRAGMA table_info(nse_equity_reference)")).fetchall()
+    cols = {r[1]: r for r in info_rows}
+    mc = cols.get("market_cap_class")
+    mc_not_null = mc is not None and mc[3] == 1
+    has_kind = "instrument_kind" in cols
+
+    if has_kind and not mc_not_null:
+        return
+
+    if not mc_not_null and not has_kind:
+        conn.execute(
+            text(
+                "ALTER TABLE nse_equity_reference ADD COLUMN instrument_kind "
+                "TEXT NOT NULL DEFAULT 'UNKNOWN'"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_nse_equity_reference_instrument_kind "
+                "ON nse_equity_reference (instrument_kind)"
+            )
+        )
+        return
+
+    insert_cols = [
+        "symbol",
+        "market_cap_class",
+        "instrument_kind",
+        "company_name",
+        "industry",
+        "isin",
+        "last_price",
+        "ffmc",
+        "reference_json",
+        "updated_at",
+    ]
+    select_bits: list[str] = []
+    for c in insert_cols:
+        if c == "instrument_kind":
+            select_bits.append(
+                "COALESCE(instrument_kind, 'UNKNOWN')" if has_kind else "'UNKNOWN'"
+            )
+        else:
+            select_bits.append(c)
+
+    conn.execute(text("DROP TABLE IF EXISTS nse_equity_reference__mig"))
+    conn.execute(
+        text(
+            """
+            CREATE TABLE nse_equity_reference__mig (
+                symbol TEXT NOT NULL PRIMARY KEY,
+                market_cap_class TEXT,
+                instrument_kind TEXT NOT NULL DEFAULT 'UNKNOWN',
+                company_name TEXT,
+                industry TEXT,
+                isin TEXT,
+                last_price REAL,
+                ffmc REAL,
+                reference_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            f"INSERT INTO nse_equity_reference__mig ({', '.join(insert_cols)}) "
+            f"SELECT {', '.join(select_bits)} FROM nse_equity_reference"
+        )
+    )
+    conn.execute(text("DROP TABLE nse_equity_reference"))
+    conn.execute(text("ALTER TABLE nse_equity_reference__mig RENAME TO nse_equity_reference"))
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_nse_equity_reference_market_cap_class "
+            "ON nse_equity_reference (market_cap_class)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_nse_equity_reference_isin "
+            "ON nse_equity_reference (isin)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_nse_equity_reference_instrument_kind "
+            "ON nse_equity_reference (instrument_kind)"
+        )
+    )
+
+
 def _backfill_goal_chart_keys(conn) -> None:
     """One-time style updates: map legacy goals to dashboard chart_key (idempotent)."""
     if not _column_exists(conn, "goals", "chart_key"):
@@ -314,6 +422,10 @@ def _apply_sqlite_patches() -> None:
 
         if not _column_exists(conn, "transactions", "classification_source"):
             conn.execute(text("ALTER TABLE transactions ADD COLUMN classification_source TEXT"))
+        if not _column_exists(conn, "transactions", "review_confidence"):
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN review_confidence TEXT"))
+
+        _migrate_nse_equity_reference_schema(conn)
 
 
 def _merge_starter_pack_for_all_users() -> None:
@@ -336,6 +448,66 @@ def _chmod_owner_rw_only(path: Path) -> None:
         pass
 
 
+def _seed_desktop_prereq_defaults() -> None:
+    """Seed app_users + scraper config from env / scraper.config when tables are empty."""
+    import bcrypt
+    from sqlmodel import Session, select
+
+    from api.models import AppUser, ScraperAccountMapping, ScraperBankSender
+    from scraper.config import BANK_SENDERS
+
+    try:
+        with Session(_engine) as session:
+            if session.exec(select(AppUser)).first() is None:
+                raw_user = (os.getenv("AUTH_USERNAME") or "sashank").strip()
+                raw_pw = (os.getenv("AUTH_PASSWORD") or "").strip()
+                if raw_pw:
+                    pw_hash = bcrypt.hashpw(
+                        raw_pw.encode("utf-8"),
+                        bcrypt.gensalt(rounds=12),
+                    ).decode("ascii")
+                    session.add(
+                        AppUser(
+                            username=raw_user,
+                            password_hash=pw_hash,
+                            setup_completed_at=None,
+                        )
+                    )
+                    session.commit()
+                    logger.info("Seeded default app_users row for %r", raw_user)
+
+            if session.exec(select(ScraperBankSender)).first() is None:
+                uid = (os.getenv("AUTH_USERNAME") or "sashank").strip()
+                for sender_email, cfg in BANK_SENDERS.items():
+                    pk = cfg.get("parser_key")
+                    session.add(
+                        ScraperBankSender(
+                            user_id=uid,
+                            sender_email=sender_email.strip().lower(),
+                            parser_key=str(pk) if pk else None,
+                            first_run_lookback_days=cfg.get("first_run_lookback_days"),
+                            enabled=True,
+                        )
+                    )
+                    accounts = cfg.get("accounts") or {}
+                    for last_4, acct in accounts.items():
+                        session.add(
+                            ScraperAccountMapping(
+                                user_id=uid,
+                                sender_email=sender_email.strip().lower(),
+                                last_4_digits=str(last_4),
+                                account_id=str(acct["account_id"]),
+                                source_key=str(acct["source_key"]),
+                            )
+                        )
+                session.commit()
+                logger.info(
+                    "Seeded scraper_bank_senders / scraper_account_mappings from scraper.config"
+                )
+    except Exception:
+        logger.exception("Desktop prereq seed skipped or failed")
+
+
 def init_db() -> None:
     """Create all tables that don't already exist.
 
@@ -348,6 +520,7 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(_engine)
     _apply_sqlite_patches()
+    _seed_desktop_prereq_defaults()
     _merge_starter_pack_for_all_users()
     # Phase A.5 — limit exposure of local secrets (SQLite file + Gmail OAuth token).
     _chmod_owner_rw_only(DB_PATH)

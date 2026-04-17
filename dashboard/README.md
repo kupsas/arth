@@ -31,6 +31,8 @@ npm run dev
 #    Make sure the backend is running (see root README) before opening the app.
 ```
 
+**Logs:** this terminal shows Next.js dev-server output (compiles, Fast Refresh). API and scraper messages go to the **backend** terminal and to `data/logs/arth.log` — see [Logs and terminals](../api/README.md#logs-and-terminals) in `api/README.md`.
+
 ## Starting the Backend
 
 The dashboard fetches data from the FastAPI backend. In a separate terminal:

@@ -23,7 +23,6 @@ Requires: Gmail OAuth already completed (``data/gmail_token.json``).
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -37,64 +36,60 @@ import pipeline.config  # noqa: E402, F401 — loads ``.env`` via `load_dotenv()
 import pdfplumber  # noqa: E402
 
 from scraper.gmail_client import GmailClient  # noqa: E402
+from scraper.pdf_passwords import (  # noqa: E402
+    HDFC_CC_STATEMENT_PASSWORD_KEYS,
+    HDFC_COMBINED_STATEMENT_PASSWORD_KEYS,
+    ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS,
+    ICICI_DIRECT_TRADE_PASSWORD_KEYS,
+    ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS,
+    NSE_TRADES_EXECUTED_PASSWORD_KEYS,
+    resolve_pdf_password_chain,
+)
 from scraper.pdf_utils import decrypt_pdf  # noqa: E402
 
 
-def _password_from_env(*env_names: str) -> str:
-    """Return the first non-empty env value (lets us support legacy var names)."""
-    for name in env_names:
-        v = os.getenv(name, "").strip()
-        if v:
-            return v
-    return ""
-
-
-# Each row: label, Gmail ``q`` fragment (combined with ``after:``), env var name(s) for the PDF password.
-# ICICI monthly vs annual differ in subject *and* password; demat has two password families (ICICI vs NSE).
+# Each row: label, Gmail ``q`` fragment (combined with ``after:``), env key tuple (see ``pdf_passwords.py``).
 # Tweak queries if your bank reworded subjects — see docs/personal-data/email-parsers-subject.txt.
 PROBES: list[tuple[str, str, tuple[str, ...]]] = [
     (
         "HDFC Combined monthly statement",
         'subject:"HDFC Bank Combined Email Statement"',
-        ("HDFC_STATEMENT_PASSWORD",),
+        HDFC_COMBINED_STATEMENT_PASSWORD_KEYS,
     ),
     (
         "ICICI monthly savings statement",
-        # Doc: "ICICI Bank Statement from ..." (monthly)
         'subject:"ICICI Bank Statement from"',
-        ("ICICI_STATEMENT_MONTHLY_PASSWORD", "ICICI_STATEMENT_PASSWORD"),
+        ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS,
     ),
     (
         "ICICI annual savings statement (incl. PPF section in PDF)",
-        # Sender is customernotification@icicibank.com (not the same as InstaAlert .bank.in).
-        # Subject example: "Bank Statement from 01-01-2025 to 31-12-2025 for …XXXX18"
         'from:customernotification@icicibank.com subject:"Bank Statement from"',
-        ("ICICI_STATEMENT_ANNUAL_PASSWORD",),
+        ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS,
     ),
     (
         "HDFC CC — Swiggy card",
         'subject:"Swiggy" subject:"Credit Card Statement"',
-        ("HDFC_CC_STATEMENT_PASSWORD",),
+        HDFC_CC_STATEMENT_PASSWORD_KEYS,
     ),
     (
         "HDFC CC — Diners",
         'subject:"Diners Privilege" subject:"Credit Card Statement"',
-        ("HDFC_CC_STATEMENT_PASSWORD",),
+        HDFC_CC_STATEMENT_PASSWORD_KEYS,
     ),
     (
         "ICICI Direct — NSE Equity Digital Contract Note (ICICI email / password)",
         'subject:"NSE Equity Digital Contract Note"',
-        ("ICICI_DIRECT_EMAIL_PASSWORD", "ICICI_DIRECT_TRADE_PASSWORD"),
+        ICICI_DIRECT_TRADE_PASSWORD_KEYS,
     ),
     (
         "ICICI Direct — Order and Trade confirmations (ICICI email / password)",
         'subject:"Order and Trade confirmations"',
-        ("ICICI_DIRECT_EMAIL_PASSWORD", "ICICI_DIRECT_TRADE_PASSWORD"),
+        ICICI_DIRECT_TRADE_PASSWORD_KEYS,
     ),
     (
         "ICICI Direct — Trades executed at NSE (NSE email / different PDF password)",
         'subject:"Trades executed at NSE"',
-        ("NSE_TRADES_EXECUTED_PASSWORD", "ICICI_DIRECT_TRADE_PASSWORD"),
+        NSE_TRADES_EXECUTED_PASSWORD_KEYS,
     ),
 ]
 
@@ -121,7 +116,7 @@ def main() -> None:
         print(f"{label}")
         print(f"  Query: {q_fragment} after:{after}")
 
-        password = _password_from_env(*pwd_envs)
+        password = resolve_pdf_password_chain(*pwd_envs)
         if not password:
             joined = " or ".join(pwd_envs)
             print(f"  SKIP — set one of: {joined}\n")

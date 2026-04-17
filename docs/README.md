@@ -11,7 +11,8 @@ Reference documentation, product specs, evaluations, and design notes for the Ar
 ```
 docs/
   product/            Phase 5 guideline, UI notes (living product docs)
-  system-design/      Architecture notes and early design decisions
+  system-design/      Active architecture notes (e.g. ingestion policy)
+  archive/            Superseded scratch notes and old one-off context
   data-notes/         Notes about raw bank data formats and how they map to the schema
   evaluations/        LLM benchmark results, methodology, and model comparisons
   reference/          Reference PDFs (financial OS layer map, Day-1 questions framework)
@@ -25,7 +26,7 @@ docs/
 
 | File | Description |
 |---|---|
-| `arth_phase5_guideline_v3_final.md` | Phase 5 guideline — scope, principles, and delivery notes for the agentic / Q&A direction (successor to the old PRD-style docs) |
+| `arth_phase5_guideline_v3_final.md` | Phase 5 guideline — scope and principles; see file header for how it relates to the current codebase (some sections are historical) |
 | `Health-Page-UI-thoughts.md` | Design notes for health-related dashboard surfaces |
 | `Holdings-Page-UI-thoughts.md` | Design notes for portfolio / holdings UI |
 | `Statements-Page-UI-thoughts.pdf` | Design notes for statements UX |
@@ -36,8 +37,9 @@ docs/
 
 | File | Description |
 |---|---|
-| `understanding_so_far.md` | Early design context captured at project start — where the project came from, key schema decisions locked before coding began |
-| `notes_prior_chatgpt_chat.md` | Condensed notes from the initial financial OS design session (ChatGPT, pre-Cursor) — the Mental Model, Layers framework, and canonical transaction schema |
+| `INGESTION_PATHS.md` | Declared ingestion hierarchy (email vs file fallbacks) |
+
+Early scratch notes (`understanding_so_far.md`, `notes_prior_chatgpt_chat.md`) live under [`archive/system-design/`](archive/system-design/).
 
 ---
 

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import re
 from typing import ClassVar, Literal
 
@@ -37,6 +36,11 @@ from pipeline.holding_parsers.icici_ppf_pdf import parse_icici_ppf_from_annual_p
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.icici_savings import ICICISavingsParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from scraper.pdf_passwords import (
+    ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS,
+    ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS,
+    resolve_pdf_password_chain,
+)
 from scraper.pdf_utils import decrypt_pdf
 
 logger = logging.getLogger(__name__)
@@ -95,15 +99,11 @@ def _statement_kind(
 
 
 def _monthly_password() -> str:
-    return (
-        os.getenv("ICICI_STATEMENT_MONTHLY_PASSWORD")
-        or os.getenv("ICICI_STATEMENT_PASSWORD")
-        or ""
-    )
+    return resolve_pdf_password_chain(*ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS)
 
 
 def _annual_password() -> str:
-    return os.getenv("ICICI_STATEMENT_ANNUAL_PASSWORD") or ""
+    return resolve_pdf_password_chain(*ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS)
 
 
 class ICICIStatementEmailParser(BaseStatementEmailParser):

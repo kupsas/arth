@@ -275,6 +275,31 @@ def test_sync_nps_skipped(session: Session) -> None:
     assert h.current_value == 99_999.0
 
 
+def test_ensure_holding_creates_non_icici_equity(session: Session) -> None:
+    """Auto-create works for any broker platform (not only ICICI Direct)."""
+    txn = InvestmentTransaction(
+        txn_date=datetime.date(2024, 6, 1),
+        symbol="TCS",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=1.0,
+        price_per_unit=3500.0,
+        total_amount=3500.0,
+        account_platform="Zerodha",
+        holding_id=None,
+        notes="Tata Consultancy",
+    )
+    session.add(txn)
+    session.flush()
+
+    hid = ensure_holding_for_transaction(session, txn, user_id="u1")
+    session.commit()
+    assert hid is not None
+    h = session.get(Holding, hid)
+    assert h is not None
+    assert h.symbol == "TCS"
+    assert h.account_platform == "Zerodha"
+
+
 def test_ensure_holding_creates_icici_equity(session: Session) -> None:
     txn = InvestmentTransaction(
         txn_date=datetime.date(2024, 6, 1),

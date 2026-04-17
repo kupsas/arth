@@ -40,6 +40,8 @@ from api.routes.goal_suggestions import router as goal_suggestions_router
 from api.routes.inflation import router as inflation_router
 from api.routes.simulate import router as simulate_router
 from api.routes.scraper import router as scraper_router
+from api.routes.scraper_config import router as scraper_config_router
+from api.routes.setup import router as setup_router
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
 from sqlmodel import Session
@@ -105,8 +107,9 @@ async def lifespan(app: FastAPI):
     Startup:
       1. Configure structured logging (stdout INFO + rotating file DEBUG).
       2. Ensure all DB tables exist (init_db is idempotent — safe to call every boot).
-      3. Start APScheduler: daily price job at 18:30 IST always; Gmail poll only
-         if ``gmail_token.json`` exists (or after OAuth adds the email job).
+      3. Start APScheduler: daily price job at 18:30 IST; weekly prices + NSE reference +
+         holdings enrich Sun 19:15 IST; Gmail poll only if ``gmail_token.json`` exists
+         (or after OAuth adds the email job).
       4. Phase A.4.2 — If there are market-priced holdings, backfill stale NSE ``prices``
          then refresh marks **in the background**. Uvicorn used to await this before
          ``yield``, which left "Waiting for application startup" for minutes when NSE
@@ -166,6 +169,7 @@ app.add_middleware(
 # Auth routes — public (no session required for login/logout)
 # ---------------------------------------------------------------------------
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
+app.include_router(setup_router, prefix="/api/setup", tags=["Setup"])
 
 # ---------------------------------------------------------------------------
 # Protected routes — all require a valid session cookie.
@@ -179,6 +183,12 @@ app.include_router(transactions.router, prefix="/api/transactions", tags=["Trans
 app.include_router(metrics.router,      prefix="/api/metrics",       tags=["Metrics"],       dependencies=_auth)
 app.include_router(pipeline.router,     prefix="/api/pipeline",      tags=["Pipeline"],      dependencies=_auth)
 app.include_router(scraper_router,      prefix="/api/scraper",       tags=["Scraper"],       dependencies=_auth)
+app.include_router(
+    scraper_config_router,
+    prefix="/api/scraper-config",
+    tags=["Scraper config"],
+    dependencies=_auth,
+)
 app.include_router(recurring_router,    prefix="/api/recurring",     tags=["Recurring"],     dependencies=_auth)
 app.include_router(surplus_router,      prefix="/api/surplus",       tags=["Surplus"],       dependencies=_auth)
 app.include_router(liquidity_router,    prefix="/api/liquidity",     tags=["Liquidity"],     dependencies=_auth)

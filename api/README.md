@@ -8,12 +8,29 @@ FastAPI backend for Arth. Serves transactions, metrics, portfolio (holdings, pri
 
 ```bash
 # From the repo root
-python3 -m uvicorn api.main:app --port 8000 --reload
+python3 -m uvicorn api.main:app --port 8000 --reload --no-access-log
 ```
 
 > Use `python3 -m uvicorn`, not the bare `uvicorn` binary — the global binary may point to a different Python than your SQLModel install.
 
+`--no-access-log` hides one line per HTTP request (`GET /api/... 200`). Omit the flag when you need to debug which endpoint the dashboard is calling.
+
 **Interactive docs (Swagger UI):** http://localhost:8000/docs
+
+### Logs and terminals
+
+Everything that uses the shared Python `logging` setup writes **the same format** to two places (see `pipeline/logging_config.py`):
+
+| Destination | What you see | Typical level |
+|-------------|----------------|---------------|
+| **This terminal (stdout)** | Timestamped lines from Arth code (API startup, scraper summaries, price jobs, pipeline stages when triggered via API, errors). | INFO and above |
+| **`data/logs/arth.log`** | Same lines **plus** DEBUG detail (per-email scraper steps, LLM batch internals, Gmail query strings). File rotates at ~5 MB (a few backups kept). | DEBUG and above |
+
+**Uvicorn** adds its own startup banner. With `--no-access-log`, you will not see a line for every browser/API request — that noise is normal web-server traffic, not “something wrong.”
+
+**Next.js dashboard terminal** (`npm run dev`) shows the dev server (compile, Fast Refresh). The dashboard app code does not spam `console.log` by design; if an API call fails, use the **browser** DevTools → Network tab to see the failing URL and status code.
+
+**Local data hygiene:** keep manual SQLite copies under `data/backups/` (gitignored) rather than scattering `arth.db.bak-*` in `data/`. The whole `data/output/` tree is gitignored — delete stale exports (e.g. old pipeline CSVs) locally whenever you like.
 
 On startup, the server:
 1. Initializes the SQLite database (creates tables if they don't exist — idempotent, safe every boot)
@@ -477,6 +494,6 @@ For column-level detail, use the SQLModel definitions in `api/models.py` or Swag
 
 - **CORS:** Defaults to `localhost:3000` and `localhost:8000`. For Cloudflare Tunnel or other origins, set `CORS_EXTRA_ORIGINS` in `.env` (comma-separated full origins, e.g. `https://abc.trycloudflare.com`). `allow_credentials=True` so the session cookie works cross-port in dev.
 - **Auth:** Cookie-based session for the two household accounts. Not a multi-tenant SaaS — treat `.env` secrets and network exposure accordingly if you ever host off localhost.
-- **Scheduler lifecycle:** The APScheduler background thread starts with the FastAPI `lifespan` context and shuts down cleanly on exit. One `uvicorn` command manages the API, scheduled Gmail polling, periodic price jobs, and weekly inflation refresh (see `scraper/scheduler.py`).
+- **Scheduler lifecycle:** The APScheduler background thread starts with the FastAPI `lifespan` context and shuts down cleanly on exit. One `uvicorn` command manages the API, scheduled Gmail polling, daily price refresh, weekly inflation sync, and weekly NSE reference + holdings enrichment (see `scraper/scheduler.py`).
 - **Database sessions:** Injected via FastAPI's `Depends(get_session)`. No global session state — each request gets its own session.
 - **DB init:** `init_db()` is called on every server start. It creates tables that don't exist and leaves existing ones alone — safe to run repeatedly.

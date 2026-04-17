@@ -44,6 +44,7 @@ docs/personal-data
 
 # Private strategic documents (personal financial goals, amounts, planning)
 docs/private/
+docs/product/
 
 # Generated benchmark CSVs — contain real transaction data (dates, amounts, narrations)
 # Re-generate with: python3 scripts/export_benchmark.py
@@ -73,18 +74,25 @@ data/*.db-wal
 data/*.db-shm
 
 # Manual / timestamped DB copies (e.g. arth.db.bak.YYYYMMDD_* and WAL/SHM siblings) — same sensitivity as *.db
+# Prefer a single folder: copy DBs into data/backups/ (also ignored via data/backups/ below).
 data/*bak*
+data/*.bak
 
 # Learned ICICI broker code → NSE ticker (machine-local; grows over time)
 data/icici_nse_symbol_overrides.json
+
+# Optional NSE symbol → cap bucket overrides (copy from data/nse_market_cap.example.json)
+data/nse_market_cap_overrides.json
 
 # Gmail OAuth credentials and token (never commit — contains secrets)
 data/gmail_credentials.json
 data/gmail_token.json
 
-# Real bank alert HTML (PII / account hints) — keep on your machine only.
-# Use scripts/discover_emails.py to populate locally; never commit samples.
-tests/fixtures/email_samples/
+# Local find/replace map used when syncing real Gmail HTML into fixtures (may contain PII substrings).
+data/email_fixture_redactions.json
+
+# Committed HTML under tests/fixtures/email_samples/ is synthetic / scrubbed for CI.
+# After `scripts/sync_email_parser_fixtures.py` with --no-redact, re-review before commit.
 
 # Next.js dashboard build artifacts and nested git repo
 dashboard/node_modules/

@@ -65,7 +65,7 @@ def login(body: LoginRequest, response: Response) -> AuthStatusResponse:
             detail="Invalid username or password",
         )
 
-    token = create_session_token()
+    token = create_session_token(body.username)
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,

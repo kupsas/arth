@@ -127,7 +127,8 @@ def main() -> None:
     print(f"Fixture files saved to: {FIXTURES_DIR}")
     print("\nNext step:")
     print("  Review the subject lines above and the saved HTML files.")
-    print("  Then we build the parsers against these real samples (Step 3b).")
+    print("  For pinned parser fixtures (test filenames), use:")
+    print("    python3 scripts/sync_email_parser_fixtures.py --dry-run")
     print_divider()
 
 

@@ -207,6 +207,30 @@ def _set_rules_source(txn: CanonicalTransaction, *, user_rule: bool) -> None:
     )
 
 
+def _finalize_rules_provenance(txns: list[CanonicalTransaction]) -> None:
+    """Stamp ``RULES_GENERIC`` when rules filled fields but no branch called ``_set_rules_source``.
+
+    Parser + :func:`pipeline.transformer.transform` leave ``channel``, ``txn_type``, etc. as
+    ``None`` until rules (or LLM) run. Many deterministic branches set those values without
+    updating ``classification_source``, which made :func:`pipeline.review_confidence.compute_review_confidence`
+    treat them as ``MEDIUM``. This pass only fills the gap when the source is still unset and
+    at least one classification field is populated — it does not override ``RULES_USER`` or
+    anything the LLM pass will later set to ``LLM``.
+    """
+    for txn in txns:
+        if txn.classification_source is not None:
+            continue
+        if (
+            txn.channel is not None
+            or txn.txn_type is not None
+            or txn.upi_type is not None
+            or txn.counterparty is not None
+            or txn.counterparty_category is not None
+            or txn.spend_category is not None
+        ):
+            _set_rules_source(txn, user_rule=False)
+
+
 def _txn_type_rent_matches(desc: str, cfg: UserClassificationConfig) -> bool:
     """EXPENSE_OTHER rent via standing instruction or optional user regex."""
     u = desc.upper()
@@ -297,6 +321,7 @@ def classify_rules(
         _classify_txn_type_from_upi(txn)   # P2M → UPI_EXPENSE (runs after upi_type is set)
         _classify_counterparty_category(txn, cfg)
         _classify_spend_category(txn)       # NEED/WANT/INVESTMENT (runs last)
+    _finalize_rules_provenance(txns)
     return txns
 
 
