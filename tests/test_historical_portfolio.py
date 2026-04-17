@@ -314,6 +314,36 @@ def test_historical_price_universe_uses_old_txns_and_excludes_stoone(session: Se
     assert {(row.symbol, row.symbol_kind) for row in report} == {("INFY", "nse"), ("119551", "mf")}
 
 
+def test_historical_price_universe_includes_orphan_non_icici_platform(session: Session) -> None:
+    session.add(
+        _holding(
+            name="Anchor",
+            symbol="INFY",
+            asset_class=AssetClass.EQUITY.value,
+            valuation_method=ValuationMethod.MARKET_PRICE.value,
+            account_platform="Zerodha",
+        )
+    )
+    session.commit()
+    session.add(
+        InvestmentTransaction(
+            txn_date=datetime.date(2020, 5, 5),
+            symbol="WIPRO",
+            txn_type=InvestmentTxnType.BUY.value,
+            quantity=2.0,
+            price_per_unit=500.0,
+            total_amount=1000.0,
+            account_platform="Zerodha",
+            holding_id=None,
+            notes="Wipro",
+        )
+    )
+    session.commit()
+
+    universe = historical_price_symbol_universe(session, user_id="sashank")
+    assert "WIPRO" in universe["nse_symbols"]
+
+
 def test_historical_price_universe_includes_orphan_equity_transactions(session: Session) -> None:
     session.add(
         _holding(

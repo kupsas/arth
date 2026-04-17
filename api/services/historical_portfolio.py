@@ -43,12 +43,6 @@ _NEGATIVE_TXN_TYPES = {
     InvestmentTxnType.SWITCH_OUT.value,
 }
 
-_PLATFORM_TO_MARKET_ASSET_CLASS = {
-    "ICICI Direct": AssetClass.EQUITY.value,
-    "ICICI Direct MF": AssetClass.MUTUAL_FUND.value,
-}
-
-
 @dataclass(frozen=True)
 class PriceCoverageRow:
     symbol: str
@@ -143,6 +137,36 @@ def _market_history_txn_rows(
     return list(session.exec(stmt).all())
 
 
+def _infer_orphan_market_asset_class(symbol: str | None) -> str | None:
+    """Classify unlinked ledger rows for historical replay (orphan path)."""
+    if not symbol or not str(symbol).strip():
+        return None
+    raw = str(symbol).strip()
+    if raw.isdigit():
+        return AssetClass.MUTUAL_FUND.value
+    if "=" in raw:
+        return AssetClass.GOLD.value
+    return AssetClass.EQUITY.value
+
+
+def _distinct_orphan_txn_platforms(session: Session) -> list[str]:
+    """Platforms that appear on at least one investment txn with no ``holding_id``."""
+    rows = session.exec(
+        select(InvestmentTransaction.account_platform)
+        .where(
+            InvestmentTransaction.holding_id.is_(None),
+            col(InvestmentTransaction.symbol).is_not(None),
+        )
+        .distinct()
+    ).all()
+    out: set[str] = set()
+    for r in rows:
+        p = str(r).strip() if r is not None else ""
+        if p:
+            out.add(p)
+    return sorted(out)
+
+
 def _platform_is_uniquely_owned_by_user(session: Session, *, platform: str, user_id: str) -> bool:
     owners = list(
         session.exec(
@@ -162,7 +186,7 @@ def _orphan_market_txn_rows(
     as_of: datetime.date | None = None,
 ) -> list[tuple[InvestmentTransaction, str]]:
     rows: list[tuple[InvestmentTransaction, str]] = []
-    for platform, asset_class in _PLATFORM_TO_MARKET_ASSET_CLASS.items():
+    for platform in _distinct_orphan_txn_platforms(session):
         if not _platform_is_uniquely_owned_by_user(session, platform=platform, user_id=user_id):
             continue
         stmt = (
@@ -176,7 +200,10 @@ def _orphan_market_txn_rows(
         )
         if as_of is not None:
             stmt = stmt.where(InvestmentTransaction.txn_date <= as_of)
-        rows.extend((txn, asset_class) for txn in session.exec(stmt).all())
+        for txn in session.exec(stmt).all():
+            ac = _infer_orphan_market_asset_class(txn.symbol)
+            if ac is not None:
+                rows.append((txn, ac))
     return rows
 
 
@@ -417,7 +444,7 @@ def earliest_user_history_date(session: Session, user_id: str) -> datetime.date 
 
     owned_orphan_platforms = [
         platform
-        for platform in _PLATFORM_TO_MARKET_ASSET_CLASS
+        for platform in _distinct_orphan_txn_platforms(session)
         if _platform_is_uniquely_owned_by_user(session, platform=platform, user_id=user_id)
     ]
     orphan_txn_row = None

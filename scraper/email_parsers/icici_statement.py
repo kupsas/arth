@@ -10,14 +10,15 @@ Routing (sender + subject) follows the era table in the email-statement plan:
 
 1. **Annual** — ``customernotification@icicibank.com`` + subject like
    ``Bank Statement from 01-01-2025 to 31-12-2025 for …`` → password
-   ``ICICI_STATEMENT_ANNUAL_PASSWORD``. Parses savings (excluding the PPF band on
-   page 1) and, via :mod:`pipeline.holding_parsers.icici_ppf_pdf`, PPF rows into
-   ``investment_transactions`` + ``holdings``.
+   ``ICICI_STATEMENT_ANNUAL_PASSWORD``. Savings rows use :class:`~pipeline.parsers.icici_savings.ICICISavingsParser`
+   (PPF band stripped); PPF uses :mod:`pipeline.holding_parsers.icici_ppf_pdf`.
 
 2. **Current monthly** — subject contains ``ICICI Bank Statement from`` (post-~Oct 2020).
+   Some monthly PDFs stack **PPF** then **Savings** on page 1 — same split as annual:
+   savings → pipeline transactions; PPF → ``investment_transactions`` + ``holdings``.
 
-3. **Legacy monthly** — ``estatement@icicibank.com`` + subject mentions
-   ``Bank Statement`` but not the current monthly wording (pre-~Oct 2020).
+3. **Legacy monthly** — ``estatement@icicibank.com`` or ``estatement@icici.bank.in``
+   + subject mentions ``Bank Statement`` but not the current monthly wording (pre-~Oct 2020).
 
 Passwords are **not** interchangeable — see ``.env.example`` (monthly vs annual).
 """
@@ -26,7 +27,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import re
 from typing import ClassVar, Literal
 
@@ -37,6 +37,11 @@ from pipeline.holding_parsers.icici_ppf_pdf import parse_icici_ppf_from_annual_p
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.icici_savings import ICICISavingsParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from scraper.pdf_passwords import (
+    ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS,
+    ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS,
+    resolve_pdf_password_chain,
+)
 from scraper.pdf_utils import decrypt_pdf
 
 logger = logging.getLogger(__name__)
@@ -57,7 +62,10 @@ _ANNUAL_SUBJECT_RE = re.compile(
 )
 
 _SENDER_ANNUAL = "customernotification@icicibank.com"
-_SENDER_LEGACY_MONTHLY = "estatement@icicibank.com"
+# Same statement product; ICICI has used both From domains.
+_LEGACY_MONTHLY_SENDERS: frozenset[str] = frozenset(
+    {"estatement@icicibank.com", "estatement@icici.bank.in"}
+)
 
 
 def _is_annual_statement(sender: str, subject: str) -> bool:
@@ -74,7 +82,7 @@ def _is_current_monthly(subject: str) -> bool:
 
 def _is_legacy_monthly(sender: str, subject: str) -> bool:
     """Pre-2020-ish monthly: estatement + 'Bank Statement' wording, not annual line."""
-    if sender != _SENDER_LEGACY_MONTHLY:
+    if sender not in _LEGACY_MONTHLY_SENDERS:
         return False
     if _is_current_monthly(subject):
         return False
@@ -95,15 +103,11 @@ def _statement_kind(
 
 
 def _monthly_password() -> str:
-    return (
-        os.getenv("ICICI_STATEMENT_MONTHLY_PASSWORD")
-        or os.getenv("ICICI_STATEMENT_PASSWORD")
-        or ""
-    )
+    return resolve_pdf_password_chain(*ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS)
 
 
 def _annual_password() -> str:
-    return os.getenv("ICICI_STATEMENT_ANNUAL_PASSWORD") or ""
+    return resolve_pdf_password_chain(*ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS)
 
 
 class ICICIStatementEmailParser(BaseStatementEmailParser):
@@ -170,16 +174,22 @@ class ICICIStatementEmailParser(BaseStatementEmailParser):
         decrypted = decrypt_pdf(pdf_bytes, password)
         try:
             raw_rows = ICICISavingsParser().parse(decrypted)
-            if kind == "annual":
-                ph, pt = parse_icici_ppf_from_annual_pdf(
-                    decrypted,
-                    source_label="icici_annual_statement_email",
-                )
-                self._attachment_holdings.extend(ph)
-                self._attachment_inv_txns.extend(pt)
+            # Combined PDFs (annual or monthly) may include a PPF table above savings.
+            # PPF rows must not be stamped as savings — extract them here in tandem.
+            ph, pt = parse_icici_ppf_from_annual_pdf(
+                decrypted,
+                reference_date=received_date,
+                source_label=(
+                    "icici_annual_statement_email"
+                    if kind == "annual"
+                    else "icici_monthly_statement_email"
+                ),
+            )
+            self._attachment_holdings.extend(ph)
+            self._attachment_inv_txns.extend(pt)
         except Exception:
             logger.exception(
-                "ICICISavingsParser failed for ICICI statement (kind=%s)", kind
+                "ICICI statement PDF parse failed (kind=%s)", kind
             )
             raise
         finally:

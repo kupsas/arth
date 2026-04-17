@@ -1,0 +1,60 @@
+# Maintainer manifest for `scripts/sync_email_parser_fixtures.py`.
+#
+# Each row maps one Gmail message → one file under `tests/fixtures/email_samples/`.
+# Fill in either:
+#   - `message_id` alone (paste from Gmail URL: .../mail/u/0/#inbox/<MESSAGE_ID>)
+#   - `query` alone (Gmail search syntax); script picks the NEWEST match and prints
+#     a warning with id/subject so you can pin `message_id` if the wrong mail was chosen.
+#
+# Optional `note` is documentation only (ignored by the script).
+
+fixtures:
+  - filename: alerts_hdfcbank_net_01.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"UPI txn"'
+    message_id: null
+    note: HDFC UPI outbound (debited … account … VPA …)
+
+  - filename: alerts_hdfcbank_net_02.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"debited via Credit Card"'
+    message_id: null
+    note: HDFC CC swipe sample 1 — tighten query (amount/date) if multiple matches.
+
+  - filename: alerts_hdfcbank_net_03.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"debited via Credit Card"'
+    message_id: null
+    note: HDFC CC swipe sample 2
+
+  - filename: alerts_hdfcbank_net_04.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"debited via Credit Card"'
+    message_id: null
+    note: HDFC CC swipe sample 3
+
+  - filename: alerts_hdfcbank_net_05.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"debited via Credit Card"'
+    message_id: null
+    note: HDFC CC swipe sample 4 (different merchant/date than 02–04)
+
+  - filename: hdfc_upi_inbound_01.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"Account update" mandate'
+    message_id: null
+    note: Account-update body = e-mandate/NACH only (not UPI money) — parser returns []
+
+  - filename: hdfc_upi_inbound_02.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"Account update" credited VPA'
+    message_id: null
+    note: Account-update body = UPI inbound credit to savings (synthetic VPA in committed fixture)
+
+  - filename: hdfc_upi_inbound_03.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"Account update" card settings'
+    message_id: null
+    note: Account-update body = card/Visa settings only (not UPI inbound) — parser returns []
+
+  - filename: icici_bank_in_01.html
+    query: 'from:customernotification@icici.bank.in subject:"IMPS transaction"'
+    message_id: null
+    note: ICICI IMPS iMobile alert
+
+  - filename: icici_bank_in_02.html
+    query: 'from:customernotification@icici.bank.in subject:"NEFT transaction"'
+    message_id: null
+    note: ICICI NEFT iMobile alert

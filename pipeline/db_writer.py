@@ -34,6 +34,7 @@ from sqlmodel import Session, col, select
 from api.models import PipelineRun, Transaction
 from api.services.account_user_map import user_id_for_account
 from pipeline.models import CanonicalTransaction, ClassificationSource
+from pipeline.review_confidence import compute_review_confidence, should_auto_review_email
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ def _find_statement_match_for_email(
     If **more than one** row matches on the **same** calendar date (two Swiggy orders),
     returns ``None`` — safer than dropping a real second charge.
     """
-    uid = user_id_for_account(account_id)
+    uid = user_id_for_account(account_id, session)
     base = (
         select(Transaction)
         .where(Transaction.account_id == account_id)
@@ -163,7 +164,7 @@ def _find_prior_email_alert_match_for_pdf(
     if not exclude_gmail_message_id:
         return None
 
-    uid = user_id_for_account(account_id)
+    uid = user_id_for_account(account_id, session)
     base = (
         select(Transaction)
         .where(Transaction.account_id == account_id)
@@ -219,7 +220,7 @@ def _find_email_match(
     will overwrite the raw_description anyway, so the end result is always correct even
     if we matched the "wrong" email row.
     """
-    uid = user_id_for_account(account_id)
+    uid = user_id_for_account(account_id, session)
     one_day = datetime.timedelta(days=1)
     return session.exec(
         select(Transaction).where(
@@ -241,6 +242,8 @@ def _upgrade_email_row(
     txn: CanonicalTransaction,
     content_hash: str,
     pipeline_run_id: int,
+    *,
+    session: Session,
 ) -> None:
     """Upgrade an email-sourced row with richer statement data.
 
@@ -264,7 +267,7 @@ def _upgrade_email_row(
     existing.pipeline_run_id = pipeline_run_id
     existing.updated_at = datetime.datetime.now(datetime.UTC)
     if not existing.user_id:
-        existing.user_id = user_id_for_account(txn.account_id)
+        existing.user_id = user_id_for_account(txn.account_id, session)
 
     # Overwrite classification only if the DB value is still NULL —
     # same conservative logic as the normal backfill path.
@@ -330,9 +333,6 @@ def write_to_db(
     session.flush()  # assigns run.id without committing
     assert run.id is not None  # flush guarantees this; tells mypy the id is set
 
-    # Email-sourced transactions enter as unreviewed; statement-sourced are reviewed.
-    is_reviewed_default = source_type != "email"
-
     new_count = 0
     updated_count = 0
     reconciled_count = 0
@@ -341,7 +341,7 @@ def write_to_db(
 
     for txn in txns:
         content_hash = compute_content_hash(txn)
-        row_user_id = user_id_for_account(txn.account_id)
+        row_user_id = user_id_for_account(txn.account_id, session)
 
         # ── Path A: exact content_hash match ────────────────────────────────
         # This handles same-source dedup (re-running the same statement file,
@@ -388,7 +388,9 @@ def write_to_db(
             account_id = txn.account_id
             email_match = _find_email_match(session, txn, account_id)
             if email_match is not None:
-                _upgrade_email_row(email_match, txn, content_hash, run.id)
+                _upgrade_email_row(
+                    email_match, txn, content_hash, run.id, session=session
+                )
                 session.add(email_match)
                 reconciled_count += 1
 
@@ -433,11 +435,17 @@ def write_to_db(
                 continue
 
         # ── Path C: brand-new row ────────────────────────────────────────────
+        review_conf = compute_review_confidence(txn)
+        if source_type == "email":
+            reviewed = should_auto_review_email(review_conf)
+        else:
+            reviewed = True
+
         db_txn = Transaction(
             content_hash=content_hash,
             txn_date=txn.txn_date,
             account_id=txn.account_id,
-            user_id=user_id_for_account(txn.account_id),
+            user_id=user_id_for_account(txn.account_id, session),
             source_statement=txn.source_statement,
             direction=txn.direction.value,
             amount=float(txn.amount),
@@ -458,7 +466,8 @@ def write_to_db(
             closing_balance=float(txn.closing_balance) if txn.closing_balance else None,
             value_date=txn.value_date,
             notes=txn.notes,
-            is_reviewed=is_reviewed_default,
+            is_reviewed=reviewed,
+            review_confidence=review_conf if source_type == "email" else None,
             pipeline_run_id=run.id,
             source_type=source_type,
             gmail_message_id=gmail_message_id,

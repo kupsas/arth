@@ -33,8 +33,10 @@ def test_apply_sets_etf_sector_without_calling_meta_for_etfs() -> None:
         is_active=True,
     )
     rep = EnrichmentReport()
+    session = MagicMock()
+    session.get.return_value = None
     _apply_equity_sector_and_cap(
-        h, nse, report=rep, throttle=False, last_call_ref=[0.0]
+        session, h, nse, report=rep, throttle=False, last_call_ref=[0.0]
     )
     assert h.sector == "ETF"
     assert h.market_cap_class == "LARGE_CAP"
@@ -55,8 +57,10 @@ def test_apply_calls_meta_for_non_etf() -> None:
         is_active=True,
     )
     rep = EnrichmentReport()
+    session = MagicMock()
+    session.get.return_value = None
     _apply_equity_sector_and_cap(
-        h, nse, report=rep, throttle=False, last_call_ref=[0.0]
+        session, h, nse, report=rep, throttle=False, last_call_ref=[0.0]
     )
     assert h.sector == "TELECOMMUNICATIONS"
     nse.equityMetaInfo.assert_called_once()

@@ -37,19 +37,28 @@ def _normalise_sender(raw_sender: str) -> str:
     return raw_sender.strip().lower()
 
 
-def find_parser(raw_sender: str, subject: str) -> BaseEmailParser | None:
+def find_parser(
+    raw_sender: str,
+    subject: str,
+    *,
+    registry: dict[str, list[BaseEmailParser]] | None = None,
+) -> BaseEmailParser | None:
     """Return the correct parser for this email, or None if no parser matches.
 
     Args:
         raw_sender: The raw "From" header value (may include display name).
         subject:    The email subject line.
+        registry:   Optional per-user parser list map (from
+                    :func:`scraper.email_parsers.build_email_parser_registry`).
+                    Defaults to the static :data:`EMAIL_PARSER_REGISTRY`.
 
     Returns:
         The first parser whose can_parse() returns True, or None.
         None means the orchestrator should skip this email.
     """
     sender = _normalise_sender(raw_sender)
-    parsers = EMAIL_PARSER_REGISTRY.get(sender, [])
+    reg = registry if registry is not None else EMAIL_PARSER_REGISTRY
+    parsers = reg.get(sender, [])
 
     if not parsers:
         logger.debug("No parsers registered for sender '%s'", sender)

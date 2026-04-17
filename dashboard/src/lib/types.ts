@@ -110,6 +110,10 @@ export interface Transaction {
   counterparty_category: CounterpartyCategory | null;
   spend_category: SpendCategory | null;
 
+  classification_source?: string | null;
+  /** HIGH | MEDIUM | LOW — email-ingest review heuristic */
+  review_confidence?: string | null;
+
   raw_description: string;
   ref_number: string | null;
   closing_balance: number | null;
@@ -193,6 +197,7 @@ export interface TransactionFilters {
   category?: CounterpartyCategory | string;
   txn_type?: TxnType;
   is_reviewed?: boolean;
+  review_confidence?: string;
   search?: string;          // free-text search on counterparty + raw_description
   page?: number;            // 1-indexed, default 1
   page_size?: number;       // default 50, max 200

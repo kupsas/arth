@@ -1,10 +1,10 @@
 """
-ICICI PPF ledger from **annual combined account PDF** (same file as savings).
+ICICI PPF ledger from a **combined** account PDF (annual or monthly email).
 
-The annual statement places the PPF transaction table on page 1 before the savings
-table. We reuse the combined-layout line parser from :mod:`pipeline.parsers.icici_savings`
-with a vertical band filter, then map rows to :class:`ParsedInvestmentTxn` using the
-same rules as :func:`parse_icici_ppf_csv`.
+When page 1 stacks a **PPF** transaction table above **Savings**, we parse the PPF
+vertical band only (via :mod:`pipeline.parsers.icici_savings` word layout), while
+:class:`~pipeline.parsers.icici_savings.ICICISavingsParser` parses the savings band.
+Rows are mapped to :class:`ParsedInvestmentTxn` using the same rules as :func:`parse_icici_ppf_csv`.
 """
 
 from __future__ import annotations
@@ -30,16 +30,20 @@ def _utc_today() -> date:
     return datetime.now(UTC).date()
 
 
-def parse_icici_ppf_from_annual_pdf(
+def parse_icici_ppf_from_combined_pdf(
     pdf_path: str | Path,
     *,
     account_platform: str = "ICICI PPF",
     reference_date: date | None = None,
-    source_label: str = "icici_annual_pdf",
+    source_label: str = "icici_combined_pdf",
 ) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
-    """Extract PPF rows from page 1 of an annual multi-account ICICI PDF.
+    """Extract PPF rows from page 1 of a **combined** ICICI PDF (annual or monthly email).
 
-    Returns empty lists if the file has no PPF band (e.g. monthly savings-only PDF).
+    Works when the first page stacks a PPF transaction table above a Savings table.
+    Savings rows are **not** returned here — use :class:`~pipeline.parsers.icici_savings.ICICISavingsParser`
+    on the same file (it automatically restricts to the Savings band when both exist).
+
+    Returns empty lists if there is no detectable PPF band (e.g. savings-only statement).
     """
     path = Path(pdf_path)
     ref = reference_date if reference_date is not None else _utc_today()
@@ -49,7 +53,7 @@ def parse_icici_ppf_from_annual_pdf(
             return [], []
         page0 = pdf.pages[0]
         t0 = page0.extract_text() or ""
-        if "PPF A/c" not in t0:
+        if not _pdf_text_has_ppf_table_section(t0):
             return [], []
         win = combined_ppf_y_window_page1(page0)
         if win is None:
@@ -71,6 +75,29 @@ def parse_icici_ppf_from_annual_pdf(
         reference_date=ref,
         source_label=source_label,
         summary_balance=summary_bal,
+    )
+
+
+def _pdf_text_has_ppf_table_section(text: str) -> bool:
+    """Enough signal to run the PPF y-band extractor (annual summary and/or monthly header)."""
+    if "Statement of Transactions in PPF Account" in text:
+        return True
+    return "PPF A/c" in text and "Statement of Transactions in Account Number:" in text
+
+
+def parse_icici_ppf_from_annual_pdf(
+    pdf_path: str | Path,
+    *,
+    account_platform: str = "ICICI PPF",
+    reference_date: date | None = None,
+    source_label: str = "icici_annual_pdf",
+) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
+    """Backward-compatible alias for :func:`parse_icici_ppf_from_combined_pdf`."""
+    return parse_icici_ppf_from_combined_pdf(
+        pdf_path,
+        account_platform=account_platform,
+        reference_date=reference_date,
+        source_label=source_label,
     )
 
 

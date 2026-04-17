@@ -2,6 +2,16 @@
 
 Real-time transaction ingestion via Gmail API. Polls bank alert emails every 15 minutes, parses them into transactions, and automatically reconciles them when monthly statements arrive — no duplicates, no lost review work.
 
+## Ingestion hierarchy (what is “primary”)
+
+**Email scraping is the default path** for ongoing data: alerts, statement PDFs, and broker mail routed in `scraper/email_parsers/`. **File-based ingestion** (`python -m pipeline.run`, API upload, `holding_pipeline` CLI) is the **explicit fallback** for gaps email cannot cover, one-off bank exports, or migrating historical files off disk.
+
+See [`docs/system-design/INGESTION_PATHS.md`](../docs/system-design/INGESTION_PATHS.md) for the full source × path matrix. Reconciliation rules live in [`pipeline/db_writer.py`](../pipeline/db_writer.py) and are summarized below.
+
+**Historical Gmail import:** use `run_historical_backfill` (API: `POST /api/scraper/backfill`), or the CLI `scripts/scrape_historical.py` with `--preset` / `--query` — same pipeline as live scraping; `processed_emails` dedupes by message id.
+
+**Parser test fixtures:** to repopulate `tests/fixtures/email_samples/` from Gmail with pinned queries, use `scripts/sync_email_parser_fixtures.py` (documented in `tests/README.md`).
+
 ## Setup
 
 ### Step 1 — Google Cloud Project (one-time)
@@ -60,7 +70,7 @@ Email scraping covers ~70-80% of day-to-day spending. Monthly statement uploads 
 
 ### Statement PDFs and broker emails (Phase 0+)
 
-Beyond **alert** emails, the scraper can process **attached PDFs** and structured broker mail (HDFC combined statements, HDFC CC statement PDFs, ICICI statement PDFs, ICICI Direct trade notifications). These flow through dedicated parsers in `scraper/email_parsers/` (`hdfc_statement.py`, `hdfc_cc_statement.py`, `icici_statement.py`, `icici_direct_trade.py`, etc.) and may enqueue rows for the **review queue** or investment pipeline depending on content. Prefer the API/dashboard upload path for large statement batches when that is easier.
+Beyond **alert** emails, the scraper can process **attached PDFs** and structured broker mail (HDFC combined statements, HDFC CC statement PDFs, ICICI statement PDFs, ICICI Direct trade notifications). These flow through dedicated parsers in `scraper/email_parsers/` (`hdfc_statement.py`, `hdfc_cc_statement.py`, `icici_statement.py`, `icici_direct_trade.py`, etc.) and may enqueue rows for the **review queue** or investment pipeline depending on content. For **large one-off archives** already on disk, the API/dashboard upload path can be easier — email remains the primary path for ongoing months.
 
 **What email does NOT capture (by design):**
 - HDFC net banking outbound — HDFC intentionally sends no alert; you initiated it from their platform
@@ -131,7 +141,7 @@ scraper/
   gmail_client.py    OAuth2 auth, token management, email fetching, HTML body extraction
   email_router.py    find_parser(): routes a message to the correct parser by sender + subject
   orchestrator.py    scrape_new_emails(): the main cycle (fetch → dedup → parse → classify → write)
-  scheduler.py       APScheduler wrapper: Gmail poll, daily price job, weekly inflation job
+  scheduler.py       APScheduler wrapper: Gmail poll, daily price job, weekly inflation + weekly market cache job
   email_parsers/
     base.py          BaseEmailParser ABC + _lookup_account() helper
     base_statement.py Shared helpers for statement PDF pipelines

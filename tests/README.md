@@ -44,10 +44,21 @@ Run `pytest tests/ --collect-only -q` for an up-to-date file list and count. Ind
 
 | Path | What it is |
 |---|---|
-| `tests/fixtures/email_samples/` | Real HTML email bodies captured from bank alert emails. Gitignored (contains account-number hints). |
+| `tests/fixtures/email_samples/` | HTML bodies for HDFC / ICICI alert parser tests and orchestrator integration tests. The repo ships **minimal synthetic** HTML so CI always runs these tests. To refresh from your real Gmail (maintainer machine only), see below. |
 | `tests/fixtures/golden_single_pass.json` | Golden snapshot of the rendered single-pass prompt |
 | `tests/fixtures/golden_two_pass_fields.json` | Golden snapshot of the two-pass fields prompt |
 | `tests/fixtures/golden_two_pass_category.json` | Golden snapshot of the two-pass category prompt |
+
+### Refreshing `email_samples/` from Gmail
+
+1. Ensure `data/gmail_credentials.json` and `data/gmail_token.json` exist (same OAuth flow as the scraper).
+2. Edit [`scripts/email_parser_fixtures_manifest.yaml`](../scripts/email_parser_fixtures_manifest.yaml): set `message_id` per row (from the Gmail URL) or tighten each `query` until the newest match is the mail you want.
+3. Optional: copy `data/email_fixture_redactions.example.json` to **`data/email_fixture_redactions.json`** (gitignored) and add `{ "find": "...", "replace": "..." }` pairs — longest matches are applied first.
+4. Preview: `python3 scripts/sync_email_parser_fixtures.py --dry-run`
+5. Write: `python3 scripts/sync_email_parser_fixtures.py` (omit `--no-redact` so redactions apply; raw downloads need human review before commit).
+6. After HTML changes, update assertions if needed: `python3 scripts/sync_email_parser_fixtures.py --emit-expectations`
+
+For ad-hoc exploration (generic samples per sender, not the pinned parser filenames), [`scripts/discover_emails.py`](../scripts/discover_emails.py) is still available.
 
 **Regenerate golden snapshots** (needed after intentional prompt changes):
 ```bash

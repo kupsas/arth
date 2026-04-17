@@ -7,6 +7,10 @@ Responsibilities:
   - Run **daily price refresh** at **18:30 Asia/Kolkata** (after Indian cash
     market close): NSE/AMFI/yfinance via ``refresh_all_prices`` (Phase A.4.1).
     This job is **always** scheduled so portfolio marks work without Gmail.
+  - Run **weekly market cache refresh** Sunday **19:15 Asia/Kolkata** (after that
+    day's daily price job): ``refresh_all_prices`` → ``refresh_nse_equity_reference``
+    → ``enrich_holdings`` (see :func:`api.services.weekly_market_refresh.run_weekly_market_data_refresh`).
+    Only runs while the API process is up — no separate Mac cron required.
   - After prices commit, run **holding liquidity refresh** (Sub-Plan C): updates
     stored ``earliest_liquidity_date`` for all users so T+2 sleeves track the calendar.
   - Provide start / stop / trigger / reschedule / status controls used by
@@ -50,6 +54,7 @@ from api.services.price_feed import (
     backfill_nse_portfolio_gaps,
     refresh_all_prices,
 )
+from api.services.weekly_market_refresh import run_weekly_market_data_refresh
 from scraper.orchestrator import ScrapeResult, scrape_new_emails
 
 logger = logging.getLogger(__name__)
@@ -86,6 +91,13 @@ _price_last_run_at: datetime.datetime | None = None
 _price_last_success_at: datetime.datetime | None = None
 _price_last_error: str | None = None
 _is_price_job_running = False
+
+# Weekly NSE reference + holdings enrichment (after Sunday evening price job).
+_weekly_market_status_lock = threading.Lock()
+_weekly_market_last_run_at: datetime.datetime | None = None
+_weekly_market_last_success_at: datetime.datetime | None = None
+_weekly_market_last_error: str | None = None
+_is_weekly_market_job_running = False
 
 # Set True when Google returns invalid_grant / missing token in the scheduler
 # path — API can show a banner; cleared after a successful email scrape cycle.
@@ -269,6 +281,45 @@ def _run_daily_price_job() -> None:
             _is_price_job_running = False
 
 
+def _run_weekly_market_data_job() -> None:
+    """Sunday evening: prices → ``nse_equity_reference`` → ``enrich_holdings`` (all users).
+
+    Scheduled after the daily 18:30 IST price job so bhav/NAV from the last session
+    is already in ``prices`` before we rebuild the reference table and copy caps.
+    """
+    global _weekly_market_last_run_at, _weekly_market_last_success_at, _weekly_market_last_error, _is_weekly_market_job_running
+
+    with _weekly_market_status_lock:
+        if _is_weekly_market_job_running:
+            logger.info("Weekly market data job skipped — previous run still in progress")
+            return
+        _is_weekly_market_job_running = True
+
+    try:
+        logger.info("Weekly market data job starting...")
+        summary = run_weekly_market_data_refresh(user_id=None)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        with _weekly_market_status_lock:
+            _weekly_market_last_run_at = now
+            _weekly_market_last_success_at = now
+            _weekly_market_last_error = None
+        logger.info(
+            "Weekly market data job finished — nse_ref symbols_total=%s enrich cap_updates=%s",
+            (summary.get("nse_equity_reference") or {}).get("symbols_total"),
+            (summary.get("enrich_holdings") or {}).get("equities_cap_updated"),
+        )
+    except Exception as exc:
+        err = str(exc)
+        logger.exception("Weekly market data job failed: %s", err)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        with _weekly_market_status_lock:
+            _weekly_market_last_run_at = now
+            _weekly_market_last_error = err
+    finally:
+        with _weekly_market_status_lock:
+            _is_weekly_market_job_running = False
+
+
 def _run_inflation_sync_job() -> None:
     """Refresh IMF India CPI monthly YoY rows in ``inflation_rates`` (weekly / manual)."""
     if os.getenv("INFLATION_DISABLE_IMF", "").strip().lower() in ("1", "true", "yes"):
@@ -346,6 +397,17 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
         misfire_grace_time=_DAILY_PRICE_MISFIRE_GRACE_SEC,
         coalesce=True,
     )
+    # After Sunday 18:30 IST daily prices — refresh NSE reference + holdings enrichment.
+    _scheduler.add_job(
+        _run_weekly_market_data_job,
+        trigger=CronTrigger(
+            day_of_week="sun", hour=19, minute=15, timezone=_DAILY_PRICE_TZ
+        ),
+        id="weekly_market_data",
+        replace_existing=True,
+        misfire_grace_time=_DAILY_PRICE_MISFIRE_GRACE_SEC,
+        coalesce=True,
+    )
 
     if GMAIL_TOKEN_PATH.exists():
         _scheduler.add_job(
@@ -367,7 +429,7 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
     _scheduler.start()
     logger.info(
         "Scheduler started — daily prices 18:30 IST; weekly inflation Sun 07:00 IST; "
-        "email poll every %d min (%s)",
+        "weekly market cache Sun 19:15 IST; email poll every %d min (%s)",
         interval_minutes,
         "on" if GMAIL_TOKEN_PATH.exists() else "off until OAuth",
     )
@@ -489,6 +551,7 @@ def get_status() -> dict:
 
         next_run_at = None
         price_next_run_at = None
+        weekly_market_next_run_at = None
         if _scheduler is not None and _scheduler.running:
             job = _scheduler.get_job("email_scraper")
             if job and job.next_run_time:
@@ -496,6 +559,10 @@ def get_status() -> dict:
             pj = _scheduler.get_job("daily_prices")
             if pj and pj.next_run_time:
                 price_next_run_at = pj.next_run_time.isoformat()
+            wmj = _scheduler.get_job("weekly_market_data")
+            weekly_market_next_run_at = (
+                wmj.next_run_time.isoformat() if wmj and wmj.next_run_time else None
+            )
 
         last_run = _last_result
 
@@ -506,6 +573,18 @@ def get_status() -> dict:
             )
             price_err = _price_last_error
             price_busy = _is_price_job_running
+
+        with _weekly_market_status_lock:
+            wm_last_run = (
+                _weekly_market_last_run_at.isoformat() if _weekly_market_last_run_at else None
+            )
+            wm_last_ok = (
+                _weekly_market_last_success_at.isoformat()
+                if _weekly_market_last_success_at
+                else None
+            )
+            wm_err = _weekly_market_last_error
+            wm_busy = _is_weekly_market_job_running
 
         reauth = _gmail_reauth_required
 
@@ -528,4 +607,10 @@ def get_status() -> dict:
             "price_last_error":       price_err,
             "price_next_run_at":      price_next_run_at,
             "is_price_job_running":   price_busy,
+            # Weekly: prices + nse_equity_reference + enrich_holdings (Sun 19:15 IST)
+            "weekly_market_last_run_at":     wm_last_run,
+            "weekly_market_last_success_at": wm_last_ok,
+            "weekly_market_last_error":      wm_err,
+            "weekly_market_next_run_at":     weekly_market_next_run_at,
+            "is_weekly_market_job_running":  wm_busy,
         }

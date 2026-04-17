@@ -19,7 +19,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from sqlmodel import Session
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +56,26 @@ def _env_mapping() -> dict[str, str]:
         return {}
 
 
-def user_id_for_account(account_id: str) -> str:
-    """Return the Arth user that owns this bank account."""
+def user_id_for_account(account_id: str, session: Session | None = None) -> str:
+    """Return the Arth user that owns this bank account.
+
+    When ``session`` is set, :class:`api.models.ScraperAccountMapping` rows are
+    consulted first (DESKTOP_PREREQS — DB-backed account ownership).
+    """
     if account_id in _test_overrides:
         return _test_overrides[account_id]
+    if session is not None:
+        from sqlmodel import select
+
+        from api.models import ScraperAccountMapping
+
+        m = session.exec(
+            select(ScraperAccountMapping).where(
+                ScraperAccountMapping.account_id == account_id
+            )
+        ).first()
+        if m is not None:
+            return str(m.user_id)
     env_m = _env_mapping()
     if account_id in env_m:
         return env_m[account_id]

@@ -1,6 +1,21 @@
 # Scripts
 
-One-time setup and utility scripts. These are not part of the main pipeline or API — they're tools for first-run setup, database migration, and benchmark preparation.
+One-time setup and utility scripts. These are not part of the main pipeline or API — they are tools for migrations, benchmarks, maintenance, and debugging.
+
+## Buckets
+
+| Bucket | What belongs here | Where it is |
+|--------|-------------------|-------------|
+| **Supported maintenance** | Price history, weekly market refresh, NSE reference, holdings sync/enrich, merge prices test→prod | Top-level `*.py` in this folder |
+| **Legacy email backfills** | `backfill_*_emails.py` wrappers | Still here — each delegates to `scrape_historical.py` / `run_historical_backfill`; prefer **`scripts/scrape_historical.py`** or **`POST /api/scraper/backfill`** |
+| **Schema migrations** | `migrate_db.py`, `migrate_goals_v2.py` | Top-level — **backup first**; idempotent where documented |
+| **Archived** | Old phase migrations, one-off dedupe repair | [`archive/`](archive/README.md) |
+
+---
+
+## Archived (`scripts/archive/`)
+
+Rare upgrades and one-off repairs — see [`archive/README.md`](archive/README.md).
 
 ---
 
@@ -123,11 +138,30 @@ The `scripts/` folder has many **one-off** maintenance tools. Read the top of ea
 | Script | Use when |
 |--------|-----------|
 | `backup_db.sh`, `com.arth.backup.plist` | Scheduled or manual SQLite backups |
-| `backfill_*` (`hdfc_cc_statement_emails`, `icici_direct_trade_emails`, `investment_txn_holding_ids`, `ppf_nps_cost_and_links`, …) | Backfill historical data after schema or parser changes |
+| `scrape_historical.py`, `POST /api/scraper/backfill` | **Preferred** Gmail historical import (date range + optional `--preset` / `gmail_query`) |
+| `backfill_*` (deprecated wrappers + `investment_txn_holding_ids`, `ppf_nps_cost_and_links`, …) | Legacy aliases; use `scrape_historical.py` for statement/trade email sweeps |
 | `validate_email_statement.py`, `validate_icici_direct_trade_email.py` | Validate a single email or PDF against parsers |
 | `diagnose_portfolio_prices.py`, `validate_price_sources.py` | Debug missing marks or bad symbols |
 | `enrich_holdings.py`, `sync_all_holdings.py` | Holdings enrichment / sync |
-| `migrate_db.py`, `migrate_goals_v2.py`, `migrate_phase45.py` | Schema migrations (run with care; backup first) |
-| `compare_icici_trade_emails_to_db.py`, `remove_duplicate_pdf_email_transactions.py` | Reconciliation / dedup helpers |
+| `weekly_market_data_refresh.py` | Same weekly chain as the API scheduler (manual / cron if no server) |
+| `migrate_db.py`, `migrate_goals_v2.py` | Schema migrations (run with care; backup first) |
+| `migrate_phase45.py`, `remove_duplicate_pdf_email_transactions.py` | **Moved to** [`archive/`](archive/README.md) |
+| `compare_icici_trade_emails_to_db.py` | Reconciliation helper (ICICI trade emails vs DB) |
 
 Operator runbooks for **historical price backfill** and **test→prod price merge** are documented above (`backfill_price_history.py`, `merge_prices_from_db.py`).
+
+---
+
+## `weekly_market_data_refresh.py`
+
+**When to use:** One-off or host-cron when you **do not** run the API server continuously. While the server is up, the same three steps run automatically on **Sunday 19:15 Asia/Kolkata** via ``scraper.scheduler`` (after the day’s 18:30 IST daily price job). ``GET /api/scraper/status`` exposes ``weekly_market_*`` timestamps.
+
+**Run once (all users):**
+
+```bash
+python3 scripts/weekly_market_data_refresh.py
+```
+
+**Limit to one user:** `python3 scripts/weekly_market_data_refresh.py --user-id sashank`
+
+**Optional crontab (no server):** e.g. Sunday 19:20 IST — `20 19 * * 0 cd /path/to/Arth && /usr/bin/python3 scripts/weekly_market_data_refresh.py >> data/logs/weekly_market_refresh.log 2>&1` (adjust path and `python3`).

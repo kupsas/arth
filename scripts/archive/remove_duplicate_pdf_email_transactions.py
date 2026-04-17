@@ -22,12 +22,15 @@ Always **back up** ``data/arth.db`` before ``--execute``.
 Examples::
 
     # Preview (default): which ids would be removed
-    python3 scripts/remove_duplicate_pdf_email_transactions.py \\
+    python3 scripts/archive/remove_duplicate_pdf_email_transactions.py \\
         --gmail-message-id 19d5011bb26f69ae
 
     # Actually delete
-    python3 scripts/remove_duplicate_pdf_email_transactions.py \\
+    python3 scripts/archive/remove_duplicate_pdf_email_transactions.py \\
         --gmail-message-id 19d5011bb26f69ae --execute
+
+**Archived:** One-off repair for a fixed ingest bug. Prefer prevention via current
+parsers; run only if you still have legacy duplicates to clean.
 """
 
 from __future__ import annotations
@@ -38,16 +41,18 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Repo root: this file may live in scripts/ or scripts/archive/
+_script_dir = Path(__file__).resolve().parent
+REPO_ROOT = _script_dir.parent.parent if _script_dir.name == "archive" else _script_dir.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import pipeline.config  # noqa: F401 — loads .env
+import pipeline.config  # noqa: F401, E402 — loads .env after path bootstrap
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, select  # noqa: E402
 
-from api.database import get_engine, init_db
-from api.models import Transaction
+from api.database import get_engine, init_db  # noqa: E402
+from api.models import Transaction  # noqa: E402
 
 
 def _duplicate_candidates(session: Session, gmail_message_id: str) -> list[Transaction]:

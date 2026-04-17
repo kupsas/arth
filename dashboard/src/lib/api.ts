@@ -402,6 +402,39 @@ export function fetchAuthMe(): Promise<AuthStatus> {
   return get<AuthStatus>("/api/auth/me");
 }
 
+/** GET /api/setup/status — public; used to decide if the setup wizard should run. */
+export type SetupStatus = {
+  needs_setup: boolean;
+  has_users: boolean;
+  setup_completed: boolean;
+};
+
+export function fetchSetupStatus(): Promise<SetupStatus> {
+  return get<SetupStatus>("/api/setup/status");
+}
+
+/** POST /api/setup/register — first user only (no session required). */
+export function registerFirstUser(username: string, password: string): Promise<unknown> {
+  return post("/api/setup/register", { username, password });
+}
+
+/** POST /api/setup/complete — mark wizard finished (requires session). */
+export function completeSetupWizard(): Promise<{ setup_completed: boolean }> {
+  return post<{ setup_completed: boolean }>("/api/setup/complete", {});
+}
+
+/** POST /api/setup/secrets — store PDF password map (requires session). */
+export function saveSetupSecrets(
+  secrets_json: Record<string, string>,
+): Promise<{ ok: boolean; keys: string[] }> {
+  return post<{ ok: boolean; keys: string[] }>("/api/setup/secrets", { secrets_json });
+}
+
+/** GET /api/setup/secrets/meta — which keys exist (values never returned). */
+export function fetchSetupSecretsMeta(): Promise<{ keys: string[]; has_secrets: boolean }> {
+  return get<{ keys: string[]; has_secrets: boolean }>("/api/setup/secrets/meta");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Spend category breakdown  →  /api/metrics/by-spend-category  (Phase 4.5c)
 // ─────────────────────────────────────────────────────────────────────────────

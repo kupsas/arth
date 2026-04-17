@@ -526,6 +526,44 @@ class TestB2ExactDateBeforeWindow:
 
 # ─── Path B2b: PDF statement email vs prior InstaAlert (same source_type=email) ─
 
+class TestEmailSkipsWhenReconciledRowExists:
+    """After email+statement reconciliation, a later PDF email line must not insert a duplicate."""
+
+    def test_email_pdf_skipped_when_reconciled_row_exists(self, session):
+        d = datetime.date(2026, 4, 1)
+        email_txn = _txn(txn_date=d, raw_description="UPI alert short")
+        write_to_db(
+            [email_txn],
+            source_key="hdfc_savings",
+            llm_model="none",
+            session=session,
+            source_type="email",
+            gmail_message_id="msg_recon_1",
+        )
+        stmt_txn = _txn(txn_date=d, raw_description="FULL-STMT-NARRATION")
+        write_to_db(
+            [stmt_txn],
+            source_key="hdfc_savings",
+            llm_model="none",
+            session=session,
+            source_type="statement",
+        )
+        row = session.exec(select(Transaction)).first()
+        assert row.source_type == "reconciled"
+
+        pdf_dup = _txn(txn_date=d, raw_description="PDF-SAME-TXN-DIFFERENT-TEXT")
+        run = write_to_db(
+            [pdf_dup],
+            source_key="hdfc_savings",
+            llm_model="none",
+            session=session,
+            source_type="email",
+            gmail_message_id="pdf_after_reconcile",
+        )
+        assert run.new_count == 0
+        assert len(session.exec(select(Transaction)).all()) == 1
+
+
 class TestB2bPdfSkipsWhenInstaAlertExists:
     """Monthly PDF duplicates HTML alerts — both are ``source_type='email'``."""
 

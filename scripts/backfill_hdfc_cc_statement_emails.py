@@ -1,23 +1,7 @@
 #!/usr/bin/env python3
 """
-Backfill HDFC credit-card **statement PDF** emails into ``transactions``.
-
-These messages use ``Emailstatements.cards@…`` — they were never picked up until the
-CC statement parser shipped.  The live scraper only looks back ~45 days on first run,
-so older months must be ingested explicitly.
-
-This script runs the **same** pipeline as :func:`scraper.orchestrator.scrape_new_emails`
-(parse → rules → LLM → :func:`pipeline.db_writer.write_to_db` with ``source_type=email``).
-
-Skips any Gmail message id already present in ``processed_emails``.
-
-Examples::
-
-    # All CC statement PDFs received before 2024-01-01 (Sep–Dec 2023 in typical mailboxes)
-    python3 scripts/backfill_hdfc_cc_statement_emails.py --before 2024-01-01
-
-    # Dry-run: list matching messages only
-    python3 scripts/backfill_hdfc_cc_statement_emails.py --before 2024-01-01 --dry-run
+Deprecated — use ``scripts/scrape_historical.py --preset hdfc-cc-statement`` or
+:func:`scraper.orchestrator.run_historical_backfill` with the same preset query.
 """
 
 from __future__ import annotations
@@ -32,132 +16,51 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import pipeline.config  # noqa: F401 — loads ``.env``
+import pipeline.config  # noqa: F401
 
 from api.database import get_engine, init_db
 from sqlmodel import Session
 
-from scraper.email_router import _normalise_sender
-from scraper.gmail_client import GmailClient
-from scraper.orchestrator import (
-    _get_processed_ids,
-    _process_email,
-    _record_email,
-)
+from scraper.orchestrator import HISTORICAL_GMAIL_QUERY_PRESETS, run_historical_backfill
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-_DEFAULT_QUERY = (
-    "(from:emailstatements.cards@hdfcbank.net "
-    "OR from:emailstatements.cards@hdfcbank.bank.in) "
-    'subject:"Credit Card Statement"'
-)
-
 
 def main() -> None:
+    logger.warning(
+        "Deprecated: use scripts/scrape_historical.py --preset hdfc-cc-statement "
+        "or run_historical_backfill(gmail_query=...)."
+    )
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--before",
         type=lambda s: dt.datetime.strptime(s, "%Y-%m-%d").date(),
-        default=dt.date(2024, 1, 1),
-        help="Only emails received strictly before this date (default: 2024-01-01).",
+        default=dt.date.today(),
     )
     ap.add_argument(
         "--after",
         type=lambda s: dt.datetime.strptime(s, "%Y-%m-%d").date(),
         default=dt.date(2000, 1, 1),
-        help="Only emails on or after this date (default: 2000-01-01).",
     )
-    ap.add_argument(
-        "--query",
-        default=_DEFAULT_QUERY,
-        help="Gmail search prefix; date filters are appended.",
-    )
-    ap.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="List matching messages and exit without parsing or DB writes.",
-    )
+    ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    before_s = args.before.strftime("%Y/%m/%d")
-    after_s = args.after.strftime("%Y/%m/%d")
-    full_query = f"{args.query} after:{after_s} before:{before_s}"
-
-    client = GmailClient()
-    client.authenticate()
-
-    messages = client.search_messages(
-        full_query,
-        paginate=True,
-        max_results_per_page=100,
-    )
-    logger.info(
-        "Gmail query: %s → %d message(s)",
-        full_query[:120] + ("…" if len(full_query) > 120 else ""),
-        len(messages),
-    )
-
-    if args.dry_run:
-        for m in sorted(messages, key=lambda x: x.received_at):
-            print(m.received_at.date(), m.id[:16], (m.subject or "")[:80])
-        return
-
     init_db()
-    processed = _get_processed_ids(Session(get_engine()))
-
-    skipped_done = 0
-    skipped_parser = 0
-    failed = 0
-    total_new_txns = 0
-    processed_emails = 0
-
     with Session(get_engine()) as session:
-        for msg in sorted(messages, key=lambda x: x.received_at):
-            if msg.id in processed:
-                skipped_done += 1
-                continue
-
-            sender = _normalise_sender(msg.sender)
-            try:
-                status, txn_count = _process_email(msg, client=client, session=session)
-                _record_email(
-                    session,
-                    msg,
-                    sender=sender,
-                    status=status,
-                    txn_count=txn_count,
-                )
-                processed.add(msg.id)
-                if status == "processed":
-                    processed_emails += 1
-                    total_new_txns += txn_count
-                else:
-                    skipped_parser += 1
-            except Exception as exc:
-                failed += 1
-                logger.exception("Failed %s: %s", msg.id, msg.subject[:60])
-                try:
-                    _record_email(
-                        session,
-                        msg,
-                        sender=sender,
-                        status="failed",
-                        error_message=str(exc),
-                    )
-                    processed.add(msg.id)
-                except Exception:
-                    pass
-
+        r = run_historical_backfill(
+            session=session,
+            after=args.after,
+            before=args.before,
+            gmail_query=HISTORICAL_GMAIL_QUERY_PRESETS["hdfc-cc-statement"],
+            dry_run=args.dry_run,
+        )
     print()
-    print("=== Backfill summary ===")
-    print(f"Messages matching query:     {len(messages)}")
-    print(f"Already in processed_emails: {skipped_done}")
-    print(f"Newly processed (≥1 txn):    {processed_emails}")
-    print(f"New transaction rows (sum):   {total_new_txns}")
-    print(f"Recorded as skipped:         {skipped_parser}")
-    print(f"Failed:                       {failed}")
+    print("=== Historical sweep (hdfc-cc-statement) ===")
+    print(f"emails_found: {r.emails_found}")
+    print(f"emails_processed: {r.emails_processed}")
+    print(f"txns_created: {r.txns_created}")
+    print(f"errors: {len(r.errors)}")
 
 
 if __name__ == "__main__":

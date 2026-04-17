@@ -54,6 +54,8 @@ import {
   formatDate,
   txnTypeLabel,
   categoryColor,
+  reviewConfidenceBadgeClass,
+  reviewConfidenceLabel,
   cn,
 } from "@/lib/utils"
 import type {
@@ -315,11 +317,30 @@ export function TransactionEditSheet({
               {/* ── Read-only info card ───────────────────────────────── */}
               <div className="rounded-lg bg-muted/40 border p-3 flex flex-col gap-2">
                 <div className="flex items-start justify-between gap-2">
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className="text-xs text-muted-foreground">
                       {formatDate(txn.txn_date)} · {txn.account_id}
                       {txn.channel ? ` · ${txn.channel}` : ""}
                     </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <Badge
+                        variant="outline"
+                        title={reviewConfidenceLabel(txn.review_confidence)}
+                        className={cn(
+                          "text-[10px] font-normal",
+                          reviewConfidenceBadgeClass(txn.review_confidence),
+                        )}
+                      >
+                        {txn.review_confidence
+                          ? `${txn.review_confidence} confidence`
+                          : "Confidence —"}
+                      </Badge>
+                      {txn.classification_source && (
+                        <Badge variant="secondary" className="text-[10px] font-normal">
+                          {txn.classification_source}
+                        </Badge>
+                      )}
+                    </div>
                     <p className="mt-1 text-xs text-muted-foreground break-words line-clamp-3">
                       {txn.raw_description}
                     </p>

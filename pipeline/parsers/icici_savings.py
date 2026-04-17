@@ -10,6 +10,8 @@ Two layouts exist:
 **Combined email statement (current)** — grid:
   DATE (DD-MM-YYYY) | MODE | PARTICULARS | DEPOSITS | WITHDRAWALS | BALANCE
   Same word-level strategy; different x-bands and date format.
+  Some PDFs stack **PPF** then **Savings** on the same page; each section ends with a
+  ``Total:`` summary row — those rows must be skipped (not treated as end-of-page).
 
 Parsing strategy: pdfplumber word-level extraction with bounding boxes.
 
@@ -109,14 +111,33 @@ def _annual_pdf_has_ppf_block(pdf: Any) -> bool:
     )
 
 
+def _needs_savings_only_band(pdf: Any) -> bool:
+    """True when page 1 stacks another combined-layout table above the savings section.
+
+    ICICI **monthly** email PDFs use ``Statement of Transactions in PPF Account``;
+    **annual** PDFs use ``Statement of Transactions in Account Number:`` (PPF) plus
+    ``PPF A/c`` summary. In both cases :meth:`ICICISavingsParser` must only parse
+    rows at/after ``Statement of Transactions in Savings Account`` so PPF rows are
+    not stamped as savings — PPF is handled by :func:`parse_icici_ppf_from_combined_pdf`.
+    """
+    if len(pdf.pages) < 1:
+        return False
+    t = pdf.pages[0].extract_text() or ""
+    if "Statement of Transactions in Savings Account" not in t:
+        return False
+    if "Statement of Transactions in PPF Account" in t:
+        return True
+    return _annual_pdf_has_ppf_block(pdf)
+
+
 def _combined_savings_y_window(
     pdf: Any,
     page: Any,
     page_num: int,
-    annual_ppf: bool,
+    savings_only_band: bool,
 ) -> tuple[float | None, float | None]:
-    """On annual page 1, savings rows start at the 'Savings Account' statement header line."""
-    if not annual_ppf or page_num != 1:
+    """When ``savings_only_band``, page-1 savings rows start at the Savings statement header."""
+    if not savings_only_band or page_num != 1:
         return (None, None)
     for y, txt, _ in _line_rows_from_page(page):
         if "Statement of Transactions in Savings Account" in txt:
@@ -125,15 +146,28 @@ def _combined_savings_y_window(
 
 
 def combined_ppf_y_window_page1(page: Any) -> tuple[float, float] | None:
-    """Vertical span of the PPF transaction table on annual page 1 (for PPF PDF parser)."""
+    """Vertical span ``[y_lo, y_hi)`` of the PPF table on combined statement page 1.
+
+    ``y_hi`` is the Savings section header line — same band :func:`parse_icici_ppf_from_combined_pdf`
+    passes to :meth:`ICICISavingsParser._parse_page_combined`.
+
+    Supports:
+
+    - **Annual:** PPF block title ``Statement of Transactions in Account Number:`` (non-savings).
+    - **Monthly email:** ``Statement of Transactions in PPF Account``.
+    """
     y_ppf: float | None = None
     y_sav: float | None = None
     for y, txt, _ in _line_rows_from_page(page):
-        if (
+        if "Statement of Transactions in PPF Account" in txt:
+            if y_ppf is None:
+                y_ppf = y
+        elif (
             "Statement of Transactions in Account Number:" in txt
             and "Savings" not in txt
         ):
-            y_ppf = y
+            if y_ppf is None:
+                y_ppf = y
         if "Statement of Transactions in Savings Account" in txt:
             y_sav = y
             break
@@ -186,12 +220,12 @@ class ICICISavingsParser(BaseParser):
 
         with pdfplumber.open(file_path) as pdf:
             use_combined = self._pdf_uses_combined_statement_layout(pdf)
-            annual_ppf = _annual_pdf_has_ppf_block(pdf)
+            savings_only_band = _needs_savings_only_band(pdf)
             for page_num, page in enumerate(pdf.pages, start=1):
                 try:
                     if use_combined:
                         y_min, y_max = _combined_savings_y_window(
-                            pdf, page, page_num, annual_ppf
+                            pdf, page, page_num, savings_only_band
                         )
                         page_rows = self._parse_page_combined(
                             page, page_num, y_min=y_min, y_max=y_max
@@ -310,7 +344,7 @@ class ICICISavingsParser(BaseParser):
                 continue
             kind, payload = classified
             if kind == "stop":
-                break
+                break  # reserved; combined layout no longer emits "stop" for Total rows
             if kind == "anchor":
                 payload["y"] = y
                 anchors.append(payload)
@@ -325,10 +359,14 @@ class ICICISavingsParser(BaseParser):
         """Return ('anchor', dict), ('continuation', str), ('stop', None), or None."""
         joined = " ".join(w["text"] for w in line_words)
         jl = joined.lower()
+        # Section summary row (PPF + Savings on one page). Do **not** end the page —
+        # older code returned "stop" here, which dropped the entire Savings table below.
+        if re.match(r"^\s*total\s*:", jl, re.IGNORECASE):
+            return None
         for w in line_words:
             low = w["text"].strip().lower()
             if low.startswith("total:") or low == "total:":
-                return ("stop", None)
+                return None
         if "date" in jl and "particulars" in jl and "withdrawals" in jl:
             return None
 

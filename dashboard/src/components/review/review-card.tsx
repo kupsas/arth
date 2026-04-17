@@ -29,6 +29,8 @@ import {
   formatDate,
   txnTypeLabel,
   categoryColor,
+  reviewConfidenceBadgeClass,
+  reviewConfidenceLabel,
   cn,
 } from "@/lib/utils"
 import type { Transaction, SpendCategory } from "@/lib/types"
@@ -141,6 +143,16 @@ export function ReviewCard({
               Unclassified
             </Badge>
           )}
+          <Badge
+            variant="outline"
+            title={reviewConfidenceLabel(txn.review_confidence)}
+            className={cn(
+              "font-normal text-xs",
+              reviewConfidenceBadgeClass(txn.review_confidence),
+            )}
+          >
+            {txn.review_confidence ? `${txn.review_confidence} confidence` : "Confidence —"}
+          </Badge>
         </div>
       </CardContent>
 

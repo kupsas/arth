@@ -84,6 +84,10 @@ def list_transactions(
     category: str | None = Query(None, description="counterparty_category value"),
     txn_type: str | None = Query(None),
     is_reviewed: bool | None = Query(None),
+    review_confidence: str | None = Query(
+        None,
+        description="Filter by review_confidence tier: HIGH, MEDIUM, LOW",
+    ),
     # Free-text search (matches counterparty or raw_description)
     search: str | None = Query(None, min_length=1),
     # Pagination
@@ -114,6 +118,8 @@ def list_transactions(
         query = query.where(Transaction.txn_type == txn_type)
     if is_reviewed is not None:
         query = query.where(Transaction.is_reviewed == is_reviewed)
+    if review_confidence:
+        query = query.where(Transaction.review_confidence == review_confidence.upper())
     if search:
         pattern = f"%{search}%"
         query = query.where(
@@ -304,6 +310,7 @@ def _txn_to_dict(txn: Transaction) -> dict:
         "counterparty_category": txn.counterparty_category,
         "spend_category": txn.spend_category,
         "classification_source": getattr(txn, "classification_source", None),
+        "review_confidence": getattr(txn, "review_confidence", None),
         "raw_description": txn.raw_description,
         "ref_number": txn.ref_number,
         "closing_balance": txn.closing_balance,

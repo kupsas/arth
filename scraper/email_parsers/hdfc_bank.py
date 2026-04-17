@@ -251,10 +251,10 @@ class HDFCAccountUpdateParser(BaseEmailParser):
     We try the UPI inbound pattern first. If it doesn't match, we return []
     rather than failing — non-transaction "Account update" emails are expected.
 
-    Body text for UPI inbound:
+    Body text for UPI inbound (shape; test fixtures use synthetic VPA / names):
         Rs. 950.00 is successfully credited to your account **3703 by VPA
-        sahili.totale-1@okhdfcbank SAHILI TOTALE on 02-02-26.
-        Your UPI transaction reference number is 118054190455.
+        sender.demo@okhdfcbank EXAMPLE RECEIVER on 02-02-26.
+        Your UPI transaction reference number is 900112233445.
 
     Note: "Rs. " has a space after it (unlike the outbound alerts "Rs.951").
     Note: Account number is masked with "**" before the last 4 digits.

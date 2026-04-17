@@ -9,8 +9,11 @@ If you are starting fresh (no arth.db yet), you do NOT need to run this —
 the correct schema from scratch.
 
 Usage:
-    python scripts/migrate_phase45.py              # applies to data/arth.db
-    APP_ENV=test python scripts/migrate_phase45.py # applies to data/arth_test.db
+    python scripts/archive/migrate_phase45.py              # applies to data/arth.db
+    APP_ENV=test python scripts/archive/migrate_phase45.py # applies to data/arth_test.db
+
+**Archived:** Phase 4.5 is in baseline ``init_db()`` for new installs. Keep this script
+only if you are upgrading a very old ``arth.db``; otherwise you do not need it.
 
 What it does:
     1. Adds `spend_category` column (TEXT, nullable) to transactions
@@ -26,14 +29,16 @@ import sys
 from pathlib import Path
 
 # Make sure imports resolve from the repo root regardless of where we run from
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# (this file may live in scripts/ or scripts/archive/)
+_script_dir = Path(__file__).resolve().parent
+REPO_ROOT = _script_dir.parent.parent if _script_dir.name == "archive" else _script_dir.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-import sqlalchemy
-from sqlalchemy import text
+import sqlalchemy  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 
-from api.database import get_engine, init_db
-from pipeline.config import DB_PATH
+from api.database import get_engine, init_db  # noqa: E402
+from pipeline.config import DB_PATH  # noqa: E402
 
 
 def column_exists(conn: sqlalchemy.Connection, table: str, column: str) -> bool:
@@ -86,9 +91,8 @@ def run_migration() -> None:
     print("  ✓ Ensured goals table exists (via init_db)")
 
     print("\nMigration complete.\n")
-    print("Next step: run the backfill script to populate spend_category for")
-    print("existing transactions using rules-based classification:")
-    print("  python scripts/backfill_spend_category.py\n")
+    print("Next step: optionally populate spend_category for existing rows, e.g.:")
+    print("  python scripts/backfill_llm_spend_category.py\n")
 
 
 if __name__ == "__main__":
