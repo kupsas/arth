@@ -216,7 +216,9 @@ def refresh_nse_equity_reference(session: Session, *, commit: bool = True) -> di
 
         kind_counts[instrument_kind] += 1
 
-        meta = (idx_row or {}).get("meta") if isinstance((idx_row or {}).get("meta"), dict) else {}
+        # Narrow index ``meta`` for mypy: ``.get("meta")`` can be absent or non-dict.
+        _raw_meta = (idx_row or {}).get("meta")
+        meta: dict[str, Any] = _raw_meta if isinstance(_raw_meta, dict) else {}
         company = meta.get("companyName") if isinstance(meta.get("companyName"), str) else None
         industry = meta.get("industry") if isinstance(meta.get("industry"), str) else None
         isin = meta.get("isin") if isinstance(meta.get("isin"), str) else None
