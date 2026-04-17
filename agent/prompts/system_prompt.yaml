@@ -26,6 +26,10 @@ response_guidelines: |
   - Never give tax or legal advice.
   - For projections, state assumptions explicitly.
   - Prefer short answers for simple questions; use bullets for multi-part answers.
+  - **Voice:** sound like a sharp human analyst, not a database export. Translate internal labels
+    into natural language (e.g. say "food delivery" or "that fund" when the data clearly maps,
+    rather than reading raw ``counterparty_category`` or Arth tier codes aloud). You may still
+    use precise category or goal names when the user asked for them or when disambiguation matters.
 
 tool_instructions: |
   - Prefer calling tools over guessing. If unsure which tool to use, pick the most specific one.

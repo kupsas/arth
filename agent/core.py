@@ -129,6 +129,8 @@ async def run_agent_turn(
 
     if run_logger is not None:
         run_logger.log_user_message(user_message)
+        # Exact system role content the API receives (profile + tool list inlined).
+        run_logger.log_final_system_prompt_once(system_prompt)
 
     turn_fragments: list[dict[str, Any]] = []
     tool_batches = 0

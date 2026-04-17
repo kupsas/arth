@@ -67,9 +67,6 @@ _CYAN = "\033[36m"
 _YELLOW = "\033[33m"
 _RESET = "\033[0m"
 
-# Cap huge JSON dumps on the terminal (full payload is always in the log file).
-_TERM_TOOL_RESULT_MAX = 4000
-
 
 def _truncate(s: str, max_len: int) -> str:
     if len(s) <= max_len:
@@ -84,8 +81,9 @@ def _print_event(ev: AgentEvent, *, debug: bool, out: TextIO) -> None:
         )
         if ev.reasoning:
             out.write(f"{_YELLOW}thinking:{_RESET} {_truncate(ev.reasoning, 6000)}\n")
-        if ev.content and str(ev.content).strip():
-            out.write(f"{_DIM}assistant (pre-tool) text:{_RESET} {_truncate(str(ev.content), 2000)}\n")
+        # Intentionally omit streaming / pre-tool assistant text here: it duplicates the
+        # final ResponseEvent ("Arth:") reply and clutters the REPL. Full step text is
+        # still captured in the session log via AgentRunLogger.
         if ev.tool_intents:
             out.write(f"{_DIM}tools requested:{_RESET}\n")
             for ti in ev.tool_intents:
@@ -105,11 +103,12 @@ def _print_event(ev: AgentEvent, *, debug: bool, out: TextIO) -> None:
                 f"{_truncate(json.dumps(ev.arguments, ensure_ascii=False), 1200)}\n"
             )
     elif isinstance(ev, ToolCallCompleted):
+        # Keep a one-line receipt on the terminal; full JSON stays in the session log
+        # (see AgentRunLogger.log_tool_result) so the REPL stays readable.
         status = ev.result.get("status", "?")
-        body = json.dumps(ev.result, ensure_ascii=False, default=str)
         out.write(
-            f"{_DIM}[tool ← {ev.tool_name} | {status} | {ev.duration_ms} ms]{_RESET}\n"
-            f"{_truncate(body, _TERM_TOOL_RESULT_MAX)}\n"
+            f"{_DIM}[tool ← {ev.tool_name} | {status} | {ev.duration_ms} ms]"
+            f" (full result in session log){_RESET}\n"
         )
     elif isinstance(ev, ResponseEvent):
         out.write(f"\n{_GREEN}Arth:{_RESET} {ev.content}\n\n")
@@ -133,7 +132,7 @@ async def async_main() -> None:
         log_rel = run_log.path.resolve()
     print(
         f"{_DIM}Session log:{_RESET} {log_rel}\n"
-        f"{_DIM}(full ReAct trace: LLM steps, tools, results, final reply){_RESET}\n"
+        f"{_DIM}(session log: LLM steps, tool args + full results, final system prompt once, reply){_RESET}\n"
     )
 
     client = create_agent_http_client()

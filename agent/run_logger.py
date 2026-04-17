@@ -31,6 +31,9 @@ class AgentRunLogger:
     def __init__(self, path: Path, *, session_id: str) -> None:
         self.path = path
         self.session_id = session_id
+        # The rendered system prompt is identical across turns for a given CLI session;
+        # log it once so the file stays useful without huge duplication.
+        self._final_system_prompt_logged = False
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._write(
             f"# Arth agent run log\n"
@@ -53,6 +56,23 @@ class AgentRunLogger:
 
     def log_user_message(self, text: str) -> None:
         self._write(f"\n{'=' * 72}\n[{_utc_stamp()}] USER\n{'=' * 72}\n{text}\n")
+
+    def log_final_system_prompt_once(self, text: str) -> None:
+        """
+        Record the exact system string sent to the model (placeholders already filled).
+
+        This is the post-:func:`agent.prompts.load_system_prompt` string, not the raw
+        YAML template. Written at most once per log file.
+        """
+        if self._final_system_prompt_logged:
+            return
+        self._final_system_prompt_logged = True
+        self._write(
+            f"\n{'=' * 72}\n"
+            f"[{_utc_stamp()}] SYSTEM PROMPT (final, rendered — same for rest of session)\n"
+            f"{'=' * 72}\n"
+            f"{text.rstrip()}\n"
+        )
 
     def log_llm_step(
         self,
