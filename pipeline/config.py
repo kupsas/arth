@@ -105,10 +105,20 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
     "gemini-2.5-flash-lite": {"input": 0.10,  "output": 0.40},
 }
 
-# API keys (read from env; only needed when LLM_MODEL != "none")
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+# API keys — transaction **classification** pipeline only (separate from conversational agent).
+# Prefer *_FOR_CLASSIFIER so usage is trackable per product; fall back to legacy names for CI/scripts.
+OPENAI_API_KEY: str = (
+    os.getenv("OPENAI_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("OPENAI_API_KEY", "").strip()
+)
+ANTHROPIC_API_KEY: str = (
+    os.getenv("ANTHROPIC_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("ANTHROPIC_API_KEY", "").strip()
+)
+GOOGLE_API_KEY: str = (
+    os.getenv("GOOGLE_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("GOOGLE_API_KEY", "").strip()
+)
 
 # ---------------------------------------------------------------------------
 # LLM classifier tuning

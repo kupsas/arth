@@ -16,9 +16,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+# Classification keys (same resolution order as ``pipeline/config.py``).
+OPENAI_API_KEY = (
+    os.getenv("OPENAI_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("OPENAI_API_KEY", "").strip()
+)
+ANTHROPIC_API_KEY = (
+    os.getenv("ANTHROPIC_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("ANTHROPIC_API_KEY", "").strip()
+)
+GOOGLE_API_KEY = (
+    os.getenv("GOOGLE_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("GOOGLE_API_KEY", "").strip()
+)
 
 PROMPT = "Reply with exactly one word: OK"
 
@@ -105,9 +115,9 @@ def main() -> None:
     print("=" * 70)
 
     for name, key in [
-        ("OPENAI_API_KEY", OPENAI_API_KEY),
-        ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
-        ("GOOGLE_API_KEY", GOOGLE_API_KEY),
+        ("OPENAI_API_KEY_FOR_CLASSIFIER or OPENAI_API_KEY", OPENAI_API_KEY),
+        ("ANTHROPIC_API_KEY_FOR_CLASSIFIER or ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
+        ("GOOGLE_API_KEY_FOR_CLASSIFIER or GOOGLE_API_KEY", GOOGLE_API_KEY),
     ]:
         status = "SET" if key and not key.startswith("sk-...") else "MISSING"
         print(f"  {name}: {status}")

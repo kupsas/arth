@@ -30,7 +30,8 @@ python3 -m pip install -r requirements.txt
 
 # 2. Configure API keys and settings
 cp .env.example .env
-# Edit .env: LLM API keys (Google, Anthropic, or OpenAI) plus AUTH_* for dashboard login
+# Edit .env: AUTH_* for dashboard login; LLM keys — use *_FOR_CLASSIFIER (pipeline) and
+# *_FOR_SINGLE_AGENT (CLI agent) so provider usage is split; see .env.example
 
 # 3. Load your bank statements into the database
 python3 -m pipeline.run --all-sources

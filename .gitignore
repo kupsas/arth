@@ -42,7 +42,11 @@ scripts/seed_sashank_classification_dev.py
 # Note: this is a symlink to Arth/docs/personal-data — trailing slash won't match symlinks
 docs/personal-data
 
-# Private strategic documents (personal financial goals, amounts, planning)
+# Private strategic documents (personal financial goals, amounts, planning).
+# Ignore ``docs/private`` with and without trailing slash so the untracked
+# symlink (git treats it as a file — ``docs/private/`` alone can miss it) is
+# never accidentally added.
+docs/private
 docs/private/
 
 # Generated benchmark CSVs — contain real transaction data (dates, amounts, narrations)
@@ -62,6 +66,9 @@ data/.nse_cache/
 # Log files — keep the directory itself (via .gitkeep) but ignore log contents
 data/logs/*.log
 data/logs/*.log.*
+
+# Agent CLI session transcripts (full ReAct traces)
+agent/logs/*.log
 
 # SQLite backup files — large, machine-specific, never commit
 data/backups/

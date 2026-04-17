@@ -693,3 +693,21 @@ class TestAuth:
         unauthed_client.post("/api/auth/logout")
         resp = unauthed_client.get("/api/transactions")
         assert resp.status_code == 401
+
+    def test_protected_endpoint_accepts_internal_agent_header(self, unauthed_client: TestClient):
+        """In-process agent uses ``X-Arth-Internal`` with a shared secret (no cookie)."""
+        from api.auth import agent_internal_token
+
+        tok = agent_internal_token()
+        resp = unauthed_client.get(
+            "/api/transactions",
+            headers={"X-Arth-Internal": tok},
+        )
+        assert resp.status_code == 200
+
+    def test_internal_agent_header_wrong_secret_rejected(self, unauthed_client: TestClient):
+        resp = unauthed_client.get(
+            "/api/transactions",
+            headers={"X-Arth-Internal": "not-a-valid-token"},
+        )
+        assert resp.status_code == 401

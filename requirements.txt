@@ -40,3 +40,6 @@ nse>=2.1
 cryptography>=42.0
 pyxirr>=0.10
 scipy>=1.14
+
+# Arth conversational agent (Sub-Plan 1)
+litellm>=1.0
