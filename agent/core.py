@@ -25,10 +25,18 @@ from agent.llm import chat_completion
 from agent.memory import ConversationMemory
 from agent.prompts import load_system_prompt
 from agent.run_logger import AgentRunLogger
+from agent.security.output_sanitizer import wrap_tool_output
 from agent.sanitizer import sanitize_jsonable
 from agent.tools import get_all_tools, get_tool
 
 logger = logging.getLogger(__name__)
+
+# Shown when the user has sent the maximum number of user turns for this session.
+# Kept in one place so the CLI pre-check and ``run_agent_turn`` stay in sync.
+CONVERSATION_LIMIT_REPLY = (
+    "This session has reached its conversation limit. "
+    "Please start a new session to continue."
+)
 
 
 def _noop_event(_: AgentEvent) -> None:
@@ -104,6 +112,7 @@ async def run_agent_turn(
     user_profile: str,
     event_callback: Callable[[AgentEvent], None] = _noop_event,
     run_logger: AgentRunLogger | None = None,
+    cost_tracker: Any | None = None,
 ) -> str:
     """
     Run one user message through the agent.
@@ -116,7 +125,17 @@ async def run_agent_turn(
 
     ``run_logger`` — when set (CLI), append a structured transcript under
     ``agent/logs/`` for later review.
+
+    ``cost_tracker`` — when set, records LiteLLM ``usage`` + estimated USD per completion.
     """
+    if memory.turn_count() >= cfg.MAX_CONVERSATION_TURNS:
+        text = CONVERSATION_LIMIT_REPLY
+        if run_logger is not None:
+            run_logger.log_user_message(user_message)
+            run_logger.log_note("MAX_CONVERSATION_TURNS reached — user message not stored in memory")
+        event_callback(ResponseEvent(content=text))
+        return text
+
     tools = get_all_tools()
     tool_openai = [t.to_openai_tool() for t in tools]
     system_prompt = load_system_prompt(user_profile=user_profile, tools=tools)
@@ -138,7 +157,12 @@ async def run_agent_turn(
 
     while True:
         llm_step += 1
-        response = await chat_completion(messages=messages, tools=tool_openai)
+        response = await chat_completion(
+            messages=messages,
+            tools=tool_openai,
+            cost_tracker=cost_tracker,
+            usage_call_type="agent",
+        )
         choice = response.choices[0]
         msg = choice.message
         finish = str(choice.finish_reason or "").strip().lower()
@@ -225,7 +249,9 @@ async def run_agent_turn(
                 else:
                     payload = await spec.execute(client, args)
                 safe = sanitize_jsonable(payload)
-                body = json.dumps(safe, ensure_ascii=False)
+                if not isinstance(safe, dict):
+                    safe = {"status": "success", "data": safe}
+                body = wrap_tool_output(name, safe)
                 dur_ms = int((time.perf_counter() - t0) * 1000)
                 event_callback(
                     ToolCallCompleted(

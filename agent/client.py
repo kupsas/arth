@@ -22,7 +22,7 @@ def create_agent_http_client() -> AsyncClient:
     return AsyncClient(
         transport=transport,
         base_url="http://arth.test",
-        headers={"X-Arth-Internal": cfg.INTERNAL_AUTH_TOKEN},
+        headers={"X-Arth-Internal": cfg.get_internal_auth_token()},
         timeout=120.0,
     )
 

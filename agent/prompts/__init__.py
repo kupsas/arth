@@ -23,6 +23,15 @@ def load_yaml(name: str) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def load_screening_classifier_system() -> str:
+    """Return the system instructions for the Layer-2 screening classifier."""
+    doc = load_yaml("screening.yaml")
+    block = doc.get("classifier_system")
+    if not isinstance(block, str) or not block.strip():
+        raise ValueError("screening.yaml missing non-empty classifier_system")
+    return block.strip()
+
+
 def load_system_prompt(*, user_profile: str, tools: list[Tool]) -> str:
     """Build the full system string from ``system_prompt.yaml`` + dynamic sections."""
     doc = load_yaml("system_prompt.yaml")

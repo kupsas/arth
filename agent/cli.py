@@ -15,19 +15,22 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+from agent import config as cfg
 from agent.client import create_agent_http_client
-from agent.core import run_agent_turn
+from agent.core import CONVERSATION_LIMIT_REPLY, run_agent_turn
 from agent.events import (
     AgentEvent,
     ErrorEvent,
     LlmStepEvent,
     ResponseEvent,
+    ScreeningBlockedEvent,
     ToolCallCompleted,
     ToolCallStarted,
 )
 from agent.memory import ConversationMemory
 from agent.profile import generate_user_profile
 from agent.run_logger import AgentRunLogger
+from agent.security import CostTracker, SessionRateLimiter, screen_message
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +115,11 @@ def _print_event(ev: AgentEvent, *, debug: bool, out: TextIO) -> None:
         )
     elif isinstance(ev, ResponseEvent):
         out.write(f"\n{_GREEN}Arth:{_RESET} {ev.content}\n\n")
+    elif isinstance(ev, ScreeningBlockedEvent):
+        out.write(
+            f"{_YELLOW}[screening blocked: {ev.category} via {ev.layer} | {ev.latency_ms} ms]{_RESET}\n"
+            f"{_GREEN}Arth:{_RESET} {ev.message}\n\n"
+        )
     elif isinstance(ev, ErrorEvent):
         out.write(f"{_RED}{ev.message}{_RESET}\n")
 
@@ -136,8 +144,10 @@ async def async_main() -> None:
     )
 
     client = create_agent_http_client()
-    memory = ConversationMemory()
+    memory = ConversationMemory(max_turns=cfg.MAX_CONVERSATION_TURNS)
     debug = False
+    cost_tracker = CostTracker(run_logger=run_log)
+    rate_limiter = SessionRateLimiter(cfg.RATE_LIMIT_PER_MINUTE)
 
     try:
         print("Loading your financial profile…", end="", flush=True)
@@ -168,6 +178,46 @@ async def async_main() -> None:
             def _cb(ev: AgentEvent) -> None:
                 _print_event(ev, debug=debug, out=sys.stdout)
 
+            if not rate_limiter.check_and_record():
+                msg = (
+                    "You're sending messages too quickly. "
+                    "Take a breath and try again in a moment."
+                )
+                run_log.log_note("RATE_LIMIT_PER_MINUTE exceeded — message skipped")
+                _cb(ResponseEvent(content=msg))
+                continue
+
+            # Hard cap before screening so we do not spend classifier tokens on a message
+            # the agent will reject anyway (matches plan flow: convo check → agent).
+            if memory.turn_count() >= cfg.MAX_CONVERSATION_TURNS:
+                run_log.log_user_message(cmd)
+                run_log.log_note(
+                    "MAX_CONVERSATION_TURNS reached — screening skipped; "
+                    "user message not stored in memory"
+                )
+                _cb(ResponseEvent(content=CONVERSATION_LIMIT_REPLY))
+                continue
+
+            sr = await screen_message(cmd, cost_tracker=cost_tracker)
+            run_log.log_screening_result(
+                allowed=sr.allowed,
+                category=sr.category,
+                layer=sr.layer,
+                latency_ms=sr.latency_ms,
+                rejection_message=sr.rejection_message,
+            )
+            if not sr.allowed:
+                layer = sr.layer or "unknown"
+                _cb(
+                    ScreeningBlockedEvent(
+                        category=sr.category or "unknown",
+                        message=sr.rejection_message or "",
+                        layer=layer,
+                        latency_ms=sr.latency_ms,
+                    )
+                )
+                continue
+
             try:
                 await run_agent_turn(
                     user_message=cmd,
@@ -176,7 +226,13 @@ async def async_main() -> None:
                     user_profile=profile,
                     event_callback=_cb,
                     run_logger=run_log,
+                    cost_tracker=cost_tracker,
                 )
+                if debug:
+                    print(
+                        f"{_DIM}session LLM est. spend: ${cost_tracker.session_total_usd:.6f} | "
+                        f"daily (UTC): ${cost_tracker.daily_total_usd:.6f}{_RESET}\n"
+                    )
             except Exception as e:
                 logger.exception("Agent turn failed")
                 print(f"{_RED}Error: {e}{_RESET}\n")

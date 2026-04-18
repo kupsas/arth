@@ -46,17 +46,17 @@ async def resolve_goal(client: AsyncClient, name_or_id: str) -> dict[str, Any] |
 
     # 1) Numeric id
     if raw.isdigit():
-        gid = int(raw)
+        numeric_id = int(raw)
         for g in goals:
-            if g.get("id") == gid:
+            if g.get("id") == numeric_id:
                 return g
 
     # 2) Fuzzy name (dedupe by goal id)
     norm = _normalize_goal_query(raw)
     by_id: dict[int, dict[str, Any]] = {}
     for g in goals:
-        gid = g.get("id")
-        if gid is None:
+        goal_id = g.get("id")
+        if goal_id is None:
             continue
         name = (g.get("name") or "").strip()
         if not name:
@@ -68,14 +68,14 @@ async def resolve_goal(client: AsyncClient, name_or_id: str) -> dict[str, Any] |
         elif all(part in lname for part in norm.split() if len(part) > 2):
             hit = True
         if hit:
-            by_id[int(gid)] = g
+            by_id[int(goal_id)] = g
 
     if not by_id:
         for g in goals:
-            gid = g.get("id")
+            goal_id = g.get("id")
             name = (g.get("name") or "").strip().lower()
-            if gid is not None and norm and norm in name:
-                by_id[int(gid)] = g
+            if goal_id is not None and norm and norm in name:
+                by_id[int(goal_id)] = g
 
     if not by_id:
         return None
