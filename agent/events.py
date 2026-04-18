@@ -71,6 +71,16 @@ class ErrorEvent:
     recoverable: bool = True
 
 
+@dataclass
+class ScreeningBlockedEvent:
+    """Emitted when Layer-1/Layer-2 screening blocks a user message before the agent runs."""
+
+    category: str
+    message: str
+    layer: str
+    latency_ms: int
+
+
 # Union type for type hints on callbacks
 AgentEvent = (
     ThinkingEvent
@@ -80,4 +90,5 @@ AgentEvent = (
     | TokenEvent
     | ResponseEvent
     | ErrorEvent
+    | ScreeningBlockedEvent
 )

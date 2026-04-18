@@ -4,7 +4,7 @@ Spending-domain tools — facades over ``/api/metrics/*``, ``/api/recurring/*``,
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from httpx import AsyncClient
 
@@ -185,7 +185,10 @@ def format_spending_trends_for_agent(rows: list[dict[str, Any]]) -> dict[str, An
         }
         for row in rows
     ]
-    rates = [s["savings_rate"] for s in series[-3:]]
+    # JSON rows are ``dict[str, Any]``; cast keeps mypy happy for ``float(...)``.
+    rates: list[float] = [
+        float(cast(Any, row.get("savings_rate") or 0)) for row in rows[-3:]
+    ]
     avg = sum(rates) / len(rates) if rates else 0.0
     trend_direction = "stable"
     if len(rates) >= 2:

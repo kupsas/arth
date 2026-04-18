@@ -261,15 +261,13 @@ async def simulate_surplus_change(
     new_monthly_surplus: float | None = None,
     surplus_delta: float | None = None,
 ) -> dict[str, Any]:
-    has_new = new_monthly_surplus is not None
-    has_delta = surplus_delta is not None
-    if has_new and has_delta:
+    if new_monthly_surplus is not None and surplus_delta is not None:
         return {
             "status": "error",
             "error": "ambiguous_parameters",
             "detail": "Pass only one of new_monthly_surplus or surplus_delta.",
         }
-    if not has_new and not has_delta:
+    if new_monthly_surplus is None and surplus_delta is None:
         return {
             "status": "error",
             "error": "missing_parameter",
@@ -279,12 +277,14 @@ async def simulate_surplus_change(
     fc = await _post_from_current(client, simulation_months=m)
     params = fc.get("params") or {}
     base_surplus = float(params.get("monthly_surplus") or 0)
-    if has_new:
+    if new_monthly_surplus is not None:
         new_s = float(new_monthly_surplus)
         label = f"absolute_surplus_{new_s:.0f}"
-    else:
+    elif surplus_delta is not None:
         new_s = base_surplus + float(surplus_delta)
         label = f"delta_surplus_{float(surplus_delta):+.0f}"
+    else:
+        raise AssertionError("exhaustive: one of new_monthly_surplus or surplus_delta is set")
     variant = _variant_params(params, new_s)
     cmp = await _post_compare(client, params, [variant])
     base_res = fc.get("result") or {}

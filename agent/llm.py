@@ -66,19 +66,37 @@ async def chat_completion(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
     model: str | None = None,
+    fallback_chain: list[str] | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float | None = None,
+    cost_tracker: Any | None = None,
+    usage_call_type: str = "agent",
 ) -> Any:
-    """Single chat completion with optional OpenAI-format ``tools``."""
-    use_model = model or cfg.AGENT_MODEL
-    chain = [use_model] + [m for m in cfg.AGENT_FALLBACK_CHAIN if m != use_model]
+    """
+    Single chat completion with optional OpenAI-format ``tools``.
+
+    ``fallback_chain`` — when set, replaces :data:`agent.config.AGENT_FALLBACK_CHAIN`
+    (used for screening). Primary model is ``model`` or :data:`agent.config.AGENT_MODEL`.
+
+    ``cost_tracker`` — when set, records token usage + estimated USD after a successful call.
+    """
+    temp = cfg.AGENT_TEMPERATURE if temperature is None else float(temperature)
+    mtok = cfg.MAX_OUTPUT_TOKENS if max_tokens is None else int(max_tokens)
+    tout = cfg.LLM_REQUEST_TIMEOUT if timeout is None else float(timeout)
+
+    primary = model or cfg.AGENT_MODEL
+    tail = cfg.AGENT_FALLBACK_CHAIN if fallback_chain is None else fallback_chain
+    chain = [primary] + [m for m in tail if m != primary]
 
     last_err: Exception | None = None
     for m in chain:
         kwargs: dict[str, Any] = {
             "model": m,
             "messages": messages,
-            "temperature": cfg.AGENT_TEMPERATURE,
-            "max_tokens": cfg.MAX_OUTPUT_TOKENS,
-            "timeout": cfg.LLM_REQUEST_TIMEOUT,
+            "temperature": temp,
+            "max_tokens": mtok,
+            "timeout": tout,
         }
         ak = _api_key_for_litellm_model(m)
         if ak:
@@ -92,11 +110,16 @@ async def chat_completion(
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        extra = _gemini_extra_body(m)
-        if extra:
-            kwargs["extra_body"] = extra
+        # Thinking knobs apply only to main agent completions (not tiny screening calls).
+        if usage_call_type == "agent":
+            extra = _gemini_extra_body(m)
+            if extra:
+                kwargs["extra_body"] = extra
         try:
-            return await acompletion(**kwargs)
+            resp = await acompletion(**kwargs)
+            if cost_tracker is not None:
+                cost_tracker.record_litellm_response(response=resp, call_type=usage_call_type)
+            return resp
         except Exception as e:
             last_err = e
             logger.warning("LLM call failed for model=%s: %s — trying fallback", m, e)

@@ -121,3 +121,40 @@ class AgentRunLogger:
 
     def log_note(self, message: str) -> None:
         self._write(f"\n[{_utc_stamp()}] NOTE: {message}\n")
+
+    def log_screening_result(
+        self,
+        *,
+        allowed: bool,
+        category: str | None,
+        layer: str | None,
+        latency_ms: int,
+        rejection_message: str | None = None,
+    ) -> None:
+        """Log Layer-1/Layer-2 screening outcome (ALLOW or BLOCK)."""
+        status = "ALLOW" if allowed else f"BLOCK:{category or '?'}"
+        self._write(
+            f"\n[{_utc_stamp()}] SCREENING | {status} | layer={layer!r} | {latency_ms} ms\n"
+        )
+        if not allowed and rejection_message:
+            self._write(f"rejection_message: {rejection_message}\n")
+
+    def log_llm_usage(
+        self,
+        *,
+        model: str | None,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float,
+        session_total_usd: float,
+        daily_total_usd: float,
+        call_type: str = "agent",
+    ) -> None:
+        """Append token usage + estimated USD for one LiteLLM completion."""
+        self._write(
+            f"\n[{_utc_stamp()}] LLM USAGE ({call_type}) | model={model!r}\n"
+            f"  prompt_tokens={prompt_tokens} | completion_tokens={completion_tokens} "
+            f"| total={total_tokens} | est_cost=${estimated_cost_usd:.6f}\n"
+            f"  session_total=${session_total_usd:.6f} | daily_total=${daily_total_usd:.6f}\n"
+        )
