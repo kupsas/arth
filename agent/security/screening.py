@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -23,7 +24,22 @@ from agent.prompts import load_screening_classifier_system
 logger = logging.getLogger(__name__)
 
 _VALID_BLOCK = frozenset(
-    {"harmful", "injection", "off_topic", "investment_advice", "write_action"}
+    {
+        "harmful",
+        "injection",
+        "off_topic",
+        "investment_advice",
+        "write_action",
+        "pii",
+    }
+)
+
+# Deterministic gate: asks for government IDs / numbers tied to the user (classifier can miss these).
+_GOV_ID_REQUEST_RE = re.compile(
+    r"(?:\bwhat\s*(?:'s|is)\s+)?(?:\bmy\b|\bour\b)\s+(?:pan|aadhaar|aadhar)(?:\s+(?:number|no\.?|#))?\b|"
+    r"\b(?:pan|aadhaar|aadhar)\s+(?:number|no\.?|#)\b.{0,80}\b(?:my|mine|our|me)\b|"
+    r"\b(?:show|tell|give|reveal|send|lookup)\b.{0,120}\b(?:my|mine|our)\s+(?:pan|aadhaar|aadhar)\b",
+    re.I | re.DOTALL,
 )
 
 REJECTION_MESSAGES: dict[str, str] = {
@@ -34,8 +50,12 @@ REJECTION_MESSAGES: dict[str, str] = {
         "portfolio, goals, and projections. What would you like to know about your money?"
     ),
     "investment_advice": (
-        "I track and analyse your financial data, but I don't provide buy/sell recommendations. "
-        "Here's what I can tell you about your portfolio instead."
+        "I track and analyse your financial data, but I can't recommend specific securities to buy or sell. "
+        "Ask me about your current holdings, spending, goals, or projections and we can work from there."
+    ),
+    "pii": (
+        "I can't help with revealing or verifying government ID numbers (PAN, Aadhaar, etc.) in chat. "
+        "I can still help with your spending, portfolio, and goals — what would you like to check?"
     ),
     "write_action": (
         "I'm read-only -- I can analyse your data and run projections, but I can't execute "
@@ -113,6 +133,16 @@ async def screen_message(
             rejection_message=None,
             layer=None,
             latency_ms=int((time.perf_counter() - t0) * 1000),
+        )
+
+    if _GOV_ID_REQUEST_RE.search(message):
+        ms = int((time.perf_counter() - t0) * 1000)
+        return ScreeningResult(
+            allowed=False,
+            category="pii",
+            rejection_message=REJECTION_MESSAGES["pii"],
+            layer="pii_pattern",
+            latency_ms=ms,
         )
 
     mod = await _openai_moderation_flagged(message)

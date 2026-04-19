@@ -48,7 +48,7 @@ AGENT_FALLBACK_CHAIN: list[str] = [
     m.strip()
     for m in os.getenv(
         "AGENT_FALLBACK_CHAIN",
-        "gemini/gemini-3-flash-preview,anthropic/claude-sonnet-4-6,openai/gpt-5-mini-2025-08-07",
+        "gemini/gemini-3-flash-preview,anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini",
     ).split(",")
     if m.strip()
 ]

@@ -12,6 +12,13 @@ from httpx import AsyncClient
 from agent.tools._resolvers import resolve_goal
 from agent.tools.base import tool
 
+# Shown in tool payloads and descriptions so the model does not confuse PV vs future nominal.
+GOAL_TARGET_AMOUNT_BASIS_NOTE = (
+    "Goal target_amount values are in today's rupees (present-day / real terms as stored by Arth). "
+    "They are not the future nominal lump sum at the goal date; compound or inflation math to a "
+    "future nominal amount is not returned by these tools—derive that separately if needed."
+)
+
 
 @tool(
     name="get_goals_overview",
@@ -20,6 +27,7 @@ from agent.tools.base import tool
         "Filter by ``activation_status`` (default ACTIVE): PENDING, ACTIVE, COMPLETED, PAUSED. "
         "Use when the user asks about goals, goal order, which goal matters most, or "
         "progress toward named goals at a glance. Read-only. "
+        "**Each goal's target_amount is in today's money (INR), not a future nominal value at the goal date.** "
         "For one goal's deep dive (ancestors, descendants), use get_goal_detail."
     ),
 )
@@ -75,6 +83,7 @@ def format_goals_overview_for_agent(
     ]
     return {
         "status": "success",
+        "target_amount_basis": GOAL_TARGET_AMOUNT_BASIS_NOTE,
         "goals": slim_goals,
         "priorities": slim_pri,
         "monthly_surplus_hint": priorities.get("monthly_surplus"),
@@ -116,6 +125,7 @@ def _months_remaining(target_date_str: str | None) -> int | None:
         "Deep detail for **one** goal: progress, targets, tier, plus ancestor and descendant "
         "goal names (no graph ids). Accepts fuzzy ``goal_name_or_id`` "
         "(e.g. 'emergency fund', 'house'). Read-only. "
+        "**target_amount is in today's money (INR), not the future nominal amount at target_date.** "
         "For all goals + system ranks, use get_goals_overview."
     ),
 )
@@ -165,6 +175,7 @@ def format_goal_detail_for_agent(
     ]
     return {
         "status": "success",
+        "target_amount_basis": GOAL_TARGET_AMOUNT_BASIS_NOTE,
         "goal": _slim_goal_core(goal),
         "months_remaining": _months_remaining(td),
         "monthly_need_last_snapshot": monthly_need,
@@ -230,6 +241,7 @@ def format_surplus_allocation_for_agent(data: dict[str, Any]) -> dict[str, Any]:
     description=(
         "Goal hierarchy (pyramid tiers L1–L4 + untiered) with progress and status per goal. "
         "Omits database ids and link edges — names and progress only. "
+        "When combining with other goal tools, remember **target amounts are in today's money (INR)**. "
         "Use for 'how do my goals relate'. For a flat priority-ordered list, use get_goals_overview."
     ),
 )
@@ -257,4 +269,9 @@ def format_goal_tree_for_agent(tree: dict[str, Any]) -> dict[str, Any]:
                 }
             )
         tiers_out.append({"tier": label.upper(), "goals": tier_goals})
-    return {"status": "success", "tiers": tiers_out, "currency": "INR"}
+    return {
+        "status": "success",
+        "target_amount_basis": GOAL_TARGET_AMOUNT_BASIS_NOTE,
+        "tiers": tiers_out,
+        "currency": "INR",
+    }

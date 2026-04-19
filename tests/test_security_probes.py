@@ -111,6 +111,7 @@ PARSE_BLOCK_CASES = [
     ("block__off_topic", "BLOCK:off_topic", "off_topic"),
     ("block__investment_advice", "BLOCK:investment_advice", "investment_advice"),
     ("block__write_action", "BLOCK:write_action", "write_action"),
+    ("block__pii", "BLOCK:pii", "pii"),
     ("block__harmful", "BLOCK:harmful", "harmful"),
     ("block__hyphen_normalised", "BLOCK:investment-advice", "investment_advice"),
     ("block__mixed_case", "BLOCK:Off_Topic", "off_topic"),

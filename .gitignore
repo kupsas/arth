@@ -71,6 +71,10 @@ data/logs/*.log.*
 # Agent CLI session transcripts (full ReAct traces)
 agent/logs/*.log
 
+# Agent eval run outputs (JSON + markdown reports — machine-local)
+agent/evals/results/*
+!agent/evals/results/.gitkeep
+
 # SQLite backup files — large, machine-specific, never commit
 data/backups/
 

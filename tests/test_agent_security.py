@@ -86,6 +86,7 @@ def test_parse_classifier_line() -> None:
     assert _parse_classifier_line("  allow  \n") == (True, None)
     assert _parse_classifier_line("BLOCK:off_topic") == (False, "off_topic")
     assert _parse_classifier_line("BLOCK:investment-advice") == (False, "investment_advice")
+    assert _parse_classifier_line("BLOCK:pii") == (False, "pii")
 
 
 def test_sanitizer_scrubs_injection_in_tool_like_payload() -> None:
@@ -127,6 +128,31 @@ def test_screen_message_disabled_short_circuits(monkeypatch: pytest.MonkeyPatch)
         assert r.layer is None
         mod.assert_not_awaited()
         cc.assert_not_awaited()
+
+    asyncio.run(_run())
+
+
+def test_screen_message_pii_pattern_blocks_before_moderation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Government-ID requests hit the regex gate — no moderation or classifier call."""
+    monkeypatch.setattr(cfg, "SCREENING_ENABLED", True)
+
+    async def _run() -> None:
+        from agent.security import REJECTION_MESSAGES, screen_message
+
+        with (
+            patch(
+                "agent.security.screening._openai_moderation_flagged",
+                new_callable=AsyncMock,
+            ) as mod,
+            patch("agent.llm.chat_completion", new_callable=AsyncMock) as cc,
+        ):
+            r = await screen_message("What is my PAN number?")
+        mod.assert_not_awaited()
+        cc.assert_not_awaited()
+        assert r.allowed is False
+        assert r.category == "pii"
+        assert r.layer == "pii_pattern"
+        assert r.rejection_message == REJECTION_MESSAGES["pii"]
 
     asyncio.run(_run())
 

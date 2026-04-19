@@ -12,6 +12,7 @@ from httpx import AsyncClient
 
 from agent.tools._resolvers import resolve_goal
 from agent.tools.base import tool
+from agent.tools.goals import GOAL_TARGET_AMOUNT_BASIS_NOTE
 
 
 async def _post_from_current(
@@ -112,6 +113,7 @@ def format_run_projection_for_agent(
         }
     return {
         "status": "success",
+        "target_amount_basis": GOAL_TARGET_AMOUNT_BASIS_NOTE,
         "simulation_months": params.get("simulation_months"),
         "monthly_surplus_assumption": params.get("monthly_surplus"),
         "general_inflation_rate_pct": params.get("general_inflation_rate"),
@@ -127,6 +129,8 @@ def format_run_projection_for_agent(
     description=(
         "Run a forward-looking simulation from the user's current ACTIVE goals and surplus. "
         "Use for 'am I on track', 'when might I finish this goal', or overall trajectory. "
+        "**Per-goal target_amount in results is in today's money (INR);** projected_final_amount follows "
+        "the simulator path and is not a generic compound-interest calculator output. "
         "Optional goal_name_or_id narrows the projection list to one goal name. "
         "For what-if tweaks to monthly surplus, use compare_scenarios or simulate_surplus_change."
     ),
@@ -196,6 +200,7 @@ def format_compare_result_for_agent(
         )
     return {
         "status": "success",
+        "target_amount_basis": GOAL_TARGET_AMOUNT_BASIS_NOTE,
         "scenario": scenario_label,
         "net_worth_end_base": round(base_nw_end, 2),
         "net_worth_end_variant": round(var_nw_end, 2),
@@ -213,6 +218,7 @@ def format_compare_result_for_agent(
         "changes by ``surplus_change_amount`` INR (positive = more to invest each month). "
         "``change_description`` is a short human label for logs only (e.g. 'cut dining 10k'). "
         "Requires non-zero surplus_change_amount. "
+        "Goal targets underlying the sim are in **today's money**; see target_amount_basis in results. "
         "For setting surplus to an absolute level, use simulate_surplus_change."
     ),
 )
@@ -252,7 +258,8 @@ async def compare_scenarios(
         "What-if on **monthly investable surplus**: either set an absolute ``new_monthly_surplus`` "
         "(INR/month) or apply a ``surplus_delta`` to the model's current surplus — not both. "
         "Returns the same style of comparison as compare_scenarios (goal completion shifts, "
-        "net worth at horizon). Use for income shocks, sabbatical, or 'if I saved X more'."
+        "net worth at horizon). Goal targets in the underlying model are in **today's money**. "
+        "Use for income shocks, sabbatical, or 'if I saved X more'."
     ),
 )
 async def simulate_surplus_change(

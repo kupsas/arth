@@ -118,7 +118,9 @@ async def chat_completion(
         try:
             resp = await acompletion(**kwargs)
             if cost_tracker is not None:
-                cost_tracker.record_litellm_response(response=resp, call_type=usage_call_type)
+                cost_tracker.record_litellm_response(
+                    response=resp, call_type=usage_call_type, model=m
+                )
             return resp
         except Exception as e:
             last_err = e

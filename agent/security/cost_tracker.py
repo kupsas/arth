@@ -57,6 +57,8 @@ class CostTracker:
     def __init__(self, *, run_logger: AgentRunLogger | None = None) -> None:
         self._run_logger = run_logger
         self.session_total_usd = 0.0
+        self.session_total_prompt_tokens: int = 0
+        self.session_total_completion_tokens: int = 0
         self.daily_total_usd = 0.0
         self._day_key: str | None = None
 
@@ -71,18 +73,25 @@ class CostTracker:
         *,
         response: Any,
         call_type: str,
+        model: str | None = None,
     ) -> None:
         """
         Parse ``response.usage``, add to totals, optionally append to session log.
 
         ``call_type`` is ``\"agent\"`` or ``\"screening\"`` for log readability.
+
+        When ``model`` is set, it overrides ``response.model`` for pricing lookup
+        (LiteLLM sometimes returns a different id string than the request id).
         """
         self._rollover_day_if_needed()
-        model = _response_model_id(response)
+        requested = model.strip() if isinstance(model, str) and model.strip() else None
+        model_id = requested or _response_model_id(response)
         pt, ct, tt = _usage_tokens(response)
-        est = estimate_cost_usd(model=model, prompt_tokens=pt, completion_tokens=ct)
+        est = estimate_cost_usd(model=model_id, prompt_tokens=pt, completion_tokens=ct)
         prev_daily = self.daily_total_usd
         self.session_total_usd += est
+        self.session_total_prompt_tokens += pt
+        self.session_total_completion_tokens += ct
         self.daily_total_usd += est
 
         # Log once when crossing the threshold (avoid spamming every completion).
@@ -95,7 +104,7 @@ class CostTracker:
 
         if self._run_logger is not None:
             self._run_logger.log_llm_usage(
-                model=model,
+                model=model_id,
                 prompt_tokens=pt,
                 completion_tokens=ct,
                 total_tokens=tt,

@@ -17,6 +17,8 @@ from agent.tools.base import tool
     description=(
         "Get current net worth: assets minus liabilities, plus asset allocation, "
         "concentration metrics, and portfolio-level totals from holdings. "
+        "Amounts are **INR**; on success use ``net_worth.total`` and ``total_portfolio_value_inr`` "
+        "for headline totals (they mirror the same snapshot when both are present). "
         "Use when the user asks about net worth, total assets, liabilities, or "
         "high-level allocation. Optional as_of date (YYYY-MM-DD) for a historical snapshot. "
         "For per-holding weights and returns, use get_holdings_breakdown."
