@@ -83,9 +83,14 @@ LLM_FALLBACK_CHAIN: list[str] = [
 LLM_MODEL_MAP: dict[str, tuple[str, str]] = {
     "claude-haiku-4-5":      ("anthropic", "claude-haiku-4-5"),
     "claude-sonnet-4-6":     ("anthropic", "claude-sonnet-4-6"),
+    "claude-opus-4-7":       ("anthropic", "claude-opus-4-7"),
     "claude-opus-4-6":       ("anthropic", "claude-opus-4-6"),
     "gpt-5-mini":            ("openai",    "gpt-5-mini-2025-08-07"),
     "gpt-5-nano":            ("openai",    "gpt-5-nano-2025-08-07"),
+    "gpt-5.4":               ("openai",    "gpt-5.4"),
+    "gpt-5.4-mini":          ("openai",    "gpt-5.4-mini"),
+    "gpt-5.4-nano":          ("openai",    "gpt-5.4-nano"),
+    "gpt-5.4-pro":           ("openai",    "gpt-5.4-pro"),
     "gemini-3.1-flash-lite": ("google",    "gemini-3.1-flash-lite-preview"),
     "gemini-3-flash":        ("google",    "gemini-3-flash-preview"),
     "gemini-2.5-flash":      ("google",    "gemini-2.5-flash"),
@@ -96,19 +101,34 @@ LLM_MODEL_MAP: dict[str, tuple[str, str]] = {
 MODEL_PRICING: dict[str, dict[str, float]] = {
     "claude-haiku-4-5":      {"input": 1.00,  "output": 5.00},
     "claude-sonnet-4-6":     {"input": 3.00,  "output": 15.00},
+    "claude-opus-4-7":       {"input": 5.00,  "output": 25.00},
     "claude-opus-4-6":       {"input": 5.00,  "output": 25.00},
     "gpt-5-mini":            {"input": 0.25,  "output": 2.00},
     "gpt-5-nano":            {"input": 0.05,  "output": 0.40},
+    "gpt-5.4":               {"input": 2.50,  "output": 15.00},
+    "gpt-5.4-mini":          {"input": 0.75,  "output": 4.50},
+    "gpt-5.4-nano":          {"input": 0.20,  "output": 1.25},
+    "gpt-5.4-pro":           {"input": 30.00, "output": 270.00},
     "gemini-3.1-flash-lite": {"input": 0.25,  "output": 1.50},
     "gemini-3-flash":        {"input": 0.50,  "output": 3.00},
     "gemini-2.5-flash":      {"input": 0.30,  "output": 2.50},
     "gemini-2.5-flash-lite": {"input": 0.10,  "output": 0.40},
 }
 
-# API keys (read from env; only needed when LLM_MODEL != "none")
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+# API keys — transaction **classification** pipeline only (separate from conversational agent).
+# Prefer *_FOR_CLASSIFIER so usage is trackable per product; fall back to legacy names for CI/scripts.
+OPENAI_API_KEY: str = (
+    os.getenv("OPENAI_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("OPENAI_API_KEY", "").strip()
+)
+ANTHROPIC_API_KEY: str = (
+    os.getenv("ANTHROPIC_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("ANTHROPIC_API_KEY", "").strip()
+)
+GOOGLE_API_KEY: str = (
+    os.getenv("GOOGLE_API_KEY_FOR_CLASSIFIER", "").strip()
+    or os.getenv("GOOGLE_API_KEY", "").strip()
+)
 
 # ---------------------------------------------------------------------------
 # LLM classifier tuning

@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Enables `prose` / `prose-sm` in chat and anywhere else (Tailwind Typography). */
+@plugin "@tailwindcss/typography";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 

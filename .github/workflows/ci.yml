@@ -42,13 +42,13 @@ jobs:
       # ruff is fast (written in Rust) and catches unused imports, naming
       # issues, and style problems.  Errors here fail the build immediately.
       - name: Lint with ruff
-        run: ruff check pipeline/ api/ scraper/ tests/
+        run: ruff check pipeline/ api/ scraper/ agent/ tests/
 
       # ── 5. Type-check (mypy) ──────────────────────────────────────────────
       # mypy reads mypy.ini at the repo root for per-module settings.
       # Third-party libraries without stubs are silenced via ignore_missing_imports.
       - name: Type-check with mypy
-        run: mypy pipeline/ api/ scraper/
+        run: mypy pipeline/ api/ scraper/ agent/
 
       # ── 6. Tests (pytest + coverage) ──────────────────────────────────────
       # -m "not slow" excludes any test marked @pytest.mark.slow (LLM API calls).
@@ -60,14 +60,17 @@ jobs:
             -m "not slow" \
             --cov=pipeline \
             --cov=api \
+            --cov=agent \
             --cov-report=xml \
             --cov-report=term-missing \
             --cov-fail-under=35 \
             -q
         env:
           # Tests use in-memory SQLite; no real keys needed.
-          # Setting dummies prevents any code that reads os.getenv() from
-          # erroring out due to missing values.
+          # Classifier keys: pipeline/config prefers *_FOR_CLASSIFIER, then legacy names.
+          OPENAI_API_KEY_FOR_CLASSIFIER: dummy
+          ANTHROPIC_API_KEY_FOR_CLASSIFIER: dummy
+          GOOGLE_API_KEY_FOR_CLASSIFIER: dummy
           OPENAI_API_KEY: dummy
           ANTHROPIC_API_KEY: dummy
           GOOGLE_API_KEY: dummy

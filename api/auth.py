@@ -25,12 +25,13 @@ Session tokens:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 
 import bcrypt
 from dotenv import load_dotenv
-from fastapi import Cookie, Depends, HTTPException, Query, status
+from fastapi import Cookie, Depends, Header, HTTPException, Query, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 load_dotenv()
@@ -68,6 +69,31 @@ _PASSWORD_HASH: bytes = bcrypt.hashpw(
 
 # The serializer signs/verifies tokens using the secret key.
 _serializer = URLSafeTimedSerializer(_AUTH_SECRET_KEY)
+
+
+def internal_agent_username() -> str:
+    """Username returned for the in-process agent (``X-Arth-Internal`` header).
+
+    Matches ``get_current_user`` when the internal secret is present — i.e. the
+    configured ``AUTH_USERNAME`` (see ``.env`` / ``.env.example``). Use this when
+    the agent or other callers need the same Arth identity the API uses for data access.
+    """
+    return _AUTH_USERNAME
+
+
+def agent_internal_token() -> str:
+    """Secret for trusted in-process agent calls (ASGI client header).
+
+    Set ``AGENT_INTERNAL_TOKEN`` in ``.env`` for explicit control. Otherwise a
+    deterministic value is derived from ``AUTH_SECRET_KEY`` so the API and agent
+    agree without extra configuration (same machine, same process).
+    """
+    env = os.getenv("AGENT_INTERNAL_TOKEN", "").strip()
+    if env:
+        return env
+    return hashlib.sha256(
+        f"{_AUTH_SECRET_KEY}:arth-agent-internal-v1".encode("utf-8")
+    ).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +161,7 @@ def verify_session_token(token: str) -> str:
 
 def get_current_user(
     arth_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+    x_arth_internal: str | None = Header(default=None, alias="X-Arth-Internal"),
 ) -> str:
     """FastAPI dependency that enforces authentication.
 
@@ -147,7 +174,12 @@ def get_current_user(
         app.include_router(router, dependencies=[Depends(get_current_user)])
 
     Returns the authenticated username. Raises HTTP 401 if not authenticated.
+
+    **Internal agent:** when ``X-Arth-Internal`` matches ``agent_internal_token()``,
+    the configured ``AUTH_USERNAME`` is returned (trusted in-process caller only).
     """
+    if x_arth_internal and x_arth_internal == agent_internal_token():
+        return _AUTH_USERNAME
     if arth_session is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

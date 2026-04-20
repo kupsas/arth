@@ -13,22 +13,26 @@ cd "$ROOT"
 export AUTH_USERNAME="${AUTH_USERNAME:-sashank}"
 export AUTH_PASSWORD="${AUTH_PASSWORD:-arth2026}"
 export AUTH_SECRET_KEY="${AUTH_SECRET_KEY:-local-ci-not-for-production-secret-key}"
+export OPENAI_API_KEY_FOR_CLASSIFIER="${OPENAI_API_KEY_FOR_CLASSIFIER:-dummy}"
+export ANTHROPIC_API_KEY_FOR_CLASSIFIER="${ANTHROPIC_API_KEY_FOR_CLASSIFIER:-dummy}"
+export GOOGLE_API_KEY_FOR_CLASSIFIER="${GOOGLE_API_KEY_FOR_CLASSIFIER:-dummy}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-dummy}"
 export GOOGLE_API_KEY="${GOOGLE_API_KEY:-dummy}"
 export APP_ENV="${APP_ENV:-test}"
 
 echo "==> ruff"
-python3 -m ruff check pipeline/ api/ scraper/ tests/
+python3 -m ruff check pipeline/ api/ scraper/ agent/ tests/
 
 echo "==> mypy"
-python3 -m mypy pipeline/ api/ scraper/
+python3 -m mypy pipeline/ api/ scraper/ agent/
 
 echo "==> pytest (coverage)"
 python3 -m pytest tests/ \
   -m "not slow" \
   --cov=pipeline \
   --cov=api \
+  --cov=agent \
   --cov-report=term-missing \
   --cov-fail-under=35 \
   -q

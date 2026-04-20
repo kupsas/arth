@@ -52,6 +52,9 @@ _NOISY_LIBS = [
     "multipart",
     # pdfminer.six (used by pdfplumber) logs every PDF operator at DEBUG.
     "pdfminer",
+    # LiteLLM dumps full curl commands, raw JSON responses, and cost math at DEBUG.
+    "LiteLLM",
+    "litellm",
 ]
 
 

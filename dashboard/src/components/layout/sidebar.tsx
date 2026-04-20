@@ -31,6 +31,7 @@ import {
   Settings,
   LineChart,
   Tags,
+  MessageCircle,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -41,6 +42,11 @@ const NAV_ITEMS = [
     label: "Expense Tracker",
     href: "/",
     icon: LayoutDashboard,
+  },
+  {
+    label: "Ask Arth",
+    href: "/chat",
+    icon: MessageCircle,
   },
   {
     label: "Transactions",

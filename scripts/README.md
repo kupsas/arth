@@ -165,3 +165,21 @@ python3 scripts/weekly_market_data_refresh.py
 **Limit to one user:** `python3 scripts/weekly_market_data_refresh.py --user-id sashank`
 
 **Optional crontab (no server):** e.g. Sunday 19:20 IST — `20 19 * * 0 cd /path/to/Arth && /usr/bin/python3 scripts/weekly_market_data_refresh.py >> data/logs/weekly_market_refresh.log 2>&1` (adjust path and `python3`).
+
+---
+
+## `run_evals.py`
+
+**When to use:** Sub-Plan 4 — run the **33-question** agent eval suite against the local API + SQLite, save JSON + markdown, then compare runs across models.
+
+**Examples:**
+
+```bash
+python3 scripts/run_evals.py --dry-run
+python3 scripts/run_evals.py --tier 1
+python3 scripts/run_evals.py --model anthropic/claude-sonnet-4-6
+python3 scripts/run_evals.py --report agent/evals/results/<run>.json
+python3 scripts/run_evals.py --compare
+```
+
+See [`agent/evals/README.md`](../agent/evals/README.md) for scoring workflow. Result JSON lives under `agent/evals/results/` (gitignored).

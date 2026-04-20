@@ -24,6 +24,7 @@ from api.routes import metrics, pipeline, transactions, user_config
 from api.services.inflation_service import sync_imf_cpi_history
 from api.services.price_feed import run_startup_price_sync
 from api.routes.auth import router as auth_router
+from api.routes.chat_ws import router as chat_router
 from api.routes.goal_links import router as goal_links_router
 from api.routes.goal_tree import router as goal_tree_router
 from api.routes.goals import router as goals_router
@@ -170,6 +171,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(setup_router, prefix="/api/setup", tags=["Setup"])
+app.include_router(chat_router)
 
 # ---------------------------------------------------------------------------
 # Protected routes — all require a valid session cookie.

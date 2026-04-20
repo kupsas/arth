@@ -18,6 +18,7 @@ Tables:
   - InvestmentTransaction — broker/fund ledger rows (Phase A.0)
   - Liability         — loans and recurring obligations (Phase A.0)
   - Price             — daily close/NAV per symbol (Phase A.0)
+  - ChatSession / ChatMessage — dashboard agent chat history (Sub-Plan 5)
 
 Design notes:
   - Enum fields are stored as VARCHAR (SQLite has no native enum type anyway).
@@ -909,6 +910,48 @@ class ScraperAccountMapping(SQLModel, table=True):
     last_4_digits: str = Field(index=True)
     account_id: str = Field(index=True)
     source_key: str
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Dashboard agent chat — persisted sessions + OpenAI-format message rows
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class ChatSession(SQLModel, table=True):
+    """One saved Arth chat thread per logged-in user (dashboard Plan 5)."""
+
+    __tablename__ = "chat_sessions"
+
+    id: str = Field(primary_key=True)
+    user_id: str = Field(index=True)
+    title: str | None = Field(default=None)
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    # 0 = active, 1 = archived (soft delete)
+    is_archived: int = Field(default=0)
+
+
+class ChatMessage(SQLModel, table=True):
+    """One row per user/assistant/tool message in a session (OpenAI chat format)."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (Index("ix_chat_messages_session_created", "session_id", "id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    session_id: str = Field(foreign_key="chat_sessions.id", index=True)
+    role: str
+    content: str | None = None
+    tool_calls_json: str | None = Field(default=None, sa_column=Column(Text))
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    metadata_json: str | None = Field(default=None, sa_column=Column(Text))
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )

@@ -80,6 +80,7 @@ import type {
 } from "@/lib/types";
 
 import { buildApiUrl } from "@/lib/api-base";
+import type { ChatSessionDetail, ChatSessionSummary } from "@/lib/chat-types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error type
@@ -895,4 +896,45 @@ export function refreshPrices(params?: {
     {},
     params as QueryParams,
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent chat  →  /api/chat
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/chat/ws-ticket
+ * Fetches a short-lived token the browser passes as ``?ticket=`` on the
+ * WebSocket URL.  The REST call goes through the same-origin proxy (so the
+ * httpOnly cookie is sent), but the resulting ticket can be forwarded to
+ * the direct FastAPI WebSocket endpoint where the cookie is absent.
+ */
+export function fetchWsTicket(): Promise<{ ticket: string }> {
+  return get<{ ticket: string }>("/api/chat/ws-ticket");
+}
+
+/** GET /api/chat/sessions */
+export function listChatSessions(params?: {
+  limit?: number;
+  offset?: number;
+}): Promise<ChatSessionSummary[]> {
+  return get<ChatSessionSummary[]>("/api/chat/sessions", params as QueryParams);
+}
+
+/** GET /api/chat/sessions/{id} */
+export function fetchChatSession(sessionId: string): Promise<ChatSessionDetail> {
+  return get<ChatSessionDetail>(`/api/chat/sessions/${sessionId}`);
+}
+
+/** PATCH /api/chat/sessions/{id} */
+export function renameChatSession(
+  sessionId: string,
+  title: string,
+): Promise<ChatSessionSummary> {
+  return patch<ChatSessionSummary>(`/api/chat/sessions/${sessionId}`, { title });
+}
+
+/** DELETE /api/chat/sessions/{id} — soft archive */
+export function archiveChatSession(sessionId: string): Promise<void> {
+  return del(`/api/chat/sessions/${sessionId}`);
 }

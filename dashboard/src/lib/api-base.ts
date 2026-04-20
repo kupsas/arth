@@ -57,3 +57,52 @@ export function buildApiUrl(path: string, params?: QueryParams): string {
 
   return u.toString();
 }
+
+/**
+ * Direct WebSocket origin for the FastAPI server.
+ *
+ * Next.js Route Handlers cannot proxy WebSocket upgrades, so when the dashboard
+ * runs in same-origin mode the WS must bypass the ``/api-backend`` proxy and
+ * connect straight to FastAPI.
+ *
+ * Set ``NEXT_PUBLIC_WS_URL`` to the FastAPI ws(s) origin when same-origin is
+ * active (defaults to ``ws://127.0.0.1:8000`` for local dev).
+ */
+const WS_DIRECT =
+  (process.env.NEXT_PUBLIC_WS_URL ?? "ws://127.0.0.1:8000").trim().replace(/\/$/, "");
+
+/**
+ * WebSocket URL for the Arth agent chat endpoint.
+ *
+ * When ``NEXT_PUBLIC_API_URL`` points directly at FastAPI (e.g.
+ * ``http://127.0.0.1:8000``) the WS URL is derived from that origin.
+ *
+ * In same-origin mode the HTTP proxy works but WebSocket upgrades do not, so
+ * the connection goes directly to FastAPI via ``NEXT_PUBLIC_WS_URL``.
+ */
+export function buildChatWebSocketUrl(
+  sessionId?: string | null,
+  ticket?: string | null,
+): string {
+  const params = new URLSearchParams();
+  if (sessionId?.trim()) params.set("session_id", sessionId.trim());
+  if (ticket?.trim()) params.set("ticket", ticket.trim());
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const path = `/api/chat/ws${qs}`;
+
+  if (typeof window === "undefined") {
+    return `ws://127.0.0.1:8000${path}`;
+  }
+
+  if (apiViaSameOrigin) {
+    return `${WS_DIRECT}${path}`;
+  }
+
+  if (API_BASE.startsWith("http")) {
+    const wsRoot = API_BASE.replace(/^http/, "ws");
+    return `${wsRoot}${path}`;
+  }
+
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${window.location.host}${API_BASE}${path}`;
+}
