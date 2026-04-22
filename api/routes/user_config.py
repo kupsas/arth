@@ -20,7 +20,11 @@ from api.models import (
     UserContact,
     UserMerchantRule,
 )
-from api.services.user_classification import load_user_classification_config, merge_starter_pack_for_user
+from api.services.user_classification import (
+    get_or_create_user_classification_settings,
+    load_user_classification_config,
+    merge_starter_pack_for_user,
+)
 
 router = APIRouter()
 
@@ -265,15 +269,7 @@ def delete_family_member(
 
 
 def _get_or_create_settings(session: Session, user_id: str) -> UserClassificationSettings:
-    row = session.exec(
-        select(UserClassificationSettings).where(UserClassificationSettings.user_id == user_id)
-    ).first()
-    if row:
-        return row
-    row = UserClassificationSettings(user_id=user_id)
-    session.add(row)
-    session.flush()
-    return row
+    return get_or_create_user_classification_settings(session, user_id)
 
 
 @router.get("/settings")

@@ -19,13 +19,10 @@ from pathlib import Path
 
 from pipeline import config as _cfg
 from pipeline.config import (
-    ANTHROPIC_API_KEY,
-    GOOGLE_API_KEY,
     LLM_BATCH_SIZE,
     LLM_CACHE_DIR,
     LLM_FALLBACK_CHAIN,
     LLM_MODEL_MAP,
-    OPENAI_API_KEY,
 )
 from pipeline.models import (
     CanonicalTransaction,
@@ -40,6 +37,15 @@ from pipeline.models import (
 from pipeline.prompts import batch_classify_prompt
 
 logger = logging.getLogger(__name__)
+
+
+def _has_any_provider_api_key() -> bool:
+    """Whether any LLM provider can authenticate (reads :mod:`pipeline.config` at call time)."""
+    return bool(
+        (_cfg.OPENAI_API_KEY or "").strip()
+        or (_cfg.ANTHROPIC_API_KEY or "").strip()
+        or (_cfg.GOOGLE_API_KEY or "").strip()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +75,12 @@ def classify_llm(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]
     llm_model = _cfg.LLM_MODEL
 
     if llm_model == "none":
+        return txns
+
+    if not _has_any_provider_api_key():
+        logger.info(
+            "LLM: no provider API keys — skipping LLM classification (graceful rules-only degradation)"
+        )
         return txns
 
     work = _build_work_items(txns)
@@ -211,7 +223,7 @@ def _call_llm(provider: str, model_id: str, system: str, user: str) -> LLMRespon
 
 def _call_openai(model: str, system: str, user: str) -> LLMResponse:
     from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = OpenAI(api_key=_cfg.OPENAI_API_KEY)
 
     # GPT-5 models don't support temperature; older models do.
     kwargs: dict = {
@@ -235,7 +247,7 @@ def _call_openai(model: str, system: str, user: str) -> LLMResponse:
 
 def _call_anthropic(model: str, system: str, user: str) -> LLMResponse:
     from anthropic import Anthropic
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = Anthropic(api_key=_cfg.ANTHROPIC_API_KEY)
     resp = client.messages.create(
         model=model,
         max_tokens=4096,
@@ -258,7 +270,7 @@ def _call_anthropic(model: str, system: str, user: str) -> LLMResponse:
 def _call_google(model: str, system: str, user: str) -> LLMResponse:
     from google import genai
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
+    client = genai.Client(api_key=_cfg.GOOGLE_API_KEY)
     resp = client.models.generate_content(
         model=model,
         contents=user,

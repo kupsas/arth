@@ -215,3 +215,18 @@ def pipeline_config_for_account_owner(session: Session, account_id: str) -> User
 
     uid = user_id_for_account(account_id)
     return load_user_classification_config(session, uid)
+
+
+def get_or_create_user_classification_settings(
+    session: Session, user_id: str
+) -> UserClassificationSettings:
+    """Return the singleton settings row for ``user_id``, inserting if missing."""
+    row = session.exec(
+        select(UserClassificationSettings).where(UserClassificationSettings.user_id == user_id)
+    ).first()
+    if row:
+        return row
+    row = UserClassificationSettings(user_id=user_id)
+    session.add(row)
+    session.flush()
+    return row

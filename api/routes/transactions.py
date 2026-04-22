@@ -251,6 +251,45 @@ def _apply_update(txn: Transaction, update: TransactionUpdate) -> None:
         txn.updated_at = _dt.datetime.now(_dt.UTC)
 
 
+def upsert_user_merchant_correction_rule(
+    session: Session,
+    user_id: str,
+    *,
+    keyword: str,
+    display_name: str,
+    counterparty_category: str,
+) -> None:
+    """Insert or update a ``USER_CORRECTION`` merchant row (keyword is matched as substring in narrations)."""
+    kw = (keyword or "").strip().upper()
+    if len(kw) < 2:
+        return
+    cat = (counterparty_category or "").strip()
+    if not cat:
+        return
+    disp = (display_name or kw).strip()
+    existing = session.exec(
+        select(UserMerchantRule).where(
+            UserMerchantRule.user_id == user_id,
+            UserMerchantRule.keyword == kw,
+        )
+    ).first()
+    if existing:
+        existing.display_name = disp
+        existing.counterparty_category = cat
+        existing.source = "USER_CORRECTION"
+        session.add(existing)
+        return
+    session.add(
+        UserMerchantRule(
+            user_id=user_id,
+            keyword=kw,
+            display_name=disp,
+            counterparty_category=cat,
+            source="USER_CORRECTION",
+        )
+    )
+
+
 def _upsert_learned_merchant_rule(
     session: Session,
     user_id: str,
@@ -263,27 +302,12 @@ def _upsert_learned_merchant_rule(
     cat = txn.counterparty_category
     if not cat:
         return
-    existing = session.exec(
-        select(UserMerchantRule).where(
-            UserMerchantRule.user_id == user_id,
-            UserMerchantRule.keyword == keyword,
-        )
-    ).first()
-    disp = (txn.counterparty or keyword).strip()
-    if existing:
-        existing.display_name = disp
-        existing.counterparty_category = cat
-        existing.source = "USER_CORRECTION"
-        session.add(existing)
-        return
-    session.add(
-        UserMerchantRule(
-            user_id=user_id,
-            keyword=keyword,
-            display_name=disp,
-            counterparty_category=cat,
-            source="USER_CORRECTION",
-        )
+    upsert_user_merchant_correction_rule(
+        session,
+        user_id,
+        keyword=keyword,
+        display_name=(txn.counterparty or keyword).strip(),
+        counterparty_category=cat,
     )
 
 

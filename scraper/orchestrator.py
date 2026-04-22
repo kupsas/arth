@@ -46,6 +46,8 @@ from scraper.email_router import _normalise_sender, find_parser
 from scraper.gmail_client import GmailClient, GmailMessage
 from scraper.secrets_context import statement_secrets_context
 
+from api.services.classifier_runtime import user_classifier_runtime
+
 logger = logging.getLogger(__name__)
 
 # Compound Gmail queries (subject filters) for historical sweeps — used by
@@ -299,44 +301,47 @@ def _process_email(
     total_new = 0
     for (account_id, source_key), group in groups.items():
 
-        # ── Step 5: transform → CanonicalTransaction ─────────────────────────
-        canonical = transform(
-            group,
-            account_id=account_id,
-            currency="INR",
-            source_statement=source_key,   # e.g. "hdfc_savings", "hdfc_cc_1905"
-        )
+        # Overlay per-user LLM keys from encrypted ``UserSecrets`` for this slice only
+        # (see :func:`api.services.classifier_runtime.user_classifier_runtime`).
+        with user_classifier_runtime(session, user_id):
+            # ── Step 5: transform → CanonicalTransaction ─────────────────────────
+            canonical = transform(
+                group,
+                account_id=account_id,
+                currency="INR",
+                source_statement=source_key,   # e.g. "hdfc_savings", "hdfc_cc_1905"
+            )
 
-        # ── Step 6: rules classifier ─────────────────────────────────────────
-        # Fills channel, txn_type, upi_type deterministically from narration patterns.
-        from api.services.user_classification import pipeline_config_for_account_owner
+            # ── Step 6: rules classifier ─────────────────────────────────────────
+            # Fills channel, txn_type, upi_type deterministically from narration patterns.
+            from api.services.user_classification import pipeline_config_for_account_owner
 
-        ucfg = pipeline_config_for_account_owner(session, account_id)
-        classify_rules(canonical, ucfg)
+            ucfg = pipeline_config_for_account_owner(session, account_id)
+            classify_rules(canonical, ucfg)
 
-        # ── Step 7: LLM classifier ───────────────────────────────────────────
-        # Fills counterparty, counterparty_category, and any remaining gaps.
-        classify_llm(canonical)
+            # ── Step 7: LLM classifier ───────────────────────────────────────────
+            # Fills counterparty, counterparty_category, and any remaining gaps.
+            classify_llm(canonical)
 
-        # ── Step 8: write to DB ──────────────────────────────────────────────
-        # source_type="email" means:
-        #   - is_reviewed=False (transaction surfaces in the Review Queue)
-        #   - gmail_message_id is stamped on each row for audit trail
-        #   - reconciliation logic is SKIPPED for this write (we ARE the email row,
-        #     not the statement row — the statement pipeline will reconcile against us)
-        run = write_to_db(
-            canonical,
-            source_key=source_key,
-            llm_model=pipeline_config.LLM_MODEL,
-            session=session,
-            source_type="email",
-            gmail_message_id=msg.id,
-        )
-        total_new += run.new_count
-        logger.debug(
-            "    %s: %d new / %d backfilled / %d total canonical rows",
-            account_id, run.new_count, run.updated_count, run.txn_count,
-        )
+            # ── Step 8: write to DB ──────────────────────────────────────────────
+            # source_type="email" means:
+            #   - is_reviewed=False (transaction surfaces in the Review Queue)
+            #   - gmail_message_id is stamped on each row for audit trail
+            #   - reconciliation logic is SKIPPED for this write (we ARE the email row,
+            #     not the statement row — the statement pipeline will reconcile against us)
+            run = write_to_db(
+                canonical,
+                source_key=source_key,
+                llm_model=pipeline_config.LLM_MODEL,
+                session=session,
+                source_type="email",
+                gmail_message_id=msg.id,
+            )
+            total_new += run.new_count
+            logger.debug(
+                "    %s: %d new / %d backfilled / %d total canonical rows",
+                account_id, run.new_count, run.updated_count, run.txn_count,
+            )
 
     # ── Annual ICICI PDF: PPF → holdings + investment_transactions ────────────
     if attachment_holdings or attachment_inv_txns:

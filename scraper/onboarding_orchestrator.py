@@ -25,6 +25,8 @@ from sqlalchemy import and_, or_
 from sqlmodel import Session, col, func, select
 
 from api.models import Transaction
+
+from api.services.classifier_runtime import effective_onboarding_unknown_threshold
 from scraper.config_loader import BankSendersConfig, get_bank_senders_config
 from scraper.email_router import _normalise_sender
 from scraper.email_parsers import build_email_parser_registry
@@ -103,6 +105,38 @@ def count_classification_unknowns(
         )
     )
     return int(session.exec(q).one())
+
+
+def list_classification_unknown_transactions(
+    session: Session,
+    *,
+    user_id: str,
+    source_key: str,
+    limit: int = 200,
+) -> list[Transaction]:
+    """Return recent rows that still match :func:`count_classification_unknowns` (for batch UI)."""
+    lim = max(1, min(int(limit), 500))
+    q = (
+        select(Transaction)
+        .where(Transaction.user_id == user_id)
+        .where(Transaction.source_statement == source_key)
+        .where(Transaction.source_type == "email")
+        .where(
+            or_(
+                col(Transaction.txn_type).is_(None),
+                col(Transaction.counterparty).is_(None),
+                col(Transaction.counterparty_category).is_(None),
+                and_(col(Transaction.channel) == "UPI", col(Transaction.upi_type).is_(None)),
+                and_(
+                    col(Transaction.direction) == "OUTFLOW",
+                    col(Transaction.spend_category).is_(None),
+                ),
+            )
+        )
+        .order_by(col(Transaction.txn_date).desc(), col(Transaction.id).desc())
+        .limit(lim)
+    )
+    return list(session.exec(q).all())
 
 
 def _collect_pending_messages(
@@ -200,7 +234,10 @@ def run_onboarding_backfill(
         :class:`OnboardingBackfillResult` with updated progress dict (includes ``_``
         internal keys — strip with :meth:`OnboardingBackfillResult.public_progress`).
     """
-    thresh = unknown_threshold if unknown_threshold is not None else UNKNOWN_THRESHOLD
+    if unknown_threshold is not None:
+        thresh = unknown_threshold
+    else:
+        thresh = effective_onboarding_unknown_threshold(session, user_id)
     bank = get_bank_senders_config(session, user_id)
     parser_registry = build_email_parser_registry(bank)
 
