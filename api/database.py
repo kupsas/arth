@@ -3,7 +3,8 @@ Database engine, session factory, and initialisation for Arth.
 
 Uses SQLModel (which wraps SQLAlchemy) with a synchronous SQLite backend.
 The DB file path comes from pipeline.config.DB_PATH so both the API server
-and the CLI pipeline share the same resolution logic.
+and the CLI pipeline share the same resolution logic (``APP_ENV``, ``ARTH_DB_NAME``,
+``ARTH_DB_PATH`` — see ``pipeline.config.resolve_db_path``).
 
 For automated tests, callers override `get_session` via FastAPI dependency
 injection to point at an in-memory SQLite database instead.
