@@ -24,7 +24,7 @@ GOAL_TARGET_AMOUNT_BASIS_NOTE = (
     name="get_goals_overview",
     description=(
         "List the user's financial goals with progress and fetch system priority scores. "
-        "Filter by ``activation_status`` (default ACTIVE): PENDING, ACTIVE, COMPLETED, PAUSED. "
+        "Filter by ``activation_status`` (default ACTIVE): PENDING, ACTIVE, COMPLETED. "
         "Use when the user asks about goals, goal order, which goal matters most, or "
         "progress toward named goals at a glance. Read-only. "
         "**Each goal's target_amount is in today's money (INR), not a future nominal value at the goal date.** "
@@ -35,7 +35,7 @@ async def get_goals_overview(
     client: AsyncClient,
     activation_status: str | None = "ACTIVE",
 ) -> dict[str, Any]:
-    """``activation_status`` matches API: PENDING | ACTIVE | COMPLETED | PAUSED."""
+    """``activation_status`` matches API: PENDING | ACTIVE | COMPLETED."""
     params: dict[str, str] = {}
     if activation_status:
         params["activation_status"] = activation_status

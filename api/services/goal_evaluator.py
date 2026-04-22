@@ -56,13 +56,6 @@ def expense_limit_spent_for_goal(
 
 def compute_progress(goal: Goal, session: Session) -> dict:
     """Return a progress snapshot for the given goal (no categorical labels)."""
-    if goal.status == "PAUSED":
-        return {
-            "current_value": goal.current_value or 0.0,
-            "target_amount": goal.target_amount,
-            "percentage": 0.0,
-        }
-
     if goal.goal_type == "EXPENSE_LIMIT":
         current_value = _compute_expense_limit(goal, session)
     else:

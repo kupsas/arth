@@ -233,6 +233,11 @@ class TestGoalsCrudHierarchy:
         resp = client.post("/api/goals", json={**_GOAL_BASE, "activation_status": "ZOMBIE"})
         assert resp.status_code == 400
 
+    def test_create_goal_retired_paused_activation_rejected(self, client):
+        """PAUSED was removed; funding gaps show in progress % instead."""
+        resp = client.post("/api/goals", json={**_GOAL_BASE, "activation_status": "PAUSED"})
+        assert resp.status_code == 400
+
     def test_second_investment_goal_uses_unlinked_chart_key(self, client):
         """Only one INVESTMENT goal may use investment_net; the next is stored with chart_key None."""
         r1 = client.post(

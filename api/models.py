@@ -285,7 +285,7 @@ class Goal(SQLModel, table=True):
 
     Phase B.0 — hierarchy / pyramid:
       ``tier`` groups goals (L1 / L2 / L3 / L4; legacy VISION / STRATEGY / TACTIC / OPERATIONAL).
-      ``activation_status`` is lifecycle (PENDING / ACTIVE / COMPLETED / PAUSED), separate
+      ``activation_status`` is lifecycle (PENDING / ACTIVE / COMPLETED), separate
       from legacy ``status``; progress is expressed as ``computed_percentage`` in API responses.
       ``pyramid_id`` is a short stable id (e.g. V1, S4) unique per ``user_id`` for DSL refs.
     """
@@ -354,7 +354,7 @@ class Goal(SQLModel, table=True):
         default="ACTIVE",
         index=True,
         max_length=32,
-        description="PENDING | ACTIVE | COMPLETED | PAUSED",
+        description="PENDING | ACTIVE | COMPLETED",
     )
     activation_condition: str | None = Field(
         default=None,

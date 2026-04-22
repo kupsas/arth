@@ -404,7 +404,7 @@ export type GoalFundingMode =
  * Lifecycle state for when a goal is "in play" in the pyramid — separate from
  * computed progress percentage.
  */
-export type GoalActivationStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "PAUSED";
+export type GoalActivationStatus = "PENDING" | "ACTIVE" | "COMPLETED";
 
 export type SensitivityToReturns = "LOW" | "MEDIUM" | "HIGH";
 

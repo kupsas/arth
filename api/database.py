@@ -308,6 +308,15 @@ def _apply_sqlite_patches() -> None:
         if not _column_exists(conn, "goals", "sensitivity_to_returns"):
             conn.execute(text("ALTER TABLE goals ADD COLUMN sensitivity_to_returns TEXT"))
 
+        # Retire PAUSED activation (Track 3): map existing rows to ACTIVE; progress % shows gaps.
+        if _column_exists(conn, "goals", "activation_status"):
+            conn.execute(
+                text(
+                    "UPDATE goals SET activation_status = 'ACTIVE' "
+                    "WHERE UPPER(TRIM(activation_status)) = 'PAUSED'"
+                )
+            )
+
         # Enforce pyramid_id uniqueness per user when set (SQLite treats NULLs as distinct).
         if not _index_exists(conn, "uq_goals_user_pyramid_id"):
             conn.execute(

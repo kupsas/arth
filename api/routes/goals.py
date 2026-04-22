@@ -16,7 +16,7 @@ Progress computation:
   - EXPENSE_LIMIT goals: auto-computed from transactions DB (current month spend)
   - All other goal types: use goal.current_value vs goal.target_amount
   - Response includes ``computed_percentage`` (0–100+), separate from
-    ``activation_status`` (PENDING / ACTIVE / COMPLETED / PAUSED).
+    ``activation_status`` (PENDING / ACTIVE / COMPLETED).
 """
 
 from __future__ import annotations
@@ -161,7 +161,7 @@ _VALID_TIME_HORIZON = frozenset(
     {"MONTHLY", "QUARTERLY", "ANNUAL", "MULTI_YEAR", "DECADE"}
 )
 _VALID_FUNDING_MODE = frozenset({"ACCUMULATION", "CONSTRAINT", "EVENT", "MAINTENANCE"})
-_VALID_ACTIVATION_STATUS = frozenset({"PENDING", "ACTIVE", "COMPLETED", "PAUSED"})
+_VALID_ACTIVATION_STATUS = frozenset({"PENDING", "ACTIVE", "COMPLETED"})
 _VALID_SENSITIVITY = frozenset({"LOW", "MEDIUM", "HIGH"})
 
 # L1–L4 plus legacy labels (normalised to L* on write).
