@@ -14,7 +14,12 @@ from sqlmodel import Session, select
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import UserClassificationSettings, UserContact, UserMerchantRule
+from api.models import (
+    FamilyMember,
+    UserClassificationSettings,
+    UserContact,
+    UserMerchantRule,
+)
 from api.services.user_classification import load_user_classification_config, merge_starter_pack_for_user
 
 router = APIRouter()
@@ -55,6 +60,18 @@ class MerchantRuleUpdate(BaseModel):
     keyword: str | None = None
     display_name: str | None = None
     counterparty_category: str | None = None
+
+
+class FamilyMemberCreate(BaseModel):
+    """Household member for **account ownership** (not UPI / classification contacts)."""
+
+    name: str = Field(min_length=1, max_length=128)
+    relationship: str = Field(min_length=1, max_length=64)
+
+
+class FamilyMemberUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    relationship: str | None = Field(default=None, max_length=64)
 
 
 # ── Contacts ────────────────────────────────────────────────────────────────
@@ -138,6 +155,107 @@ def delete_contact(
     row = session.get(UserContact, contact_id)
     if not row or row.user_id != current_user:
         raise HTTPException(status_code=404, detail="Contact not found")
+    session.delete(row)
+    session.commit()
+    return {"ok": True}
+
+
+# ── Family members (account ownership) ─────────────────────────────────────
+
+
+@router.get("/family-members")
+def list_family_members(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
+    from api.services.family_member_utils import get_or_create_self_member
+
+    # Ensure the default Self row exists so the UI always has an anchor owner.
+    get_or_create_self_member(session, current_user)
+    session.commit()
+    rows = session.exec(
+        select(FamilyMember).where(FamilyMember.user_id == current_user)
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "relationship": r.relationship,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/family-members")
+def create_family_member(
+    body: FamilyMemberCreate,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
+    rel = body.relationship.strip().upper()
+    if rel == "SELF":
+        raise HTTPException(
+            status_code=400,
+            detail="The synthetic Self owner already exists; rename it via PATCH instead.",
+        )
+    row = FamilyMember(
+        user_id=current_user,
+        name=body.name.strip(),
+        relationship=rel,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return {"id": row.id}
+
+
+@router.patch("/family-members/{member_id}")
+def update_family_member(
+    member_id: int,
+    body: FamilyMemberUpdate,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
+    row = session.get(FamilyMember, member_id)
+    if not row or row.user_id != current_user:
+        raise HTTPException(status_code=404, detail="Family member not found")
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data and data["name"] is not None:
+        row.name = data["name"].strip()
+    if "relationship" in data and data["relationship"] is not None:
+        new_rel = data["relationship"].strip().upper()
+        if row.relationship == "SELF" and new_rel != "SELF":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot change relationship away from SELF for the default owner row.",
+            )
+        if new_rel == "SELF" and row.relationship != "SELF":
+            raise HTTPException(status_code=400, detail="Cannot re-label another row as SELF.")
+        row.relationship = new_rel
+    session.add(row)
+    session.commit()
+    return {"ok": True}
+
+
+@router.delete("/family-members/{member_id}")
+def delete_family_member(
+    member_id: int,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
+    row = session.get(FamilyMember, member_id)
+    if not row or row.user_id != current_user:
+        raise HTTPException(status_code=404, detail="Family member not found")
+    if row.relationship == "SELF":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete the default Self owner (used by bank account mappings).",
+        )
     session.delete(row)
     session.commit()
     return {"ok": True}

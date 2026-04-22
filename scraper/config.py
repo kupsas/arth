@@ -37,12 +37,11 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 # Structure:
 #   sender_email: {
 #       "parser_key": str,          # matches a key in EMAIL_PARSER_REGISTRY (email_parsers/__init__.py)
-#       "accounts": {
-#           "last_4_digits": {
-#               "account_id":   str,   # the account_id stored in the DB (matches pipeline config)
-#               "source_key":   str,   # the source_key used by the pipeline (for PipelineRun records)
-#           }
-#       }
+#       "accounts": { ... },       # as below
+#       "display_name": str,       # human label for onboarding / UI
+#       "source_type": str,        # savings | credit_card | broker (coarse bucket for wizard)
+#       "discovery_subject_patterns": list[str],  # regexes matched against Subject during Gmail discovery
+#       "expected_cadence": str,   # monthly | quarterly | per_transaction
 #   }
 #
 # The "last_4_digits" key is what appears in the email body (card/account number).
@@ -88,20 +87,40 @@ _ICICI_DIRECT_TRADE_ACCOUNTS: dict[str, dict] = {
     },
 }
 
+# Shared discovery regex snippets (Subject line hints; case-insensitive).
+_PAT_HDFC_INSTA = [r"(?i)Insta\s*Alert", r"(?i)HDFC"]
+_PAT_ICICI_NOTIF = [r"(?i)ICICI", r"(?i)Transaction"]
+_PAT_ICICI_STMT = [r"(?i)e-?\s*Statement", r"(?i)ICICI", r"(?i)Account"]
+_PAT_HDFC_CC_STMT = [r"(?i)Credit\s*Card", r"(?i)Statement", r"(?i)HDFC"]
+_PAT_HDFC_COMBINED = [r"(?i)Smart\s*Statement", r"(?i)Combined", r"(?i)HDFC"]
+_PAT_NSE_TRADE = [r"(?i)Trades?\s+executed", r"(?i)NSE"]
+
 BANK_SENDERS: dict[str, dict] = {
     "alerts@hdfcbank.net": {
         "parser_key": "hdfc_bank",
         "accounts": _HDFC_BANK_ACCOUNTS,
+        "display_name": "HDFC Bank InstaAlerts",
+        "source_type": "savings",
+        "discovery_subject_patterns": _PAT_HDFC_INSTA,
+        "expected_cadence": "per_transaction",
     },
     "alerts@hdfcbank.bank.in": {
         "parser_key": "hdfc_bank",
         "accounts": _HDFC_BANK_ACCOUNTS,
+        "display_name": "HDFC Bank InstaAlerts (.bank.in)",
+        "source_type": "savings",
+        "discovery_subject_patterns": _PAT_HDFC_INSTA,
+        "expected_cadence": "per_transaction",
     },
     # Note: ICICI transaction alerts come from the .bank.in domain (NOT .com).
     # customercare@icicibank.com sends MAB reminders and marketing — not transaction alerts.
     "customernotification@icici.bank.in": {
         "parser_key": "icici_bank",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
+        "display_name": "ICICI Bank InstaAlerts",
+        "source_type": "savings",
+        "discovery_subject_patterns": _PAT_ICICI_NOTIF,
+        "expected_cadence": "per_transaction",
     },
     # ICICI savings statement PDFs (password-protected attachment — not InstaAlerts).
     # Monthly (current + legacy): estatement may use .com or .bank.in; annual FY: .com below.
@@ -109,27 +128,47 @@ BANK_SENDERS: dict[str, dict] = {
         "parser_key": "icici_statement",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
+        "display_name": "ICICI e-Statement (.com)",
+        "source_type": "savings",
+        "discovery_subject_patterns": _PAT_ICICI_STMT,
+        "expected_cadence": "monthly",
     },
     "estatement@icici.bank.in": {
         "parser_key": "icici_statement",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
+        "display_name": "ICICI e-Statement (.bank.in)",
+        "source_type": "savings",
+        "discovery_subject_patterns": _PAT_ICICI_STMT,
+        "expected_cadence": "monthly",
     },
     "customernotification@icicibank.com": {
         "parser_key": "icici_statement",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
+        "display_name": "ICICI statement notifications (.com)",
+        "source_type": "savings",
+        "discovery_subject_patterns": _PAT_ICICI_STMT,
+        "expected_cadence": "monthly",
     },
     # Credit card monthly PDF — From varies (.net vs .bank.in); see email-statement plan.
     "emailstatements.cards@hdfcbank.net": {
         "parser_key": "hdfc_cc_statement",
         "accounts": _HDFC_CC_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
+        "display_name": "HDFC Credit Card e-statements",
+        "source_type": "credit_card",
+        "discovery_subject_patterns": _PAT_HDFC_CC_STMT,
+        "expected_cadence": "monthly",
     },
     "emailstatements.cards@hdfcbank.bank.in": {
         "parser_key": "hdfc_cc_statement",
         "accounts": _HDFC_CC_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
+        "display_name": "HDFC Credit Card e-statements (.bank.in)",
+        "source_type": "credit_card",
+        "discovery_subject_patterns": _PAT_HDFC_CC_STMT,
+        "expected_cadence": "monthly",
     },
     # HDFC combined monthly statement PDF (savings 3703) — same "Smart Statement" sender
     # as pre-2024 "Email Account Statement"; we only parse **combined** subjects (see parser).
@@ -137,11 +176,19 @@ BANK_SENDERS: dict[str, dict] = {
         "parser_key": "hdfc_combined_statement",
         "accounts": {"3703": _HDFC_BANK_ACCOUNTS["3703"]},
         "first_run_lookback_days": 45,
+        "display_name": "HDFC Smart / combined statement",
+        "source_type": "savings",
+        "discovery_subject_patterns": _PAT_HDFC_COMBINED,
+        "expected_cadence": "monthly",
     },
     "hdfcbanksmartstatement@hdfcbank.bank.in": {
         "parser_key": "hdfc_combined_statement",
         "accounts": {"3703": _HDFC_BANK_ACCOUNTS["3703"]},
         "first_run_lookback_days": 45,
+        "display_name": "HDFC Smart / combined statement (.bank.in)",
+        "source_type": "savings",
+        "discovery_subject_patterns": _PAT_HDFC_COMBINED,
+        "expected_cadence": "monthly",
     },
     # NSE — *Trades executed at NSE* PDF only (``NSE_TRADES_EXECUTED_PASSWORD``). Add your
     # mailbox's From: here if it differs (router still requires that subject line).
@@ -149,16 +196,28 @@ BANK_SENDERS: dict[str, dict] = {
         "parser_key": "icici_direct_trade",
         "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
         "first_run_lookback_days": 45,
+        "display_name": "NSE trade confirmations (ebix)",
+        "source_type": "broker",
+        "discovery_subject_patterns": _PAT_NSE_TRADE,
+        "expected_cadence": "per_transaction",
     },
     "nseinvest@nse.co.in": {
         "parser_key": "icici_direct_trade",
         "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
         "first_run_lookback_days": 45,
+        "display_name": "NSE trade confirmations (nseinvest)",
+        "source_type": "broker",
+        "discovery_subject_patterns": _PAT_NSE_TRADE,
+        "expected_cadence": "per_transaction",
     },
     "nse-direct@nse.co.in": {
         "parser_key": "icici_direct_trade",
         "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
         "first_run_lookback_days": 45,
+        "display_name": "NSE trade confirmations (nse-direct)",
+        "source_type": "broker",
+        "discovery_subject_patterns": _PAT_NSE_TRADE,
+        "expected_cadence": "per_transaction",
     },
 }
 

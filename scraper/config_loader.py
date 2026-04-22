@@ -8,6 +8,7 @@ See DESKTOP_PREREQS item 1 — config must not be hardcoded for multi-user insta
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from typing import Any
 
@@ -54,17 +55,37 @@ def get_bank_senders_config(session: Session, user_id: str) -> BankSendersConfig
                 ScraperAccountMapping.sender_email == key,
             )
         ).all()
-        accounts: dict[str, dict[str, str]] = {}
+        accounts: dict[str, dict[str, Any]] = {}
         for m in mappings:
-            accounts[m.last_4_digits] = {
+            acct_entry: dict[str, Any] = {
                 "account_id": m.account_id,
                 "source_key": m.source_key,
             }
-        entry: dict[str, Any] = {"accounts": accounts}
-        if s.parser_key:
+            if m.member_id is not None:
+                acct_entry["member_id"] = m.member_id
+            accounts[m.last_4_digits] = acct_entry
+        code_cfg = BANK_SENDERS.get(key) or {}
+        entry = {k: copy.deepcopy(v) for k, v in code_cfg.items() if k != "accounts"}
+        entry["accounts"] = accounts
+        if s.parser_key is not None:
             entry["parser_key"] = s.parser_key
         if s.first_run_lookback_days is not None:
             entry["first_run_lookback_days"] = s.first_run_lookback_days
+        if s.display_name:
+            entry["display_name"] = s.display_name
+        if s.source_type:
+            entry["source_type"] = s.source_type
+        if s.expected_cadence:
+            entry["expected_cadence"] = s.expected_cadence
+        if s.discovery_subject_patterns_json:
+            try:
+                entry["discovery_subject_patterns"] = json.loads(s.discovery_subject_patterns_json)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Invalid discovery_subject_patterns_json for sender %r user %r",
+                    key,
+                    uid,
+                )
         out[key] = entry
     if not out:
         logger.warning(

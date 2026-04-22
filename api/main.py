@@ -42,6 +42,7 @@ from api.routes.inflation import router as inflation_router
 from api.routes.simulate import router as simulate_router
 from api.routes.scraper import router as scraper_router
 from api.routes.scraper_config import router as scraper_config_router
+from api.routes.onboarding import router as onboarding_router
 from api.routes.setup import router as setup_router
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
@@ -207,6 +208,12 @@ app.include_router(
     user_config.router,
     prefix="/api/user",
     tags=["User classification"],
+    dependencies=_auth,
+)
+app.include_router(
+    onboarding_router,
+    prefix="/api/onboarding",
+    tags=["Onboarding"],
     dependencies=_auth,
 )
 app.include_router(holdings_router,           prefix="/api/holdings",                  tags=["Holdings"],                  dependencies=_auth)

@@ -12,6 +12,7 @@ injection to point at an in-memory SQLite database instead.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -211,6 +212,81 @@ def _backfill_goal_chart_keys(conn) -> None:
     ]
     for sql in stmts:
         conn.execute(text(sql))
+
+
+def _scraper_sender_meta_from_code_cfg(cfg: dict) -> dict:
+    """Map a ``BANK_SENDERS`` entry to :class:`~api.models.ScraperBankSender` column kwargs."""
+    pats = cfg.get("discovery_subject_patterns")
+    return {
+        "display_name": cfg.get("display_name"),
+        "source_type": cfg.get("source_type"),
+        "expected_cadence": cfg.get("expected_cadence"),
+        "discovery_subject_patterns_json": json.dumps(pats) if isinstance(pats, list) else None,
+    }
+
+
+def _patch_onboarding_family_scraper_columns(conn) -> None:
+    """Track 2 Phase 1 — scraper discovery columns + account owner ``member_id``."""
+    if _table_exists(conn, "scraper_bank_senders"):
+        if not _column_exists(conn, "scraper_bank_senders", "display_name"):
+            conn.execute(text("ALTER TABLE scraper_bank_senders ADD COLUMN display_name TEXT"))
+        if not _column_exists(conn, "scraper_bank_senders", "source_type"):
+            conn.execute(text("ALTER TABLE scraper_bank_senders ADD COLUMN source_type TEXT"))
+        if not _column_exists(conn, "scraper_bank_senders", "discovery_subject_patterns_json"):
+            conn.execute(
+                text(
+                    "ALTER TABLE scraper_bank_senders ADD COLUMN discovery_subject_patterns_json TEXT"
+                )
+            )
+        if not _column_exists(conn, "scraper_bank_senders", "expected_cadence"):
+            conn.execute(text("ALTER TABLE scraper_bank_senders ADD COLUMN expected_cadence TEXT"))
+
+    if _table_exists(conn, "scraper_account_mappings") and not _column_exists(
+        conn, "scraper_account_mappings", "member_id"
+    ):
+        conn.execute(text("ALTER TABLE scraper_account_mappings ADD COLUMN member_id INTEGER"))
+
+    # Seed ``Self`` family member per user that has scraper rows, then point mappings at it.
+    if _table_exists(conn, "family_members") and _table_exists(conn, "scraper_account_mappings"):
+        if _column_exists(conn, "scraper_account_mappings", "member_id"):
+            import datetime as _dt
+
+            now = _dt.datetime.now(_dt.UTC).isoformat()
+            users_rows = conn.execute(
+                text("SELECT DISTINCT user_id FROM scraper_account_mappings")
+            ).fetchall()
+            for (uid,) in users_rows:
+                if not uid:
+                    continue
+                found = conn.execute(
+                    text(
+                        "SELECT id FROM family_members WHERE user_id = :u AND relationship = 'SELF' "
+                        "LIMIT 1"
+                    ),
+                    {"u": uid},
+                ).fetchone()
+                if not found:
+                    conn.execute(
+                        text(
+                            "INSERT INTO family_members (user_id, name, relationship, created_at) "
+                            "VALUES (:u, 'Self', 'SELF', :c)"
+                        ),
+                        {"u": uid, "c": now},
+                    )
+            conn.execute(
+                text(
+                    """
+                    UPDATE scraper_account_mappings
+                    SET member_id = (
+                        SELECT id FROM family_members fm
+                        WHERE fm.user_id = scraper_account_mappings.user_id
+                          AND fm.relationship = 'SELF'
+                        LIMIT 1
+                    )
+                    WHERE member_id IS NULL
+                    """
+                )
+            )
 
 
 def _backfill_transaction_user_ids(conn) -> None:
@@ -426,6 +502,8 @@ def _apply_sqlite_patches() -> None:
         if not _column_exists(conn, "transactions", "review_confidence"):
             conn.execute(text("ALTER TABLE transactions ADD COLUMN review_confidence TEXT"))
 
+        _patch_onboarding_family_scraper_columns(conn)
+
         _migrate_nse_equity_reference_schema(conn)
 
 
@@ -455,6 +533,7 @@ def _seed_desktop_prereq_defaults() -> None:
     from sqlmodel import Session, select
 
     from api.models import AppUser, ScraperAccountMapping, ScraperBankSender
+    from api.services.family_member_utils import self_member_id
     from scraper.config import BANK_SENDERS
 
     try:
@@ -479,8 +558,10 @@ def _seed_desktop_prereq_defaults() -> None:
 
             if session.exec(select(ScraperBankSender)).first() is None:
                 uid = (os.getenv("AUTH_USERNAME") or "sashank").strip()
+                mid = self_member_id(session, uid)
                 for sender_email, cfg in BANK_SENDERS.items():
                     pk = cfg.get("parser_key")
+                    meta = _scraper_sender_meta_from_code_cfg(cfg)
                     session.add(
                         ScraperBankSender(
                             user_id=uid,
@@ -488,6 +569,7 @@ def _seed_desktop_prereq_defaults() -> None:
                             parser_key=str(pk) if pk else None,
                             first_run_lookback_days=cfg.get("first_run_lookback_days"),
                             enabled=True,
+                            **meta,
                         )
                     )
                     accounts = cfg.get("accounts") or {}
@@ -499,6 +581,7 @@ def _seed_desktop_prereq_defaults() -> None:
                                 last_4_digits=str(last_4),
                                 account_id=str(acct["account_id"]),
                                 source_key=str(acct["source_key"]),
+                                member_id=mid,
                             )
                         )
                 session.commit()
@@ -520,6 +603,7 @@ def _sync_missing_bank_senders_from_config() -> None:
     from sqlmodel import Session, select
 
     from api.models import ScraperAccountMapping, ScraperBankSender
+    from api.services.family_member_utils import self_member_id
     from scraper.config import BANK_SENDERS
 
     try:
@@ -534,6 +618,7 @@ def _sync_missing_bank_senders_from_config() -> None:
 
             total_new = 0
             for uid in sorted(user_ids):
+                mid = self_member_id(session, uid)
                 existing = {
                     r.sender_email.strip().lower()
                     for r in session.exec(
@@ -545,6 +630,7 @@ def _sync_missing_bank_senders_from_config() -> None:
                     if key in existing:
                         continue
                     pk = cfg.get("parser_key")
+                    meta = _scraper_sender_meta_from_code_cfg(cfg)
                     session.add(
                         ScraperBankSender(
                             user_id=uid,
@@ -552,6 +638,7 @@ def _sync_missing_bank_senders_from_config() -> None:
                             parser_key=str(pk) if pk else None,
                             first_run_lookback_days=cfg.get("first_run_lookback_days"),
                             enabled=True,
+                            **meta,
                         )
                     )
                     accounts = cfg.get("accounts") or {}
@@ -563,6 +650,7 @@ def _sync_missing_bank_senders_from_config() -> None:
                                 last_4_digits=str(last_4),
                                 account_id=str(acct["account_id"]),
                                 source_key=str(acct["source_key"]),
+                                member_id=mid,
                             )
                         )
                     existing.add(key)
@@ -578,6 +666,34 @@ def _sync_missing_bank_senders_from_config() -> None:
         logger.exception("Sync of new bank senders from config skipped or failed")
 
 
+def _hydrate_scraper_sender_metadata_from_code() -> None:
+    """Fill NULL discovery columns on existing ``scraper_bank_senders`` from ``BANK_SENDERS``."""
+    from sqlmodel import Session, select
+
+    from api.models import ScraperBankSender
+    from scraper.config import BANK_SENDERS
+
+    try:
+        with Session(_engine) as session:
+            changed = False
+            for row in session.exec(select(ScraperBankSender)).all():
+                cfg = BANK_SENDERS.get(row.sender_email.strip().lower())
+                if not cfg:
+                    continue
+                meta = _scraper_sender_meta_from_code_cfg(cfg)
+                for col, val in meta.items():
+                    if val is None:
+                        continue
+                    cur = getattr(row, col)
+                    if cur is None or (isinstance(cur, str) and cur.strip() == ""):
+                        setattr(row, col, val)
+                        changed = True
+            if changed:
+                session.commit()
+    except Exception:
+        logger.exception("Hydrate scraper_bank_senders from BANK_SENDERS skipped or failed")
+
+
 def init_db() -> None:
     """Create all tables that don't already exist.
 
@@ -590,6 +706,7 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(_engine)
     _apply_sqlite_patches()
+    _hydrate_scraper_sender_metadata_from_code()
     _seed_desktop_prereq_defaults()
     _sync_missing_bank_senders_from_config()
     _merge_starter_pack_for_all_users()
