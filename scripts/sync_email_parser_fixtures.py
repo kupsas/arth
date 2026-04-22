@@ -55,6 +55,7 @@ REQUIRED_FILENAMES = [
     "alerts_hdfcbank_net_03.html",
     "alerts_hdfcbank_net_04.html",
     "alerts_hdfcbank_net_05.html",
+    "alerts_hdfcbank_net_06_cc_payment_made_2026.html",
     "hdfc_upi_inbound_01.html",
     "hdfc_upi_inbound_02.html",
     "hdfc_upi_inbound_03.html",

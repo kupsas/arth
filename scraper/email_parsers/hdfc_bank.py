@@ -6,7 +6,8 @@ All three parsers handle emails from alerts@hdfcbank.net, routed by subject:
 ┌─────────────────────────────────────────┬────────────────────────────────────────┐
 │ Subject trigger                         │ Parser                                 │
 ├─────────────────────────────────────────┼────────────────────────────────────────┤
-│ "debited via Credit Card"               │ HDFCCreditCardAlertParser              │
+│ "debited via Credit Card" (legacy)     │ HDFCCreditCardAlertParser              │
+│ "A payment was made using your CC"   │   (2026+ HDFC template)                │
 │ "UPI txn"                               │ HDFCUPIAlertParser (outbound)          │
 │ "Account update for your HDFC Bank A/c" │ HDFCAccountUpdateParser (inbound UPI   │
 │                                         │  + skips E-mandate / card settings)    │
@@ -84,27 +85,38 @@ def _parse_dd_mon_yyyy(s: str) -> datetime.date | None:
 class HDFCCreditCardAlertParser(BaseEmailParser):
     """Parses HDFC CC swipe alert emails.
 
-    Subject pattern: "debited via Credit Card"
-    Example subject: "Rs.1014.00 debited via Credit Card **1905"
+    Legacy subject: "… debited via Credit Card …"
+    New subject (~2026): "A payment was made using your Credit Card"
 
-    Body text (inside td.esd-text):
+    Body (inside td.esd-text) — legacy:
         Rs.1014.00 is debited from your HDFC Bank Credit Card ending 1905
         towards PYU*Swiggy Food on 14 Mar, 2026 at 19:55:53.
+
+    Body — new template may add a lead-in and "has been debited", and sometimes
+    a space after "Rs." (e.g. Rs. 2209.81):
+        We would like to inform you that Rs. 2209.81 has been debited from
+        your HDFC Bank Credit Card ending 1905 towards CLAUDE.AI SUBSCRIPTION
+        on 22 Apr, 2026 at 16:22:11.
     """
 
     # Regex groups: (amount, card_last4, merchant, date_str)
     # We stop capturing merchant at "on <date>" — non-greedy (.+?) handles this.
     _PATTERN = re.compile(
-        r"Rs\.(\d[\d,]*(?:\.\d+)?)"
-        r"\s+is debited from your HDFC Bank Credit Card ending\s+(\d{4})"
+        r"(?:We would like to inform you that\s+)?"  # 2026+ copy often prefixes this
+        r"Rs\.\s*(\d[\d,]*(?:\.\d+)?)"  # new emails may use "Rs. 1,234.56" spacing
+        r"\s+(?:is|has been) debited from your HDFC Bank Credit Card ending\s+(\d{4})"
         r"\s+towards\s+(.+?)"
-        r"\s+on\s+(\d{1,2}\s+\w+,\s+\d{4})"   # "14 Mar, 2026"
-        r"\s+at",                                # stop before the time
+        r"\s+on\s+(\d{1,2}\s+\w+,\s+\d{4})"  # "14 Mar, 2026"
+        r"\s+at",  # stop before the time
         re.IGNORECASE | re.DOTALL,
     )
 
     def can_parse(self, sender: str, subject: str) -> bool:
-        return "debited via credit card" in subject.lower()
+        s = subject.lower()
+        if "debited via credit card" in s:
+            return True
+        # HDFC 2026+ InstaAlert subject for card spends (replaces "debited via…")
+        return "a payment was made using your credit card" in s
 
     def parse(self, html_body: str, received_date: datetime.date) -> list[ParsedTransaction]:
         text = _extract_hdfc_body_text(html_body)

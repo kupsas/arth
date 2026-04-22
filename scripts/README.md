@@ -8,6 +8,7 @@ One-time setup and utility scripts. These are not part of the main pipeline or A
 |--------|-------------------|-------------|
 | **Supported maintenance** | Price history, weekly market refresh, NSE reference, holdings sync/enrich, merge prices test→prod | Top-level `*.py` in this folder |
 | **Legacy email backfills** | `backfill_*_emails.py` wrappers | Still here — each delegates to `scrape_historical.py` / `run_historical_backfill`; prefer **`scripts/scrape_historical.py`** or **`POST /api/scraper/backfill`** |
+| **Gmail rescrape after a parser change** | `clear_scraper_ledger_for_rescrape.py` | Clears `processed_emails` for skipped (and optional failed) rows so `scrape_historical.py` can re-fetch; see `scraper/README.md` |
 | **Schema migrations** | `migrate_db.py`, `migrate_goals_v2.py` | Top-level — **backup first**; idempotent where documented |
 | **Archived** | Old phase migrations, one-off dedupe repair | [`archive/`](archive/README.md) |
 

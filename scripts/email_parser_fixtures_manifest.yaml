@@ -34,6 +34,11 @@ fixtures:
     message_id: null
     note: HDFC CC swipe sample 4 (different merchant/date than 02–04)
 
+  - filename: alerts_hdfcbank_net_06_cc_payment_made_2026.html
+    query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"A payment was made using your Credit Card"'
+    message_id: null
+    note: 2026+ CC InstaAlert (new subject + "has been debited" / optional inform-you-that lead-in)
+
   - filename: hdfc_upi_inbound_01.html
     query: 'from:alerts@hdfcbank.net OR from:alerts@hdfcbank.bank.in subject:"Account update" mandate'
     message_id: null
