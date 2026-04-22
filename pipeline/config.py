@@ -15,10 +15,46 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Environment — controls which DB file is used (prod vs test)
+# Environment — controls which DB file is used (prod vs test vs onboarding QA)
 # pytest overrides this via in-memory SQLite, so it doesn't use either file.
 # ---------------------------------------------------------------------------
 APP_ENV: str = os.getenv("APP_ENV", "prod")
+
+
+def resolve_db_path(
+    repo_root: Path,
+    app_env: str,
+    arth_db_name: str | None,
+    arth_db_path: str | None,
+) -> Path:
+    """Pick the SQLite file used by the API and CLI.
+
+    Precedence (highest first):
+    1. ``ARTH_DB_PATH`` — absolute or ``~`` path to the database file (any location).
+    2. ``ARTH_DB_NAME`` — **basename only** (slashes stripped); file lives under
+       ``<repo_root>/data/`` — e.g. ``ARTH_DB_NAME=arth_onboarding.db``.
+    3. ``APP_ENV=test`` → ``data/arth_test.db``.
+    4. ``APP_ENV=onboarding_test`` → ``data/arth_onboarding.db`` (fresh onboarding runs).
+    5. Otherwise → ``data/arth.db``.
+
+    Parameters ``arth_db_name`` / ``arth_db_path`` are the raw env string or ``None``
+    when unset, so unit tests can call this without mutating the environment.
+    """
+    data_dir = repo_root / "data"
+    if arth_db_path:
+        return Path(arth_db_path).expanduser().resolve()
+    if arth_db_name:
+        # Only the basename is honoured so ARTH_DB_NAME cannot escape ``data/``.
+        safe = Path(arth_db_name.strip()).name
+        if not safe:
+            raise ValueError("ARTH_DB_NAME must not be empty after stripping")
+        return (data_dir / safe).resolve()
+    if app_env == "test":
+        return (data_dir / "arth_test.db").resolve()
+    if app_env == "onboarding_test":
+        return (data_dir / "arth_onboarding.db").resolve()
+    return (data_dir / "arth.db").resolve()
+
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -26,7 +62,10 @@ APP_ENV: str = os.getenv("APP_ENV", "prod")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "docs" / "personal-data"
 OUTPUT_DIR = REPO_ROOT / "data" / "output"
-DB_PATH: Path = REPO_ROOT / "data" / ("arth_test.db" if APP_ENV == "test" else "arth.db")
+# Env overrides for onboarding QA (see ``resolve_db_path``).
+_ARTH_DB_NAME_ENV: str | None = os.getenv("ARTH_DB_NAME", "").strip() or None
+_ARTH_DB_PATH_ENV: str | None = os.getenv("ARTH_DB_PATH", "").strip() or None
+DB_PATH: Path = resolve_db_path(REPO_ROOT, APP_ENV, _ARTH_DB_NAME_ENV, _ARTH_DB_PATH_ENV)
 
 # Source files — add new statements here as they arrive
 GSHEET_BENCHMARK_FILE = DATA_DIR / "GSheet_Transactions_modifiedForLLMTraining.csv"
