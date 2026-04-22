@@ -8,7 +8,8 @@ ParsedTransaction rows.
 
 Fixture map (filenames kept for paths; ``hdfc_upi_inbound_*`` = HDFC *Account update* template):
     alerts_hdfcbank_net_01.html          → HDFCUPIAlertParser         (UPI outbound ₹951)
-    alerts_hdfcbank_net_02..05.html      → HDFCCreditCardAlertParser  (CC swipes, card 1905)
+    alerts_hdfcbank_net_02..05.html      → HDFCCreditCardAlertParser  (CC swipes, card 1905, legacy subject)
+    alerts_hdfcbank_net_06_…2026.html   → HDFCCreditCardAlertParser  (2026 "payment was made" + new body)
     hdfc_upi_inbound_01.html             → HDFCAccountUpdateParser    (e-mandate / NACH — not UPI txn → [])
     hdfc_upi_inbound_02.html             → HDFCAccountUpdateParser    (UPI inbound credit ₹950 — 1 txn)
     hdfc_upi_inbound_03.html             → HDFCAccountUpdateParser    (card settings — not UPI txn → [])
@@ -71,6 +72,13 @@ class TestCanParse:
 
     def test_cc_parser_matches_cc_subject(self):
         assert HDFC_CC_PARSER.can_parse(self.HDFC, "Rs.1014.00 debited via Credit Card **1905")
+
+    def test_cc_parser_matches_2026_payment_made_subject(self):
+        # HDFC ~2026+ replaces "debited via Credit Card" in the subject
+        assert HDFC_CC_PARSER.can_parse(
+            self.HDFC,
+            "A payment was made using your Credit Card",
+        )
 
     def test_cc_parser_rejects_upi_subject(self):
         assert not HDFC_CC_PARSER.can_parse(self.HDFC, "❗  You have done a UPI txn. Check details!")
@@ -177,6 +185,12 @@ class TestHDFCCCAlert:
             Decimal("262.00"),
             datetime.date(2026, 2, 25),
             "CC: RSP*INSTAMART",
+        ),
+        (
+            "alerts_hdfcbank_net_06_cc_payment_made_2026.html",
+            Decimal("2209.81"),
+            datetime.date(2026, 4, 22),
+            "CC: CLAUDE.AI SUBSCRIPTION",
         ),
     ])
     def test_cc_swipe_fields(self, fname, amount, txn_date, desc):

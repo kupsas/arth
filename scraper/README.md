@@ -10,6 +10,8 @@ See [`docs/system-design/INGESTION_PATHS.md`](../docs/system-design/INGESTION_PA
 
 **Historical Gmail import:** use `run_historical_backfill` (API: `POST /api/scraper/backfill`), or the CLI `scripts/scrape_historical.py` with `--preset` / `--query` — same pipeline as live scraping; `processed_emails` dedupes by message id.
 
+**Re-parsing after a parser fix (e.g. bank email template change):** the incremental scraper only changes Gmail’s `after:` window; it does **not** revisit messages already in `processed_emails`. Alerts that were stored as **skipped** (no parser) stay skipped forever unless you remove those rows. To catch April from the 15th onward: (1) `python3 scripts/clear_scraper_ledger_for_rescrape.py --after 2026-04-15 --before 2026-04-30 --subject-contains "A payment was made using your Credit Card" --dry-run` to verify the list, (2) run the same without `--dry-run`, (3) `python3 scripts/scrape_historical.py --after 2026-04-15 --before 2026-04-30` (tune dates; `before` is exclusive). The helper defaults to HDFC `alerts@` senders and `status=skipped` only — it never deletes `processed` rows.
+
 **Parser test fixtures:** to repopulate `tests/fixtures/email_samples/` from Gmail with pinned queries, use `scripts/sync_email_parser_fixtures.py` (documented in `tests/README.md`).
 
 ## Setup
