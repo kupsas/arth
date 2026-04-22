@@ -77,6 +77,8 @@ import type {
   ScenarioComparison,
   PriorityResult,
   GoalReorderItem,
+  OnboardingGapsResponse,
+  OnboardingGoalTemplatesResponse,
 } from "@/lib/types";
 
 import { buildApiUrl } from "@/lib/api-base";
@@ -896,6 +898,29 @@ export function refreshPrices(params?: {
     {},
     params as QueryParams,
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Onboarding  →  /api/onboarding (Track 2 Phase 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** GET /api/onboarding/gaps — month-level coverage holes per source. */
+export function fetchOnboardingGaps(): Promise<OnboardingGapsResponse> {
+  return get<OnboardingGapsResponse>("/api/onboarding/gaps");
+}
+
+/**
+ * GET /api/onboarding/goal-templates
+ * With ``target_amount`` + ``years`` + ``template_id``, the matching template
+ * includes an inflation FV ``preview``; without ``template_id`` the response
+ * may include ``headline_preview`` (CPI_GENERAL) instead.
+ */
+export function fetchOnboardingGoalTemplates(params?: {
+  target_amount?: number;
+  years?: number;
+  template_id?: string;
+}): Promise<OnboardingGoalTemplatesResponse> {
+  return get<OnboardingGoalTemplatesResponse>("/api/onboarding/goal-templates", params);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

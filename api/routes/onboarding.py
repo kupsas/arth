@@ -23,6 +23,7 @@ from sqlmodel import Session, select
 from api.auth import get_current_user
 from api.database import get_session
 from api.models import AppUser, OnboardingState, Transaction, UserSecrets
+from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
 from api.services.classifier_runtime import (
     effective_onboarding_unknown_threshold,
@@ -36,6 +37,7 @@ from api.services.user_classification import (
 from pipeline import config as pipeline_cfg
 from scraper.config_loader import get_bank_senders_config
 from scraper.discovery import discover_sources, discovered_sources_to_json
+from scraper.gap_detector import detect_gaps
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
 from scraper.onboarding_orchestrator import (
     count_classification_unknowns,
@@ -632,8 +634,42 @@ def onboarding_gaps(
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    _ = session, current_user
-    return {"gaps": []}
+    """Run :func:`scraper.gap_detector.detect_gaps` over the user's bank-sender config."""
+    bank = get_bank_senders_config(session, current_user)
+    reports = detect_gaps(session, current_user, bank)
+    return {
+        "generated_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "reports": reports,
+    }
+
+
+@router.get("/goal-templates")
+def onboarding_goal_templates(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+    target_amount: float | None = Query(
+        default=None,
+        description="Target in today's rupees (optional; with years + template_id for FV preview).",
+    ),
+    years: float | None = Query(
+        default=None,
+        ge=0.0,
+        le=80.0,
+        description="Horizon in years (optional, pairs with target_amount).",
+    ),
+    template_id: str | None = Query(
+        default=None,
+        description="When set with target_amount+years, only this template gets a preview block.",
+    ),
+) -> dict[str, Any]:
+    _ = current_user
+    return build_goal_templates_response(
+        session,
+        target_amount=target_amount,
+        years=years,
+        template_id=template_id,
+    )
 
 
 @router.post("/complete")

@@ -1273,3 +1273,68 @@ export type ValuationMethod = HoldingValuationMethod;
 export type LiquidityClass = HoldingLiquidityClass;
 /** Plan F2.1 naming — same as ``InvestmentLedgerTxnType``. */
 export type InvestmentTxnType = InvestmentLedgerTxnType;
+
+// ── Onboarding (Track 2 Phase 4) ───────────────────────────────────────────
+
+/** One merged stretch of months missing coverage for a source. */
+export interface OnboardingGapListItem {
+  kind: string;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  reason: string;
+}
+
+export interface OnboardingGapReport {
+  source: string;
+  source_label: string;
+  source_type: string;
+  expected_cadence: string;
+  date_range_start: string;
+  date_range_end: string;
+  transaction_count: number;
+  gaps: OnboardingGapListItem[];
+  note?: string;
+}
+
+export interface OnboardingGapsResponse {
+  generated_at: string;
+  reports: OnboardingGapReport[];
+}
+
+export interface OnboardingTemplatePreview {
+  target_today_in_inr: number;
+  horizon_years: number;
+  inflation_annual_percent_used: number;
+  inflation_fv_inr: number;
+  copy: string;
+}
+
+export interface OnboardingGoalTemplate {
+  id: string;
+  name: string;
+  icon: string;
+  default_target_amount_min: number;
+  default_target_amount_max: number;
+  default_timeframe_years_min: number;
+  default_timeframe_years_max: number;
+  suggested_priority: number;
+  default_expected_return_rate: number;
+  goal_type: string;
+  goal_class: string;
+  goal_subtype: string | null;
+  time_horizon: string | null;
+  funding_mode: string | null;
+  inflation_rate_category: string;
+  inflation_rate_label: string;
+  inflation_annual_percent: number;
+  preview?: OnboardingTemplatePreview;
+  recurrence_amount_hint?: number;
+  recurrence_frequency?: string;
+}
+
+export interface OnboardingGoalTemplatesResponse {
+  headline_cpi_annual_percent: number;
+  templates: OnboardingGoalTemplate[];
+  headline_preview?: OnboardingTemplatePreview;
+}

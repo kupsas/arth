@@ -138,7 +138,14 @@ function DropZone({
 // UploadDialog — the full dialog content
 // ─────────────────────────────────────────────────────────────────────────────
 
-function UploadDialog({ onClose }: { onClose: () => void }) {
+function UploadDialog({
+  onClose,
+  onImportComplete,
+}: {
+  onClose: () => void
+  /** Fires after a successful pipeline run (e.g. re-fetch onboarding gap analysis). */
+  onImportComplete?: () => void
+}) {
   const queryClient = useQueryClient()
   const [state, setState] = React.useState<UploadState>({ phase: "idle" })
 
@@ -154,6 +161,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
           // Invalidate all metrics and transactions so the dashboard refreshes
           queryClient.invalidateQueries({ queryKey: metricsKeys.all })
           queryClient.invalidateQueries({ queryKey: ["transactions"] })
+          onImportComplete?.()
         },
         (msg) => setState({ phase: "error", message: msg }),
       )
@@ -229,9 +237,10 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
 
 interface Props {
   className?: string
+  onImportComplete?: () => void
 }
 
-export function UploadButton({ className }: Props) {
+export function UploadButton({ className, onImportComplete }: Props) {
   const [open, setOpen] = React.useState(false)
 
   return (
@@ -251,7 +260,7 @@ export function UploadButton({ className }: Props) {
             Upload a statement file to automatically import and classify transactions.
           </DialogDescription>
         </DialogHeader>
-        <UploadDialog onClose={() => setOpen(false)} />
+        <UploadDialog onClose={() => setOpen(false)} onImportComplete={onImportComplete} />
       </DialogContent>
     </Dialog>
   )
