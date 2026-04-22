@@ -274,7 +274,8 @@ class Goal(SQLModel, table=True):
       "INSURANCE"     — maintain adequate insurance cover (manual)
       "TAX"           — maximise 80C deductions / harvest losses (manual)
 
-    status values: "ON_TRACK" | "AT_RISK" | "BEHIND" | "ACHIEVED" | "PAUSED"
+    ``status`` column: legacy string (defaults ON_TRACK) — not used for API progress;
+    the goals API returns ``computed_percentage`` instead of categorical status.
 
     Progress for EXPENSE_LIMIT goals is auto-computed live from the transactions DB.
     All other goals use current_value (manually updated by the user).
@@ -285,7 +286,7 @@ class Goal(SQLModel, table=True):
     Phase B.0 — hierarchy / pyramid:
       ``tier`` groups goals (L1 / L2 / L3 / L4; legacy VISION / STRATEGY / TACTIC / OPERATIONAL).
       ``activation_status`` is lifecycle (PENDING / ACTIVE / COMPLETED / PAUSED), separate
-      from ``status`` which remains progress (ON_TRACK / AT_RISK / …).
+      from legacy ``status``; progress is expressed as ``computed_percentage`` in API responses.
       ``pyramid_id`` is a short stable id (e.g. V1, S4) unique per ``user_id`` for DSL refs.
     """
 

@@ -15,7 +15,7 @@ and are registered before this router so static paths win.
 Progress computation:
   - EXPENSE_LIMIT goals: auto-computed from transactions DB (current month spend)
   - All other goal types: use goal.current_value vs goal.target_amount
-  - Response ``status`` is derived progress (ON_TRACK / AT_RISK / …), separate from
+  - Response includes ``computed_percentage`` (0–100+), separate from
     ``activation_status`` (PENDING / ACTIVE / COMPLETED / PAUSED).
 """
 
@@ -129,7 +129,6 @@ class GoalUpdate(BaseModel):
     chart_key: str | None = Field(default=None, max_length=128)
     progress_cadence: str | None = None
     current_value: float | None = None
-    status: str | None = None
     notes: str | None = Field(default=None, max_length=4000)
     pyramid_id: str | None = Field(default=None, max_length=10)
     tier: str | None = Field(default=None, max_length=32)
@@ -155,8 +154,6 @@ _VALID_GOAL_TYPES = {
     "SAVINGS", "EXPENSE_LIMIT", "EMERGENCY_FUND",
     "INVESTMENT", "DEBT_PAYOFF", "INSURANCE", "TAX",
 }
-
-_VALID_STATUSES = {"ON_TRACK", "AT_RISK", "BEHIND", "ACHIEVED", "PAUSED"}
 
 _VALID_PROGRESS_CADENCE = {"MONTHLY", "ANNUAL"}
 
@@ -508,7 +505,6 @@ def create_goal(
 @router.get("")
 def list_goals(
     goal_type: str | None = Query(None),
-    status: str | None = Query(None),
     tier: str | None = Query(None),
     activation_status: str | None = Query(None),
     funding_mode: str | None = Query(None),
@@ -521,8 +517,6 @@ def list_goals(
 
     if goal_type is not None:
         query = query.where(Goal.goal_type == goal_type)
-    if status is not None:
-        query = query.where(Goal.status == status)
     if tier is not None:
         query = query.where(Goal.tier == tier.strip().upper())
     if activation_status is not None:
@@ -745,12 +739,6 @@ def update_goal(
 
     old_activation = goal.activation_status
     update_data = body.model_dump(exclude_unset=True)
-
-    if "status" in update_data and update_data["status"] not in _VALID_STATUSES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid status: {update_data['status']!r}. Valid: {sorted(_VALID_STATUSES)}",
-        )
 
     if "target_date" in update_data and update_data["target_date"] is not None:
         try:
@@ -1012,10 +1000,8 @@ def _goal_to_dict(
         "starting_balance": goal.starting_balance,
         "system_priority_score": goal.system_priority_score,
         "goal_subtype": goal.goal_subtype,
-        # Computed progress fields (progress ``status`` is separate from activation_status)
         "computed_current_value": progress["current_value"],
         "computed_percentage": progress["percentage"],
-        "status": progress["status"],
         "created_at": goal.created_at.isoformat() if goal.created_at else None,
         "updated_at": goal.updated_at.isoformat() if goal.updated_at else None,
     }

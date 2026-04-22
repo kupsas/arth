@@ -146,7 +146,6 @@ def _goal_to_dict(goal: Goal) -> dict:
         "chart_key": goal.chart_key,
         "progress_cadence": goal.progress_cadence,
         "current_value": goal.current_value,
-        "status": goal.status,
         "notes": goal.notes,
         "user_id": goal.user_id,
         "created_at": goal.created_at.isoformat() if goal.created_at else None,

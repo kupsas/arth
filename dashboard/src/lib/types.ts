@@ -370,8 +370,6 @@ export type GoalType =
   | "INSURANCE"
   | "TAX";
 
-export type GoalStatus = "ON_TRACK" | "AT_RISK" | "BEHIND" | "ACHIEVED" | "PAUSED";
-
 /** How automatic progress is evaluated (EXPENSE_LIMIT + INVESTMENT on dashboard). */
 export type ProgressCadence = "MONTHLY" | "ANNUAL";
 
@@ -404,7 +402,7 @@ export type GoalFundingMode =
 
 /**
  * Lifecycle state for when a goal is "in play" in the pyramid — separate from
- * progress `status` (ON_TRACK / AT_RISK / …).
+ * computed progress percentage.
  */
 export type GoalActivationStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "PAUSED";
 
@@ -466,7 +464,6 @@ export interface Goal {
   // Computed progress (live from DB)
   computed_current_value: number;
   computed_percentage: number;     // 0–100+
-  status: GoalStatus;
   created_at: string;
   updated_at: string;
 }
@@ -515,7 +512,6 @@ export interface GoalUpdate {
   chart_key?: string | null;
   progress_cadence?: ProgressCadence | null;
   current_value?: number | null;
-  status?: GoalStatus;
   notes?: string | null;
   pyramid_id?: string | null;
   tier?: string | null;
@@ -546,14 +542,6 @@ export interface GoalUpdate {
 export type SimulationGoalClass =
   | "POINT_IN_TIME"
   | "RECURRING_CASH_FLOW";
-
-/** ON_TRACK | AT_RISK | BEHIND | ACHIEVED | IMPOSSIBLE */
-export type GoalSimStatus =
-  | "ON_TRACK"
-  | "AT_RISK"
-  | "BEHIND"
-  | "ACHIEVED"
-  | "IMPOSSIBLE";
 
 export interface OneTimeEvent {
   amount: number;
@@ -614,7 +602,14 @@ export interface GoalProjection {
   goal_name: string;
   monthly_allocation: number;
   projected_completion_date: string | null;
-  status: GoalSimStatus;
+  /** POINT_IN_TIME: corpus at deadline / inflated target × 100 (uncapped). */
+  projected_completion_pct?: number | null;
+  corpus_at_deadline?: number | null;
+  inflation_adjusted_target_at_deadline?: number | null;
+  shortfall_at_deadline?: number | null;
+  /** RECURRING_CASH_FLOW: periods that met need / total billable periods × 100. */
+  periods_met_pct?: number | null;
+  worst_period_deficit?: number | null;
   projected_final_amount: number;
   shortfall: number;
   monthly_trajectory: MonthlySnapshot[];
@@ -662,8 +657,8 @@ export interface GoalDelta {
   goal_name: string;
   base_completion?: string | null;
   variant_completion?: string | null;
-  base_status?: GoalSimStatus | null;
-  variant_status?: GoalSimStatus | null;
+  base_progress_pct?: number | null;
+  variant_progress_pct?: number | null;
   months_shifted?: number | null;
 }
 

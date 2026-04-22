@@ -87,7 +87,8 @@ def test_single_point_in_time_goal_projection():
     r = simulate(p)
     house = next(x for x in r.projections if x.goal_name == "House")
     assert house.projected_completion_date is not None
-    assert house.status == "ACHIEVED"
+    assert house.projected_completion_date is not None
+    assert (house.projected_completion_pct or 0) >= 100.0
     assert len(house.monthly_trajectory) == 120
     assert house.monthly_trajectory[0].month == today.replace(day=1)
 
@@ -124,7 +125,8 @@ def test_cascade_two_goals_second_gets_surplus_after_first_completes():
     )
     r = simulate(p)
     quick = next(x for x in r.projections if x.goal_name == "Quick")
-    assert quick.status == "ACHIEVED"
+    assert quick.projected_completion_date is not None
+    assert (quick.projected_completion_pct or 0) >= 100.0
     assert len(r.cascade_events) >= 1
 
 
@@ -371,7 +373,7 @@ def test_edge_already_funded():
     )
     p = SimulationParams(goals=[g], monthly_surplus=0.0, simulation_months=12, as_of_date=today)
     r = simulate(p)
-    assert r.projections[0].status == "ACHIEVED"
+    assert (r.projections[0].projected_completion_pct or 0) >= 100.0
 
 
 def test_allocate_surplus_sums_to_surplus_when_sink_pit_present():
@@ -695,7 +697,8 @@ def test_recurring_trajectory_has_monthly_need_and_funding_stats():
     assert loan.funding_rate >= 0.99
     assert loan.total_needed is not None
     assert loan.total_contributed is not None
-    assert loan.status in ("ACHIEVED", "ON_TRACK")
+    assert loan.periods_met_pct is not None
+    assert loan.periods_met_pct >= 99.0
 
 
 def test_recurring_quarterly_funding_stats_align_to_first_billable_month():

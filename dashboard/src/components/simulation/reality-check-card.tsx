@@ -17,20 +17,31 @@ import {
 import { formatCurrency } from "@/lib/utils";
 import type { GoalProjection, SimulationResult } from "@/lib/types";
 
-function statusTone(status: string): "default" | "secondary" | "destructive" | "outline" {
-  switch (status) {
-    case "ON_TRACK":
-    case "ACHIEVED":
-      return "default";
-    case "AT_RISK":
-      return "secondary";
-    case "BEHIND":
-    case "IMPOSSIBLE":
-      return "destructive";
-    default:
-      return "outline";
+function bucketPct(
+  p: GoalProjection,
+): "strong" | "fair" | "weak" | "unknown" {
+  const v =
+    p.projected_completion_pct != null
+      ? p.projected_completion_pct
+      : p.periods_met_pct;
+  if (v == null) {
+    return "unknown";
   }
+  if (v >= 90) {
+    return "strong";
+  }
+  if (v >= 60) {
+    return "fair";
+  }
+  return "weak";
 }
+
+const BUCKET_TONE: Record<"strong" | "fair" | "weak" | "unknown", "default" | "secondary" | "destructive" | "outline"> = {
+  strong: "default",
+  fair: "secondary",
+  weak: "destructive",
+  unknown: "outline",
+};
 
 export function RealityCheckCard({
   monthlySurplus,
@@ -42,13 +53,16 @@ export function RealityCheckCard({
   if (!result) return null;
 
   const projections = result.projections ?? [];
-  const counts = projections.reduce(
-    (acc, p) => {
-      acc[p.status] = (acc[p.status] ?? 0) + 1;
-      return acc;
-    },
-    {} as Record<string, number>,
-  );
+  const bucketCounts: Record<"strong" | "fair" | "weak" | "unknown", number> = {
+    strong: 0,
+    fair: 0,
+    weak: 0,
+    unknown: 0,
+  };
+  for (const p of projections) {
+    const b = bucketPct(p);
+    bucketCounts[b] += 1;
+  }
 
   const allocated = result.total_surplus_allocated ?? 0;
   const unalloc = result.unallocated_surplus ?? 0;
@@ -102,22 +116,25 @@ export function RealityCheckCard({
         </div>
 
         <div>
-          <p className="mb-2 text-xs font-medium text-muted-foreground">Goal statuses</p>
+          <p className="mb-2 text-xs font-medium text-muted-foreground">
+            Goal progress (simulation %)
+          </p>
           <div className="flex flex-wrap gap-2">
             {(
               [
-                "ON_TRACK",
-                "AT_RISK",
-                "BEHIND",
-                "ACHIEVED",
-                "IMPOSSIBLE",
-              ] as GoalProjection["status"][]
-            ).map((s) => {
-              const n = counts[s] ?? 0;
-              if (n === 0) return null;
+                { key: "strong" as const, label: "≥90%" },
+                { key: "fair" as const, label: "60–90%" },
+                { key: "weak" as const, label: "<60%" },
+                { key: "unknown" as const, label: "n/a" },
+              ] as const
+            ).map(({ key, label }) => {
+              const n = bucketCounts[key];
+              if (n === 0) {
+                return null;
+              }
               return (
-                <Badge key={s} variant={statusTone(s)}>
-                  {s.replace(/_/g, " ")} · {n}
+                <Badge key={key} variant={BUCKET_TONE[key]}>
+                  {label} · {n}
                 </Badge>
               );
             })}

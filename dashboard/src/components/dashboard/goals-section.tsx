@@ -67,7 +67,7 @@ import {
   recurrenceAmountToMonthlyInr,
 } from "@/lib/goal-target-money"
 import { formatCurrency, cn } from "@/lib/utils"
-import type { Goal, GoalStatus, GoalUpdate } from "@/lib/types"
+import type { Goal, GoalUpdate } from "@/lib/types"
 
 /** Optional subtype for recurring goals — must match api/routes/goals.py _VALID_GOAL_SUBTYPES. */
 const GOAL_SUBTYPE_OPTIONS = [
@@ -96,23 +96,41 @@ function labelForStoredGoalSubtype(goalSubtype: string | null | undefined): stri
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Status helpers
+// Progress % display (thresholds are display-only; simulation returns authoritative %)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const STATUS_STYLES: Record<GoalStatus, string> = {
-  ON_TRACK: "border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400",
-  AT_RISK:  "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  BEHIND:   "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400",
-  ACHIEVED: "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400",
-  PAUSED:   "border-gray-500/30 bg-gray-500/10 text-gray-600 dark:text-gray-400",
+function progressBadgeClass(pct: number, mode: "expense" | "savings"): string {
+  if (mode === "expense") {
+    if (pct >= 100) {
+      return "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
+    }
+    if (pct >= 85) {
+      return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+    }
+    return "border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400"
+  }
+  if (pct >= 100) {
+    return "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400"
+  }
+  if (pct >= 90) {
+    return "border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400"
+  }
+  if (pct >= 60) {
+    return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+  }
+  return "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
 }
 
-const STATUS_LABELS: Record<GoalStatus, string> = {
-  ON_TRACK: "On Track",
-  AT_RISK:  "At Risk",
-  BEHIND:   "Behind",
-  ACHIEVED: "Achieved",
-  PAUSED:   "Paused",
+function progressBarClass(pct: number, mode: "expense" | "savings"): string {
+  if (mode === "expense") {
+    if (pct >= 100) return "[&>div]:bg-red-500"
+    if (pct >= 85) return "[&>div]:bg-amber-500"
+    return "[&>div]:bg-green-500"
+  }
+  if (pct >= 100) return "[&>div]:bg-blue-500"
+  if (pct >= 90) return "[&>div]:bg-green-500"
+  if (pct >= 60) return "[&>div]:bg-amber-500"
+  return "[&>div]:bg-red-500"
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,7 +505,9 @@ function GoalCard({ goal }: { goal: Goal }) {
 
   const uiKind = inferGoalUiKind(goal)
   const isExpenseLimit = uiKind === "EXPENSE_LIMIT"
-  const progressValue = Math.min(goal.computed_percentage, 100)
+  const pct = goal.computed_percentage
+  const progressValue = Math.min(pct, 100)
+  const badgeMode = isExpenseLimit ? "expense" : "savings"
 
   const daysLeft = goal.target_date
     ? Math.max(0, Math.ceil((new Date(goal.target_date).getTime() - Date.now()) / 86_400_000))
@@ -516,9 +536,9 @@ function GoalCard({ goal }: { goal: Goal }) {
         <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
           <Badge
             variant="outline"
-            className={cn("text-[11px] px-1.5 py-0", STATUS_STYLES[goal.status as GoalStatus])}
+            className={cn("text-[11px] px-1.5 py-0", progressBadgeClass(pct, badgeMode))}
           >
-            {STATUS_LABELS[goal.status as GoalStatus] ?? goal.status}
+            {isExpenseLimit ? `${Math.round(pct)}% of cap` : `${Math.round(pct)}%`}
           </Badge>
           <EditGoalSheet goal={goal} />
           <Button
@@ -536,12 +556,7 @@ function GoalCard({ goal }: { goal: Goal }) {
       <div className="space-y-1">
         <Progress
           value={progressValue}
-          className={cn(
-            "h-1.5",
-            goal.status === "BEHIND" && "[&>div]:bg-red-500",
-            goal.status === "AT_RISK" && "[&>div]:bg-amber-500",
-            goal.status === "ACHIEVED" && "[&>div]:bg-blue-500",
-          )}
+          className={cn("h-1.5", progressBarClass(pct, badgeMode))}
         />
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
@@ -571,8 +586,8 @@ function GoalCard({ goal }: { goal: Goal }) {
                 {daysLeft === 0 ? "Today" : `${daysLeft}d left`}
               </span>
             )}
-            {goal.status === "ACHIEVED" && (
-              <CheckCircle2 className="size-3 text-blue-500" />
+            {!isExpenseLimit && pct >= 100 && (
+              <CheckCircle2 className="size-3 text-blue-500" aria-label="Target reached" />
             )}
           </div>
         </div>
@@ -1095,9 +1110,6 @@ interface Props {
 export function GoalsSection({ className, initialChartKey = null }: Props) {
   const { data: goals, isLoading } = useGoals()
 
-  const activeGoals = (goals ?? []).filter((g) => g.status !== "ACHIEVED" && g.status !== "PAUSED")
-  const achievedGoals = (goals ?? []).filter((g) => g.status === "ACHIEVED")
-
   return (
     <Card className={cn(className)}>
       <CardHeader className="pb-2">
@@ -1127,20 +1139,9 @@ export function GoalsSection({ className, initialChartKey = null }: Props) {
           </div>
         ) : (
           <>
-            {activeGoals.map((goal) => (
+            {(goals ?? []).map((goal) => (
               <GoalCard key={goal.id} goal={goal} />
             ))}
-            {achievedGoals.length > 0 && (
-              <div className="pt-2">
-                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                  <CheckCircle2 className="size-3 text-blue-500" />
-                  Achieved
-                </p>
-                {achievedGoals.map((goal) => (
-                  <GoalCard key={goal.id} goal={goal} />
-                ))}
-              </div>
-            )}
           </>
         )}
       </CardContent>

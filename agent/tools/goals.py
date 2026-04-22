@@ -61,7 +61,6 @@ def format_goals_overview_for_agent(
                 "id": g.get("id"),
                 "name": g.get("name"),
                 "goal_type": g.get("goal_type"),
-                "status": g.get("status"),
                 "activation_status": g.get("activation_status"),
                 "target_amount": g.get("target_amount"),
                 "target_date": g.get("target_date"),
@@ -95,7 +94,6 @@ def _slim_goal_core(g: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": g.get("name"),
         "goal_type": g.get("goal_type"),
-        "status": g.get("status"),
         "activation_status": g.get("activation_status"),
         "target_amount": g.get("target_amount"),
         "target_date": str(g.get("target_date")) if g.get("target_date") else None,
@@ -166,11 +164,17 @@ def format_goal_detail_for_agent(
     monthly_need = goal.get("computed_monthly_need") or goal.get("monthly_need")
 
     anc_names = [
-        {"name": a.get("name"), "computed_percentage": a.get("computed_percentage"), "status": a.get("status")}
+        {
+            "name": a.get("name"),
+            "computed_percentage": a.get("computed_percentage"),
+        }
         for a in ancestors
     ]
     des_names = [
-        {"name": d.get("name"), "computed_percentage": d.get("computed_percentage"), "status": d.get("status")}
+        {
+            "name": d.get("name"),
+            "computed_percentage": d.get("computed_percentage"),
+        }
         for d in descendants
     ]
     return {
@@ -239,7 +243,7 @@ def format_surplus_allocation_for_agent(data: dict[str, Any]) -> dict[str, Any]:
 @tool(
     name="get_goal_tree",
     description=(
-        "Goal hierarchy (pyramid tiers L1–L4 + untiered) with progress and status per goal. "
+        "Goal hierarchy (pyramid tiers L1–L4 + untiered) with progress % per goal. "
         "Omits database ids and link edges — names and progress only. "
         "When combining with other goal tools, remember **target amounts are in today's money (INR)**. "
         "Use for 'how do my goals relate'. For a flat priority-ordered list, use get_goals_overview."
@@ -264,7 +268,6 @@ def format_goal_tree_for_agent(tree: dict[str, Any]) -> dict[str, Any]:
                 {
                     "name": g.get("name"),
                     "computed_percentage": g.get("computed_percentage"),
-                    "status": g.get("status"),
                     "goal_type": g.get("goal_type"),
                 }
             )

@@ -13,7 +13,6 @@ the needed PMT uses the available surplus, and document behavior where averages 
 from __future__ import annotations
 
 import datetime
-from typing import get_args
 
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -25,7 +24,6 @@ from api.services.liquidity_service import check_liquidity_mismatch
 from api.services.simulation import (
     GC_POINT,
     GC_RECURRING,
-    GoalSimStatus,
     OneTimeEvent,
     SimulationGoal,
     SimulationParams,
@@ -181,10 +179,14 @@ def _session(engine):
 class TestRulesVocabulary:
     """Rules — Vocabulary (R-VOC-1)."""
 
-    def test_r_voc_1_goal_projection_status_enum(self) -> None:
-        """Authoritative literals for GoalProjection.status."""
-        allowed = set(get_args(GoalSimStatus))
-        assert allowed == {"ON_TRACK", "AT_RISK", "BEHIND", "ACHIEVED", "IMPOSSIBLE"}
+    def test_r_voc_1_goal_projection_has_progress_percentages(self) -> None:
+        """PIT and recurring expose headline % fields (not categorical status)."""
+        g = _pit("H", tid=1, target=1_000_000.0, target_date=datetime.date(2036, 1, 1), priority=1, infl=6.5)
+        r = _params([g], 20_000.0, months=12, general_inflation=6.5, as_of=datetime.date(2026, 1, 1))
+        out = simulate(r)
+        p = out.projections[0]
+        assert p.projected_completion_pct is not None
+        assert p.periods_met_pct is None
 
 
 # ── 2. R-INF-1, R-INF-2, R-INF-3 ─────────────────────────────────────────────
@@ -216,7 +218,7 @@ class TestRulesInflation:
         p = _params([g, gr], 20_000.0, months=120, general_inflation=6.5, as_of=datetime.date(2026, 1, 1))
         r = simulate(p)
         pit = next(x for x in r.projections if x.goal_name == "H")
-        assert pit.status in ("ON_TRACK", "AT_RISK", "BEHIND", "ACHIEVED", "IMPOSSIBLE")
+        assert pit.projected_completion_pct is not None
 
     def test_r_inf_2_goal_specific_inflation_overrides_general(self) -> None:
         g8 = _pit(
@@ -308,7 +310,8 @@ class TestRulesParams:
         r = simulate(p)
         pit = r.projections[0]
         assert len(pit.monthly_trajectory) == 36
-        assert pit.status in ("BEHIND", "AT_RISK", "IMPOSSIBLE", "ON_TRACK")
+        assert pit.projected_completion_pct is not None
+        assert pit.projected_completion_pct < 100.0
 
     def test_r_prm_4_compare_scenarios_structure(self) -> None:
         g = _pit("X", tid=1, target=800_000.0, target_date=datetime.date(2032, 1, 1), priority=1)
@@ -346,7 +349,8 @@ class TestSingleGoalBasic:
         g = _pit("G", tid=1, target=2_000_000.0, target_date=td, priority=1, start=500_000.0, ret=10.0, infl=0.0)
         r = simulate(_params([g], 50_000.0, months=48, as_of=today))
         pit = r.projections[0]
-        assert pit.status == "ACHIEVED"
+        assert pit.projected_completion_date is not None
+        assert (pit.projected_completion_pct or 0) >= 100.0
         mc = _months_from_start_to_date(today, pit.projected_completion_date)
         assert mc is not None
         assert 20 <= mc <= 32
@@ -358,7 +362,8 @@ class TestSingleGoalBasic:
         g = _pit("G", tid=1, target=2_000_000.0, target_date=td, priority=1, start=500_000.0, ret=0.0, infl=0.0)
         r = simulate(_params([g], 50_000.0, months=40, as_of=today))
         pit = r.projections[0]
-        assert pit.status == "ACHIEVED"
+        assert pit.projected_completion_date is not None
+        assert (pit.projected_completion_pct or 0) >= 100.0
         mc = _months_from_start_to_date(today, pit.projected_completion_date)
         assert mc in (29, 30)
 
@@ -368,7 +373,8 @@ class TestSingleGoalBasic:
         g = _pit("G", tid=1, target=2_000_000.0, target_date=td, priority=1, start=0.0, ret=10.0, infl=0.0)
         r = simulate(_params([g], 50_000.0, months=60, as_of=today))
         pit = r.projections[0]
-        assert pit.status == "ACHIEVED"
+        assert pit.projected_completion_date is not None
+        assert (pit.projected_completion_pct or 0) >= 100.0
         mc = _months_from_start_to_date(today, pit.projected_completion_date)
         assert mc is not None
         assert 30 <= mc <= 42
@@ -386,7 +392,7 @@ class TestSingleGoalBasic:
             infl=0.0,
         )
         r = simulate(_params([g], 0.0, months=12, as_of=today))
-        assert r.projections[0].status == "ACHIEVED"
+        assert (r.projections[0].projected_completion_pct or 0) >= 100.0
 
     def test_s1_5_recurring_cash_flow_reserves_surplus(self) -> None:
         today = datetime.date(2026, 1, 1)
@@ -419,8 +425,10 @@ class TestMultiGoalCascade:
         r = simulate(_params([g1, g2, gr], 150_000.0, months=120, as_of=today))
         p1 = next(p for p in r.projections if p.goal_name == "G1")
         p2 = next(p for p in r.projections if p.goal_name == "G2")
-        assert p1.status == "ACHIEVED"
-        assert p2.status in ("ACHIEVED", "ON_TRACK")
+        assert p1.projected_completion_date is not None
+        assert (p1.projected_completion_pct or 0) >= 100.0
+        assert p2.projected_completion_pct is not None
+        assert (p2.projected_completion_pct or 0) >= 60.0
 
     def test_s2_2_three_goals_cascade_event(self) -> None:
         today = datetime.date(2026, 1, 1)
@@ -430,7 +438,9 @@ class TestMultiGoalCascade:
         gr = _closed_sink_placeholder("Pool", tid=4, priority=4)
         r = simulate(_params([g1, g2, g3, gr], 150_000.0, months=120, as_of=today))
         assert any(e.completed_goal == "G1" for e in r.cascade_events)
-        assert {p.goal_name for p in r.projections if p.status == "ACHIEVED"} >= {"G1"}
+        assert {p.goal_name for p in r.projections if p.projected_completion_date is not None} >= {
+            "G1",
+        }
 
     def test_s2_3_insufficient_surplus_top_priority_behind(self) -> None:
         today = datetime.date(2026, 1, 1)
@@ -442,7 +452,9 @@ class TestMultiGoalCascade:
         p1 = next(p for p in r.projections if p.goal_name == "G1")
         p2 = next(p for p in r.projections if p.goal_name == "G2")
         p3 = next(p for p in r.projections if p.goal_name == "G3")
-        assert p1.status in ("BEHIND", "AT_RISK")
+        assert p1.projected_completion_pct is not None
+        assert p1.projected_completion_date is None
+        assert p1.projected_completion_pct <= 90.0
         # While G1 is active it takes min(need, surplus); after deadline months contribute 0 — check peak month
         peak = max(s.monthly_contribution for s in p1.monthly_trajectory)
         assert peak == pytest.approx(150_000.0, abs=1.0)
@@ -508,7 +520,8 @@ class TestReturnRates:
         r = simulate(_params([g1, g2, gr], 80_000.0, months=120, as_of=today))
         p1 = next(p for p in r.projections if p.goal_name == "Short")
         p2 = next(p for p in r.projections if p.goal_name == "Long")
-        assert p1.status == "ACHIEVED"
+        assert p1.projected_completion_date is not None
+        assert (p1.projected_completion_pct or 0) >= 100.0
         assert p1.projected_final_amount >= 200_000.0 * 0.99
         assert p2.projected_final_amount > 0.0
         assert g1.expected_return_rate == 6.0 and g2.expected_return_rate == 12.0
@@ -530,7 +543,8 @@ class TestInflationScenarios:
         gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 200_000.0, months=180, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "House")
-        assert pit.status in ("ACHIEVED", "ON_TRACK", "AT_RISK")
+        assert pit.projected_completion_pct is not None
+        assert 0.0 < pit.projected_completion_pct < 200.0
 
     def test_s4_2_short_horizon_explicit_zero_inflation(self) -> None:
         today = datetime.date(2026, 1, 1)
@@ -554,7 +568,8 @@ class TestInflationScenarios:
             ),
             99.0,
         ) == 0.0
-        assert pit.status in ("ACHIEVED", "ON_TRACK")
+        assert pit.projected_completion_pct is not None
+        assert (pit.projected_completion_pct or 0) > 0.0
 
     def test_s4_3_two_goals_different_inflation(self) -> None:
         today = datetime.date(2026, 1, 1)
@@ -600,7 +615,12 @@ class TestSurplusChanges:
         assert r_hi.projections[0].shortfall <= r_lo.projections[0].shortfall
         d_lo = r_lo.projections[0].projected_completion_date
         d_hi = r_hi.projections[0].projected_completion_date
-        if d_lo and d_hi and r_hi.projections[0].status == "ACHIEVED" and r_lo.projections[0].status == "ACHIEVED":
+        if (
+            d_lo
+            and d_hi
+            and r_hi.projections[0].projected_completion_date
+            and r_lo.projections[0].projected_completion_date
+        ):
             assert d_hi <= d_lo
 
     def test_s5_2_surplus_decrease_moves_completion_later_or_worse_status(self) -> None:
@@ -631,7 +651,8 @@ class TestSurplusChanges:
         r = simulate(_params([g, gr], 0.0, months=60, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "G")
         assert pit.projected_final_amount > 400_000.0
-        assert pit.status in ("AT_RISK", "BEHIND", "IMPOSSIBLE", "ON_TRACK")
+        assert pit.projected_completion_pct is not None
+        assert pit.projected_completion_pct < 100.0
 
     def test_s5_4_one_time_outflow_clamps_surplus_for_month(self) -> None:
         today = datetime.date(2026, 1, 1)
@@ -805,7 +826,7 @@ class TestLiquidity:
         )
         gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([gsim, gr], 100_000.0, months=200, as_of=today))
-        assert r.projections[0].status in ("AT_RISK", "BEHIND", "ON_TRACK", "ACHIEVED")
+        assert r.projections[0].projected_completion_pct is not None
 
     def test_s7_2_long_horizon_full_accessible_no_mismatch(self, session: Session) -> None:
         uid = "test_user"
@@ -868,9 +889,10 @@ class TestEdgeCases:
         g2 = _pit("B", tid=2, target=50_000.0, target_date=add_months(today, 12), priority=2, start=60_000.0, infl=0.0)
         gr = _closed_sink_placeholder("Pool", tid=3, priority=3)
         r = simulate(_params([g1, g2, gr], 80_000.0, months=24, as_of=today))
-        statuses = {p.goal_name: p.status for p in r.projections}
-        assert statuses.get("A") == "ACHIEVED"
-        assert statuses.get("B") == "ACHIEVED"
+        for name in ("A", "B"):
+            row = next(p for p in r.projections if p.goal_name == name)
+            assert row.projected_completion_date is not None
+            assert (row.projected_completion_pct or 0) >= 100.0
 
     def test_s8_3_exact_pmt_zero_percent(self) -> None:
         today = datetime.date(2026, 1, 1)
@@ -887,7 +909,8 @@ class TestEdgeCases:
         gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 100_000.0, months=24, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "G")
-        assert pit.status == "ACHIEVED"
+        assert pit.projected_completion_date is not None
+        assert (pit.projected_completion_pct or 0) >= 100.0
         mc = _months_from_start_to_date(today, pit.projected_completion_date)
         # Off-by-one possible vs months_between; both acceptable for "12-month horizon"
         assert mc in (11, 12)
@@ -937,7 +960,8 @@ class TestMultiUser:
         gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 40_000.0, months=60, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "Trip")
-        assert pit.status == "ACHIEVED"
+        assert pit.projected_completion_date is not None
+        assert (pit.projected_completion_pct or 0) >= 100.0
 
     def test_s9_2_higher_share_later_completion(self) -> None:
         today = datetime.date(2026, 1, 1)

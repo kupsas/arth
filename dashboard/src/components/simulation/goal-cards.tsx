@@ -44,13 +44,35 @@ function normalizedGoalClass(goal: SimulationGoal): string {
 
 const RECURRENCE_FREQUENCIES = ["MONTHLY", "QUARTERLY", "ANNUAL"] as const;
 
-function statusVariant(
-  s: string,
+function headlinePct(
+  p: GoalProjection,
+  goal: SimulationGoal,
+): { pct: number; label: string } {
+  const gc = normalizedGoalClass(goal);
+  if (gc === "RECURRING_CASH_FLOW") {
+    const v = p.periods_met_pct;
+    if (v == null) {
+      return { pct: 0, label: "Recurring" };
+    }
+    return { pct: v, label: `${v.toFixed(0)}% periods` };
+  }
+  const v = p.projected_completion_pct;
+  if (v == null) {
+    return { pct: 0, label: "PIT" };
+  }
+  return { pct: v, label: `${v.toFixed(0)}%` };
+}
+
+function pctVariant(
+  pct: number,
 ): "default" | "secondary" | "destructive" | "outline" {
-  if (s === "ON_TRACK" || s === "ACHIEVED") return "default";
-  if (s === "AT_RISK") return "secondary";
-  if (s === "BEHIND" || s === "IMPOSSIBLE") return "destructive";
-  return "outline";
+  if (pct >= 90) {
+    return "default";
+  }
+  if (pct >= 60) {
+    return "secondary";
+  }
+  return "destructive";
 }
 
 function projectionFor(
@@ -201,11 +223,14 @@ function GoalCardRow({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="truncate font-medium">{goal.name}</span>
-            {projection && (
-              <Badge variant={statusVariant(projection.status)}>
-                {projection.status.replace(/_/g, " ")}
-              </Badge>
-            )}
+            {projection != null
+              ? (() => {
+                  const h = headlinePct(projection, goal);
+                  return (
+                    <Badge variant={pctVariant(h.pct)}>{h.label}</Badge>
+                  );
+                })()
+              : null}
             {goal.id == null && (
               <Badge variant="outline">Hypothetical</Badge>
             )}

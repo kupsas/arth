@@ -91,13 +91,36 @@ function projectionFor(
   );
 }
 
-function statusVariant(
-  s: string,
+/** Map simulation headline % to badge color (display thresholds only). */
+function pctHeadline(
+  p: GoalProjection,
+  goalClass: string,
+): { pct: number; label: string } {
+  const gc = goalClass.toUpperCase();
+  if (gc === "RECURRING_CASH_FLOW") {
+    const v = p.periods_met_pct;
+    if (v == null) {
+      return { pct: 0, label: "Recurring" };
+    }
+    return { pct: v, label: `${v.toFixed(0)}% periods met` };
+  }
+  const v = p.projected_completion_pct;
+  if (v == null) {
+    return { pct: 0, label: "PIT" };
+  }
+  return { pct: v, label: `${v.toFixed(0)}% at deadline` };
+}
+
+function pctVariant(
+  pct: number,
 ): "default" | "secondary" | "destructive" | "outline" {
-  if (s === "ON_TRACK" || s === "ACHIEVED") return "default";
-  if (s === "AT_RISK") return "secondary";
-  if (s === "BEHIND" || s === "IMPOSSIBLE") return "destructive";
-  return "outline";
+  if (pct >= 90) {
+    return "default";
+  }
+  if (pct >= 60) {
+    return "secondary";
+  }
+  return "destructive";
 }
 
 /** PIT: scope chart to target month when deadline is set (same as RunRateChart). */
@@ -231,7 +254,10 @@ function SortableGoalRow({
     opacity: isDragging ? 0.85 : 1,
   };
 
-  const st = projection?.status ?? "";
+  const head =
+    projection != null
+      ? pctHeadline(projection, normalizedGoalClass(goal))
+      : null;
 
   return (
     <div
@@ -259,16 +285,16 @@ function SortableGoalRow({
       >
         {goal.name}
       </button>
-      {st ? (
+      {head != null ? (
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
-            st === "ACHIEVED" || st === "ON_TRACK"
+            head.pct >= 90
               ? "bg-emerald-500"
-              : st === "AT_RISK"
+              : head.pct >= 60
                 ? "bg-amber-500"
                 : "bg-red-500"
           }`}
-          title={st.replace(/_/g, " ")}
+          title={head.label}
         />
       ) : null}
     </div>
@@ -359,17 +385,18 @@ export function GoalExplorer({
       recAmt > 0 ? recurrenceAmountToMonthlyInr(recAmt, freq) : 0;
 
     if (isRecurring) {
-      const worst = worstPeriodDeficitInr(
-        p.monthly_trajectory ?? [],
-        g.recurrence_frequency,
-      );
+      const worst =
+        p.worst_period_deficit ??
+        worstPeriodDeficitInr(
+          p.monthly_trajectory ?? [],
+          g.recurrence_frequency,
+        );
       const fr = p.funding_rate;
+      const h = pctHeadline(p, gc);
       return (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={statusVariant(p.status)}>
-              {p.status.replace(/_/g, " ")}
-            </Badge>
+            <Badge variant={pctVariant(h.pct)}>{h.label}</Badge>
             {g.goal_subtype ? (
               <span className="text-xs text-muted-foreground">
                 {String(g.goal_subtype).replace(/_/g, " ")}
@@ -486,7 +513,24 @@ export function GoalExplorer({
     let shortfallValue = p.shortfall;
     let deadlineCorpusNote: string | null = null;
 
-    if (atDeadlineMonth) {
+    if (
+      p.corpus_at_deadline != null
+      && p.inflation_adjusted_target_at_deadline != null
+    ) {
+      corpusLabel = "Simulated corpus (deadline month)";
+      corpusValue = p.corpus_at_deadline;
+      shortfallLabel = "Shortfall vs inflation-adjusted target (at deadline)";
+      shortfallValue = p.shortfall_at_deadline ?? 0;
+      if (
+        p.monthly_trajectory?.length &&
+        deadlineYm &&
+        p.monthly_trajectory.at(-1)!.month.slice(0, 7) < deadlineYm
+      ) {
+        deadlineCorpusNote =
+          `Simulation horizon ends before your deadline (${deadlineYm}). ` +
+          `Corpus is the balance as of the last simulated month.`;
+      }
+    } else if (atDeadlineMonth) {
       corpusLabel = "Simulated corpus (deadline month)";
       corpusValue = atDeadlineMonth.value;
       if (atDeadlineMonth.truncated) {
@@ -509,13 +553,12 @@ export function GoalExplorer({
         : null;
 
     const chartData = lumpSumChartRows(p, g);
+    const hPit = pctHeadline(p, lumpGc);
 
     return (
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={statusVariant(p.status)}>
-            {p.status.replace(/_/g, " ")}
-          </Badge>
+          <Badge variant={pctVariant(hPit.pct)}>{hPit.label}</Badge>
           {g.id == null ? (
             <Badge variant="outline">Hypothetical</Badge>
           ) : null}
