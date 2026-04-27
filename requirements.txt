@@ -18,7 +18,7 @@ sdmx1>=1.0
 python-multipart>=0.0.9
 
 # Phase 4 — Gmail API email scraper
-google-api-python-client>=2.0
+google-api-python-client>=2.194.0
 google-auth-httplib2>=0.2
 google-auth-oauthlib>=1.0
 beautifulsoup4>=4.12
