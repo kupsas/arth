@@ -84,6 +84,41 @@ export default function SetupPage() {
     };
   }, [router]);
 
+  // Full-screen setup: lock every scroll container in the shell for the whole time this page is mounted.
+  React.useEffect(() => {
+    const html = document.documentElement;
+    const main = document.querySelector("main") as HTMLElement | null;
+
+    const prev = {
+      htmlOverflow: html.style.overflow,
+      htmlOsb: html.style.overscrollBehavior,
+      bodyOverflow: document.body.style.overflow,
+      bodyOsb: document.body.style.overscrollBehavior,
+      mainOverflow: main?.style.overflow ?? "",
+      mainOsb: main?.style.overscrollBehavior ?? "",
+    };
+
+    html.style.overflow = "hidden";
+    html.style.overscrollBehavior = "none";
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "none";
+    if (main) {
+      main.style.overflow = "hidden";
+      main.style.overscrollBehavior = "none";
+    }
+
+    return () => {
+      html.style.overflow = prev.htmlOverflow;
+      html.style.overscrollBehavior = prev.htmlOsb;
+      document.body.style.overflow = prev.bodyOverflow;
+      document.body.style.overscrollBehavior = prev.bodyOsb;
+      if (main) {
+        main.style.overflow = prev.mainOverflow;
+        main.style.overscrollBehavior = prev.mainOsb;
+      }
+    };
+  }, []);
+
   async function onRegister(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -117,7 +152,9 @@ export default function SetupPage() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-background p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-none bg-background py-8 px-4"
+    >
       <div className="w-full max-w-4xl rounded-xl border bg-card p-6 sm:p-10 shadow-sm">
         {step < 3 && (
           <>

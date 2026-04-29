@@ -8,6 +8,7 @@ Gmail and heavy backfill work stay mocked; we still exercise the FastAPI stack,
 from __future__ import annotations
 
 import importlib
+import json
 from datetime import date
 from typing import Any
 from unittest.mock import patch
@@ -72,26 +73,35 @@ def _flow_client(
     monkeypatch.setattr(pc, "LLM_MODEL", "auto", raising=False)
 
 
-@patch("api.routes.onboarding.discover_sources", autospec=True)
+@patch("api.routes.onboarding.get_bank_senders_config", return_value={"a@test.in": {"display_name": "T", "source_type": "savings", "accounts": {}}})
+@patch("api.routes.onboarding.discover_sources_iter", autospec=True)
 def test_discover_saves_to_onboarding_state(
-    mock_disc: Any,
+    mock_iter: Any,
+    _bank: Any,
     engine: object,
     flow_client: TestClient,
 ) -> None:
-    mock_disc.return_value = [
-        DiscoveredSource(
-            sender_email="a@test.in",
-            display_name="T",
-            source_type="savings",
-            email_count_estimate=2,
-            earliest_email_date=date(2020, 1, 1),
-            latest_email_date=date(2020, 6, 1),
-        )
-    ]
+    mock_iter.return_value = iter(
+        [
+            DiscoveredSource(
+                sender_email="a@test.in",
+                display_name="T",
+                source_type="savings",
+                email_count_estimate=2,
+                earliest_email_date=date(2020, 1, 1),
+                latest_email_date=date(2020, 6, 1),
+            )
+        ]
+    )
     with patch("api.routes.onboarding._gmail_client_connected", return_value=object()):
         r = flow_client.post("/api/onboarding/discover")
     assert r.status_code == 200, r.text
-    assert r.json()["status"] == "ok"
+    lines = [json.loads(line) for line in r.text.strip().split("\n") if line.strip()]
+    assert lines[0]["type"] == "start"
+    assert lines[0]["total"] == 1
+    assert lines[1]["type"] == "found"
+    assert lines[1]["index"] == 0
+    assert lines[2]["type"] == "done"
     with Session(engine) as session:  # type: ignore[call-arg]
         row = session.exec(select(OnboardingState).where(OnboardingState.user_id == "flow_user")).first()
         assert row is not None

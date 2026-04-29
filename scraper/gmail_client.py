@@ -34,19 +34,138 @@ from __future__ import annotations
 
 import base64
 import datetime
+import html
 import logging
+import webbrowser
+import wsgiref.simple_server
+import wsgiref.util
 from dataclasses import dataclass
+from typing import Any
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, WSGITimeoutError
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from scraper.config import GMAIL_CREDENTIALS_PATH, GMAIL_SCOPES, GMAIL_TOKEN_PATH
 
 logger = logging.getLogger(__name__)
+
+
+class _OAuthLocalRequestHandler(wsgiref.simple_server.WSGIRequestHandler):
+    """HTTP access log lines go to our logger (same idea as google_auth_oauthlib)."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        logger.info(format, *args)
+
+
+class _OAuthSuccessHtmlApp:
+    """WSGI app for the OAuth redirect that returns HTML with a real ``<title>``.
+
+    The stock ``google_auth_oauthlib`` handler responds with ``text/plain`` only.
+    With no document title, many browsers use the **full callback URL** (query string
+    with ``state``, ``code``, ``scope``…) as the tab label — unreadable. Serving a
+    minimal HTML page fixes the tab title while keeping the same success copy.
+    """
+
+    def __init__(self, body_text: str, page_title: str) -> None:
+        self.last_request_uri: str | None = None
+        self._body_text = body_text
+        self._page_title = page_title
+
+    def __call__(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
+        start_response("200 OK", [("Content-type", "text/html; charset=utf-8")])
+        self.last_request_uri = wsgiref.util.request_uri(environ)
+        safe_title = html.escape(self._page_title)
+        safe_body = html.escape(self._body_text)
+        doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{safe_title}</title>
+  <style>
+    body {{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: #141414;
+      color: #f5f5f5;
+      display: flex;
+      min-height: 100vh;
+      margin: 0;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      text-align: center;
+    }}
+  </style>
+</head>
+<body><p>{safe_body}</p></body>
+</html>"""
+        return [doc.encode("utf-8")]
+
+
+def _run_oauth_local_server_with_tab_title(
+    flow: InstalledAppFlow,
+    *,
+    page_title: str = "Authentication complete",
+    host: str = "localhost",
+    bind_addr: str | None = None,
+    port: int = 0,
+    success_message: str = (
+        "The authentication flow has completed. You may close this window."
+    ),
+    open_browser: bool = True,
+    redirect_uri_trailing_slash: bool = True,
+    timeout_seconds: int | None = None,
+    token_audience: str | None = None,
+    browser: str | None = None,
+    **kwargs: Any,
+) -> Credentials:
+    """Run the installed-app OAuth flow with a browser tab title that is not the URL.
+
+    Mirrors ``InstalledAppFlow.run_local_server`` from ``google_auth_oauthlib`` but
+    uses :class:`_OAuthSuccessHtmlApp` so the success response includes ``<title>``.
+    """
+    wsgi_app = _OAuthSuccessHtmlApp(success_message, page_title)
+    wsgiref.simple_server.WSGIServer.allow_reuse_address = False
+    local_server = wsgiref.simple_server.make_server(
+        bind_addr or host,
+        port,
+        wsgi_app,
+        handler_class=_OAuthLocalRequestHandler,
+    )
+    try:
+        redirect_uri_format = (
+            "http://{}:{}/" if redirect_uri_trailing_slash else "http://{}:{}"
+        )
+        flow.redirect_uri = redirect_uri_format.format(host, local_server.server_port)
+        auth_url, _ = flow.authorization_url(**kwargs)
+
+        if open_browser:
+            webbrowser.get(browser).open(auth_url, new=1, autoraise=True)
+
+        local_server.timeout = timeout_seconds
+        local_server.handle_request()
+
+        try:
+            authorization_response = wsgi_app.last_request_uri.replace(
+                "http", "https",
+            )
+        except AttributeError as e:
+            raise WSGITimeoutError(
+                "Timed out waiting for response from authorization server"
+            ) from e
+
+        flow.fetch_token(
+            authorization_response=authorization_response,
+            audience=token_audience,
+        )
+    finally:
+        local_server.server_close()
+
+    return flow.credentials
 
 
 class GmailReauthRequiredError(Exception):
@@ -180,7 +299,8 @@ class GmailClient:
         flow = InstalledAppFlow.from_client_secrets_file(
             str(GMAIL_CREDENTIALS_PATH), GMAIL_SCOPES
         )
-        creds = flow.run_local_server(port=0)
+        # Custom local server: default library response is plain text → ugly tab titles.
+        creds = _run_oauth_local_server_with_tab_title(flow, port=0)
         GMAIL_TOKEN_PATH.write_text(creds.to_json())
         logger.info("Gmail token saved to %s", GMAIL_TOKEN_PATH)
 

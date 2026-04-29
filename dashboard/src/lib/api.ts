@@ -7,7 +7,8 @@
  *   - All functions are async and return typed Promises
  *
  * The React Query hooks in src/hooks/ call these functions.
- * Components never call fetch() directly — they always go through a hook.
+ * Components usually go through a hook; ``streamOnboardingDiscover`` is the one
+ * exception that uses ``fetch`` directly so we can read an NDJSON body incrementally.
  *
  * Base URL is read from NEXT_PUBLIC_API_URL (see `api-base.ts`).
  * Use NEXT_PUBLIC_API_URL=same-origin when the UI is on a different hostname than
@@ -946,9 +947,148 @@ export function patchOnboardingState(
   return patch<OnboardingStateResponse>("/api/onboarding/state", body);
 }
 
-/** POST /api/onboarding/discover */
-export function postOnboardingDiscover(): Promise<Record<string, unknown>> {
-  return post<Record<string, unknown>>("/api/onboarding/discover", {});
+/** One row from ``POST /api/onboarding/discover`` NDJSON ``found`` events. */
+export type OnboardingDiscoveryStreamRow = {
+  sender_email: string
+  display_name: string
+  source_type: string
+  email_count_estimate: number
+  earliest_email_date: string | null
+  latest_email_date: string | null
+}
+
+/** Parsed NDJSON events from streaming discovery (see ``streamOnboardingDiscover``). */
+export type OnboardingDiscoverStreamEvent =
+  | { type: "start"; total: number }
+  | { type: "found"; index: number; source: OnboardingDiscoveryStreamRow }
+  | { type: "done"; discovered_at: string }
+  | { type: "error"; detail: string }
+
+/**
+ * ``POST /api/onboarding/discover`` returns ``application/x-ndjson``: one JSON object per line
+ * (``start`` → many ``found`` → ``done`` or a single ``error``). Calls ``onEvent`` for each line
+ * as it arrives so the UI can show per-sender progress.
+ *
+ * Pass ``signal`` to cancel the HTTP request and stream (e.g. React Strict Mode remount).
+ *
+ * Throws ``ApiError`` on HTTP failure or when the server sends an ``error`` event.
+ * Throws ``DOMException`` with name ``AbortError`` when aborted.
+ */
+function isAbortLike(e: unknown): boolean {
+  if (e == null || typeof e !== "object") return false
+  const name = "name" in e ? String((e as { name: unknown }).name) : ""
+  return name === "AbortError"
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError")
+  }
+}
+
+export async function streamOnboardingDiscover(
+  onEvent: (event: OnboardingDiscoverStreamEvent) => void,
+  options?: { signal?: AbortSignal },
+): Promise<void> {
+  const signal = options?.signal
+  const url = buildApiUrl("/api/onboarding/discover")
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: "{}",
+      signal,
+    })
+  } catch (e) {
+    if (signal?.aborted || isAbortLike(e)) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+    throw e
+  }
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`
+    return new Promise(() => {})
+  }
+
+  if (!res.ok) {
+    const raw = await res.text().catch(() => res.statusText)
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw))
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) {
+    throw new ApiError(500, "No response body from discovery.")
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let sawDone = false
+
+  try {
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch (e) {
+        if (signal?.aborted || isAbortLike(e)) {
+          throw new DOMException("Aborted", "AbortError")
+        }
+        throw e
+      }
+      const { done, value } = chunk
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split("\n")
+      buffer = lines.pop() ?? ""
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        let event: OnboardingDiscoverStreamEvent
+        try {
+          event = JSON.parse(trimmed) as OnboardingDiscoverStreamEvent
+        } catch {
+          throw new ApiError(500, "Invalid discovery stream from server.")
+        }
+        onEvent(event)
+        if (event.type === "error") {
+          throw new ApiError(503, event.detail)
+        }
+        if (event.type === "done") {
+          sawDone = true
+        }
+      }
+    }
+
+    const tail = buffer.trim()
+    if (tail) {
+      let event: OnboardingDiscoverStreamEvent
+      try {
+        event = JSON.parse(tail) as OnboardingDiscoverStreamEvent
+      } catch {
+        throw new ApiError(500, "Invalid discovery stream from server.")
+      }
+      onEvent(event)
+      if (event.type === "error") {
+        throw new ApiError(503, event.detail)
+      }
+      if (event.type === "done") {
+        sawDone = true
+      }
+    }
+  } catch (e) {
+    if (signal?.aborted || isAbortLike(e)) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+    throw e
+  }
+
+  if (!sawDone) {
+    throwIfAborted(signal)
+    throw new ApiError(500, "Discovery stream ended before completion.")
+  }
 }
 
 /** GET /api/onboarding/backfill-sources */

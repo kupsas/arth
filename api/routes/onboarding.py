@@ -17,6 +17,7 @@ from typing import Any
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -36,7 +37,11 @@ from api.services.user_classification import (
 )
 from pipeline import config as pipeline_cfg
 from scraper.config_loader import BankSendersConfig, get_bank_senders_config
-from scraper.discovery import discover_sources, discovered_sources_to_json
+from scraper.discovery import (
+    DiscoveredSource,
+    discover_sources_iter,
+    discovered_sources_to_json,
+)
 from scraper.gap_detector import detect_gaps
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
 from scraper.onboarding_orchestrator import (
@@ -210,30 +215,86 @@ def onboarding_backfill_sources(
     return _ordered_backfill_sources(bank)
 
 
+def _ndjson_line(payload: dict[str, Any]) -> bytes:
+    """One UTF-8 line for ``application/x-ndjson`` streaming."""
+    return (json.dumps(payload) + "\n").encode("utf-8")
+
+
+def _http_exception_detail(exc: HTTPException) -> str:
+    # ``detail`` is often typed as ``str`` only, but at runtime it may be a dict/list.
+    d: Any = exc.detail
+    if isinstance(d, str):
+        return d
+    return json.dumps(d)
+
+
 @router.post("/discover")
 def onboarding_discover(
     *,
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
-) -> dict[str, Any]:
-    """Scan Gmail for configured bank senders (fast existence + rough counts)."""
+) -> StreamingResponse:
+    """Stream Gmail discovery progress as NDJSON (start / found / done | error).
+
+    The request-scoped ``session`` may close when this handler returns, so the
+    generator opens its own :class:`~sqlmodel.Session` for the final DB write.
+    """
     bank = get_bank_senders_config(session, current_user)
-    client = _gmail_client_connected()
+    total_senders = len(sorted(bank.keys()))
+    # Use the same SQLAlchemy bind as the request-scoped session so streaming discovery
+    # writes go to the test engine when ``get_session`` is overridden (``get_engine()`` alone
+    # would always point at the app's default SQLite file).
+    write_bind = session.get_bind()
 
-    rows = discover_sources(client, bank)
-    payload_list = discovered_sources_to_json(rows)
-    envelope = {
-        "discovered_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        "sources": payload_list,
-    }
+    def generate() -> Any:
+        try:
+            client = _gmail_client_connected()
+        except HTTPException as e:
+            yield _ndjson_line({"type": "error", "detail": _http_exception_detail(e)})
+            return
 
-    row = _get_or_create_state(session, current_user)
-    row.discovery_results_json = json.dumps(envelope)
-    row.updated_at = datetime.datetime.now(datetime.UTC)
-    session.add(row)
-    session.commit()
+        yield _ndjson_line({"type": "start", "total": total_senders})
 
-    return {"status": "ok", **envelope}
+        rows: list[DiscoveredSource] = []
+        try:
+            for index, src in enumerate(discover_sources_iter(client, bank)):
+                rows.append(src)
+                one_row = discovered_sources_to_json([src])[0]
+                yield _ndjson_line({"type": "found", "index": index, "source": one_row})
+        except Exception:
+            logger.exception("Onboarding discovery failed mid-stream")
+            yield _ndjson_line(
+                {
+                    "type": "error",
+                    "detail": (
+                        "We could not finish scanning your mailbox. Check your connection "
+                        "and tap “Re-scan,” or use “Connect Gmail” again if sign-in expired."
+                    ),
+                }
+            )
+            return
+
+        discovered_at = datetime.datetime.now(datetime.UTC).isoformat()
+        payload_list = discovered_sources_to_json(rows)
+        envelope: dict[str, Any] = {
+            "discovered_at": discovered_at,
+            "sources": payload_list,
+        }
+
+        with Session(write_bind) as write_session:
+            row = _get_or_create_state(write_session, current_user)
+            row.discovery_results_json = json.dumps(envelope)
+            row.updated_at = datetime.datetime.now(datetime.UTC)
+            write_session.add(row)
+            write_session.commit()
+
+        yield _ndjson_line({"type": "done", "discovered_at": discovered_at})
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 class BackfillAdvanceBody(BaseModel):
