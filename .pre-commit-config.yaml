@@ -1,8 +1,8 @@
-# Mirrors CI lint paths: .github/workflows/ci.yml → ruff check pipeline/ api/ scraper/ tests/
+# Mirrors CI lint paths: .github/workflows/ci.yml → ruff check pipeline/ api/ scraper/ agent/ tests/
 # Install: pip install pre-commit && pre-commit install
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.0
     hooks:
       - id: ruff
-        files: ^(pipeline|api|scraper|tests)/
+        files: ^(pipeline|api|scraper|agent|tests)/
