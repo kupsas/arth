@@ -1232,9 +1232,9 @@ export function GoalsSection({ className, initialChartKey = null }: Props) {
   const { data: goals, isLoading } = useGoals()
 
   const sorted = React.useMemo(() => sortGoalsForDisplay(goals ?? []), [goals])
-  /** Open goals first; completed (ACHIEVED) at the bottom so the list stays scannable. */
-  const inPlayGoals = sorted.filter((g) => g.status !== "ACHIEVED")
-  const completedGoals = sorted.filter((g) => g.status === "ACHIEVED")
+  /** Open goals first; completed (COMPLETED activation) at the bottom so the list stays scannable. */
+  const inPlayGoals = sorted.filter((g) => g.activation_status !== "COMPLETED")
+  const completedGoals = sorted.filter((g) => g.activation_status === "COMPLETED")
 
   return (
     <Card className={cn(className)}>
