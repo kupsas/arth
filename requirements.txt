@@ -1,4 +1,5 @@
-pydantic>=2.13.3
+# litellm 1.83.x declares pydantic==2.12.5; a higher minimum breaks the resolver.
+pydantic==2.12.5
 python-dotenv>=1.0
 openai>=2.0
 anthropic>=0.30
@@ -11,7 +12,8 @@ pikepdf>=9.0
 sqlmodel>=0.0.22
 fastapi>=0.115
 uvicorn[standard]>=0.34
-httpx>=0.27
+# litellm 1.83.x pins httpx==0.28.1; a bare >=0.27 lets pip pick 0.28.0 and the solver fails.
+httpx==0.28.1
 requests>=2.31
 # Goals architecture — IMF CPI via SDMX (inflation_service); pulls pandas via sdmx1
 sdmx1>=1.0
