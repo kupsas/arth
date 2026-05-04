@@ -40,6 +40,7 @@ from scraper.email_parsers import build_email_parser_registry
 from scraper.gap_detector import filter_onboarding_alert_ids_after_statements
 from scraper.gmail_client import GmailClient
 from scraper.orchestrator import _get_processed_ids, _process_email, _record_email
+from scraper.pdf_passwords import StatementPasswordRequired, is_statement_password_failure
 
 logger = logging.getLogger(__name__)
 
@@ -622,6 +623,7 @@ def run_onboarding_backfill(
     after: datetime.date | None = None,
     before: datetime.date | None = None,
     resume_after_classification: bool = False,
+    resume_after_password: bool = False,
     resume_from_pause: bool = False,
     unknown_threshold: int | None = None,
     progress_callback: ProgressCallback | None = None,
@@ -642,6 +644,9 @@ def run_onboarding_backfill(
         resume_after_classification: When current status is ``needs_classification``,
             pass True to continue processing remaining queued IDs after the user
             fixed merchant rules (Phase 3 will set this from the classify endpoint).
+        resume_after_password: When status is ``needs_password``, pass True after the user
+            saved PAN/DOB/account ingredients (or full env-style passwords) so the same
+            Gmail message can be retried.
         resume_from_pause: When status is ``paused``, pass True to clear the pause
             flag and continue chunk processing on the next call.
         unknown_threshold: Override env ``ONBOARDING_UNKNOWN_THRESHOLD``.
@@ -707,7 +712,7 @@ def run_onboarding_backfill(
     if import_flow_log:
         import_flow_log.write(
             "backfill_step",
-            f"incoming_status={status!r} chunk_size={chunk_size} resume_after_classification={resume_after_classification} resume_from_pause={resume_from_pause}",
+            f"incoming_status={status!r} chunk_size={chunk_size} resume_after_classification={resume_after_classification} resume_after_password={resume_after_password} resume_from_pause={resume_from_pause}",
         )
 
     if status == "paused" and resume_from_pause:
@@ -759,6 +764,36 @@ def run_onboarding_backfill(
                 "message": "Pass resume_after_classification=true after resolving unknowns.",
             }
         )
+
+    if status == "needs_password" and not resume_after_password:
+        if import_flow_log:
+            import_flow_log.write(
+                "backfill_exit",
+                "waiting for PDF password ingredients (pass resume_after_password after saving secrets)",
+            )
+        return OnboardingBackfillResult(
+            progress={
+                **src_state,
+                "source": source_key,
+                "status": "needs_password",
+                "unknowns_pending": count_classification_unknowns(
+                    session, user_id=user_id, source_key=source_key
+                ),
+                "error_message": src_state.get("error_message"),
+                "message": "Save PAN/DOB/account fragments or env passwords, then pass resume_after_password=true.",
+            }
+        )
+
+    # Transition out of PDF-password gate (retry same Gmail IDs).
+    if status == "needs_password" and resume_after_password:
+        src_state.pop("password_failure_message_id", None)
+        src_state.pop("password_parser_key", None)
+        src_state["error_message"] = None
+        active_qp, pub_qp = _active_drain_queue(src_state)
+        if active_qp:
+            src_state["status"] = pub_qp
+            src_state["current_phase"] = "statements" if pub_qp == "processing_statements" else "alerts"
+        status = str(src_state.get("status") or "processing")
 
     # Transition out of classification gate.
     if status == "needs_classification" and resume_after_classification:
@@ -912,7 +947,7 @@ def run_onboarding_backfill(
 
     already_done = _get_processed_ids(session)
 
-    for msg_id in chunk:
+    for i, msg_id in enumerate(chunk):
         if msg_id in already_done:
             logger.debug("Skipping already-processed email %s during backfill chunk", msg_id)
             emails_done += 1
@@ -960,6 +995,42 @@ def run_onboarding_backfill(
                 progress_callback(slice_pub)
 
         except Exception as exc:
+            if is_statement_password_failure(exc):
+                session.rollback()
+                remainder_chunk = chunk[i + 1 :]
+                rebuilt = [msg_id] + remainder_chunk + list(rest)
+                if pub_status == "processing_statements":
+                    src_state["_pending_statement_ids"] = rebuilt
+                else:
+                    src_state["_pending_alert_ids"] = rebuilt
+                p_key = getattr(exc, "parser_key", None)
+                if not p_key and isinstance(exc, StatementPasswordRequired):
+                    p_key = exc.parser_key
+                err_txt = str(exc).strip() or "PDF password missing or incorrect."
+                src_state.update(
+                    {
+                        "source": source_key,
+                        "status": "needs_password",
+                        "emails_found": initial_total,
+                        "emails_processed": emails_done,
+                        "transactions_parsed": tx_total,
+                        "unknowns_pending": count_classification_unknowns(
+                            session, user_id=user_id, source_key=source_key
+                        ),
+                        "password_failure_message_id": msg_id,
+                        "password_parser_key": p_key,
+                        "error_message": err_txt,
+                        "current_phase": src_state.get("current_phase"),
+                        "message": "Save credentials and POST with resume_after_password=true.",
+                    }
+                )
+                if import_flow_log:
+                    import_flow_log.write(
+                        "needs_password",
+                        f"message_id={msg_id} parser_key={p_key!r} detail={err_txt!r}",
+                    )
+                return OnboardingBackfillResult(progress=src_state)
+
             logger.exception("Onboarding backfill failed on message %s", msg_id)
             # The failed operation may have left the SQLAlchemy session in a
             # dirty state (e.g. IntegrityError → PendingRollbackError).  We

@@ -5,7 +5,7 @@
  *
  * - Owns high-level step navigation + a progress indicator.
  * - Runs the Gmail → discovery → identity → optional LLM keys → sequential backfill
- *   (with automatic chunk polling) → gap review → goals → summary pipeline.
+ *   (with automatic chunk polling) → optional broker portfolio snapshot → gap review → goals → summary.
  * - The same component is mounted full-screen from ``/setup`` **and** inside the
  *   Settings sheet for **Connect account** — pass ``mode`` + ``className`` only.
  */
@@ -20,6 +20,8 @@ import { ClassificationBatchReview } from "@/components/onboarding/classificatio
 import { StepBackfill, type BackfillProgressSnapshot } from "@/components/onboarding/step-backfill"
 import { StepDiscovery } from "@/components/onboarding/step-discovery"
 import { StepGapDetection } from "@/components/onboarding/step-gap-detection"
+import { StepPortfolioSummary } from "@/components/onboarding/step-portfolio-summary"
+import { StepPasswordIngredients } from "@/components/onboarding/step-password-ingredients"
 import { StepSummary } from "@/components/onboarding/step-summary"
 import { StepWelcome } from "@/components/onboarding/step-welcome"
 import { Button } from "@/components/ui/button"
@@ -46,25 +48,52 @@ export type WizardStepId =
   | "welcome"
   | "discovery"
   | "preclass"
+  | "passwords"
   | "apikey"
   | "backfill"
+  | "portfolio_summary"
   | "gaps"
   | "goals"
   | "summary"
 
-const STEP_META: { id: WizardStepId; label: string }[] = [
-  { id: "welcome", label: "Gmail" },
-  { id: "discovery", label: "Find accounts" },
-  { id: "preclass", label: "Your name" },
-  { id: "apikey", label: "Smart labels (opt.)" },
-  { id: "backfill", label: "Import mail" },
-  { id: "gaps", label: "Coverage" },
-  { id: "goals", label: "Goals" },
-  { id: "summary", label: "Done" },
-]
+/** Every ``WizardStepId`` the API might persist — used to safely resume ``current_step``. */
+const ALL_WIZARD_STEP_IDS = [
+  "welcome",
+  "discovery",
+  "preclass",
+  "passwords",
+  "apikey",
+  "backfill",
+  "portfolio_summary",
+  "gaps",
+  "goals",
+  "summary",
+] as const satisfies readonly WizardStepId[]
 
-/** Valid wizard step ids — used to safely resume ``current_step`` from the server. */
-const WIZARD_STEP_IDS = new Set<WizardStepId>(STEP_META.map((s) => s.id))
+const WIZARD_STEP_IDS = new Set<WizardStepId>(ALL_WIZARD_STEP_IDS)
+
+/** Progress pills: inserts **Portfolio** after Import mail when discovery included a broker source. */
+function buildOnboardingStepMeta(
+  includePortfolio: boolean,
+): { id: WizardStepId; label: string }[] {
+  const rows: { id: WizardStepId; label: string }[] = [
+    { id: "welcome", label: "Gmail" },
+    { id: "discovery", label: "Find accounts" },
+    { id: "preclass", label: "Your name" },
+    { id: "passwords", label: "PDF secrets" },
+    { id: "apikey", label: "Smart labels (opt.)" },
+    { id: "backfill", label: "Import mail" },
+  ]
+  if (includePortfolio) {
+    rows.push({ id: "portfolio_summary", label: "Portfolio" })
+  }
+  rows.push(
+    { id: "gaps", label: "Coverage" },
+    { id: "goals", label: "Goals" },
+    { id: "summary", label: "Done" },
+  )
+  return rows
+}
 
 /**
  * Map persisted ``OnboardingState.current_step`` to the in-memory panel id.
@@ -100,6 +129,15 @@ export function OnboardingWizard({
   onExitFirstStep,
 }: OnboardingWizardProps) {
   const stateQ = useOnboardingState()
+  const sourcesQ = useOnboardingBackfillSources()
+  const hasBrokerSource = React.useMemo(
+    () => (sourcesQ.data ?? []).some((s) => (s.source_type || "").toLowerCase() === "broker"),
+    [sourcesQ.data],
+  )
+  const stepMeta = React.useMemo(
+    () => buildOnboardingStepMeta(hasBrokerSource),
+    [hasBrokerSource],
+  )
   /**
    * Server-resumed step from ``GET /state`` (null while the query is still loading).
    * We derive the visible step below so we **do not** need a hydration effect that calls
@@ -107,15 +145,18 @@ export function OnboardingWizard({
    */
   const serverPanel = React.useMemo((): WizardStepId | null => {
     if (stateQ.isLoading) return null
-    return panelFromServerStep(stateQ.data?.current_step ?? "welcome")
-  }, [stateQ.isLoading, stateQ.data])
+    const step = stateQ.data?.current_step ?? "welcome"
+    if (step === "portfolio_summary" && !hasBrokerSource) {
+      return "gaps"
+    }
+    return panelFromServerStep(step)
+  }, [stateQ.isLoading, stateQ.data, hasBrokerSource])
   /**
    * Once the user moves forward/back in the wizard, this override wins over ``serverPanel``
    * for the rest of the session (same as “we already hydrated from the server” before).
    */
   const [userPanel, setUserPanel] = React.useState<WizardStepId | null>(null)
   const panel: WizardStepId = userPanel ?? serverPanel ?? "welcome"
-  const sourcesQ = useOnboardingBackfillSources()
   const prevPanelRef = React.useRef<WizardStepId | null>(null)
 
   const [bfSourceIdx, setBfSourceIdx] = React.useState(0)
@@ -147,6 +188,15 @@ export function OnboardingWizard({
 
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
   const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
+  const activeSourceType = sourcesQ.data?.[bfSourceIdx]?.source_type ?? null
+
+  /** Coarse section label for the import pipeline (bank cash vs broker portfolio). */
+  const importSectionPhase = React.useMemo((): "banking" | "portfolio" | null => {
+    const st = (activeSourceType || "").toLowerCase()
+    if (st === "broker") return "portfolio"
+    if (st === "savings" || st === "credit_card") return "banking"
+    return null
+  }, [activeSourceType])
 
   /**
    * Last email source finished ingesting (no more chunk work for this account). The combined
@@ -224,6 +274,10 @@ export function OnboardingWizard({
           continue
         }
 
+        if (prog.status === "needs_password") {
+          return
+        }
+
         if (prog.status === "complete") {
           if (bfSourceIdx >= currentList.length - 1) {
             // ``GET …/progress`` unknowns are per-source; the review card loads **all** email-linked
@@ -245,7 +299,7 @@ export function OnboardingWizard({
             if (pendingGlobal > 0) {
               return
             }
-            setUserPanel("gaps")
+            setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
             return
           }
           setBfSourceIdx((i) => i + 1)
@@ -290,10 +344,10 @@ export function OnboardingWizard({
     return () => {
       ac.abort()
     }
-  }, [panel, bfSourceIdx, bfTick, sourcesQ.data])
+  }, [panel, bfSourceIdx, bfTick, sourcesQ.data, hasBrokerSource])
 
-  const stepIndex = STEP_META.findIndex((s) => s.id === panel)
-  const progressPct = Math.max(5, Math.round(((stepIndex + 1) / STEP_META.length) * 100))
+  const stepIndex = stepMeta.findIndex((s) => s.id === panel)
+  const progressPct = Math.max(5, Math.round(((stepIndex + 1) / stepMeta.length) * 100))
 
   async function handleResumePause() {
     const sk = activeSourceKey
@@ -313,16 +367,39 @@ export function OnboardingWizard({
     }
   }
 
+  async function handlePasswordGateResolved() {
+    const sk = activeSourceKey
+    if (!sk) return
+    setBfChunkPosting(true)
+    setBfError(null)
+    try {
+      await postOnboardingBackfillChunk(sk, { resume_after_password: true, chunk_size: 10 })
+      setBfTick((t) => t + 1)
+    } catch (e) {
+      setBfError(getUserFacingErrorMessage(e) || "Could not retry import.")
+    } finally {
+      setBfChunkPosting(false)
+    }
+  }
+
   function goBack() {
     if (panel === "welcome") {
       onExitFirstStep?.()
       return
     }
+    if (panel === "gaps") {
+      setUserPanel(hasBrokerSource ? "portfolio_summary" : "backfill")
+      return
+    }
+    if (panel === "portfolio_summary") {
+      setUserPanel("backfill")
+      return
+    }
     const prevMap: Partial<Record<WizardStepId, WizardStepId>> = {
       summary: "goals",
       goals: "gaps",
-      gaps: "apikey",
-      apikey: "preclass",
+      apikey: "passwords",
+      passwords: "preclass",
       preclass: "discovery",
       discovery: "welcome",
       backfill: "apikey",
@@ -355,7 +432,7 @@ export function OnboardingWizard({
           />
         </div>
         <ol className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-          {STEP_META.map((s, idx) => (
+          {stepMeta.map((s, idx) => (
             <li
               key={s.id}
               className={cn(
@@ -387,6 +464,9 @@ export function OnboardingWizard({
             <PreClassificationForm />
           </div>
         )}
+        {panel === "passwords" && (
+          <StepPasswordIngredients mode="wizard" onContinue={() => setUserPanel("apikey")} />
+        )}
         {panel === "apikey" && (
           <div className="mx-auto w-full max-w-2xl space-y-6">
             <OnboardingOptionalLlmKeys />
@@ -406,6 +486,13 @@ export function OnboardingWizard({
             )}
             {!!sourcesQ.data?.length && (
               <>
+                {bfProgress?.status === "needs_password" && activeSourceKey && (
+                  <StepPasswordIngredients
+                    mode="resume-import"
+                    blockingParserKey={bfProgress.password_parser_key ?? undefined}
+                    onSaved={() => void handlePasswordGateResolved()}
+                  />
+                )}
                 <StepBackfill
                   title={activeSourceLabel ?? activeSourceKey ?? "…"}
                   progress={bfProgress}
@@ -415,6 +502,7 @@ export function OnboardingWizard({
                   onResumeFromPause={bfProgress?.status === "paused" ? handleResumePause : undefined}
                   resumeBusy={resumeBusy}
                   importBusy={bfChunkPosting}
+                  wizardSection={importSectionPhase}
                 />
                 <ClassificationBatchReview
                   importAwaitingClassification={bfProgress?.status === "needs_classification"}
@@ -433,18 +521,30 @@ export function OnboardingWizard({
                     setBfTick((t) => t + 1)
                   }}
                 />
-                <Button type="button" variant="ghost" size="sm" onClick={() => setUserPanel("gaps")}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+                  }
+                >
                   Skip remaining mail → gap check
                 </Button>
               </>
             )}
             {!sourcesQ.data?.length && (
-              <Button type="button" variant="secondary" onClick={() => setUserPanel("gaps")}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")}
+              >
                 Skip to gap check
               </Button>
             )}
           </div>
         )}
+        {panel === "portfolio_summary" && <StepPortfolioSummary />}
         {panel === "gaps" && <StepGapDetection />}
         {panel === "goals" && <GoalTemplateWizard />}
         {panel === "summary" && <StepSummary onDone={onFinished} />}
@@ -457,13 +557,18 @@ export function OnboardingWizard({
           </Button>
           <div className="flex flex-wrap gap-2">
             {panel === "preclass" && (
-              <Button type="button" onClick={() => setUserPanel("apikey")}>
+              <Button type="button" onClick={() => setUserPanel("passwords")}>
                 Continue
               </Button>
             )}
             {panel === "apikey" && (
               <Button type="button" onClick={() => setUserPanel("backfill")}>
                 Start importing mail
+              </Button>
+            )}
+            {panel === "portfolio_summary" && (
+              <Button type="button" onClick={() => setUserPanel("gaps")}>
+                Continue to coverage
               </Button>
             )}
             {panel === "gaps" && (

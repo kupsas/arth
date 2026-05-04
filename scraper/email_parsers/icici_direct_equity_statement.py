@@ -4,7 +4,8 @@ ICICI Securities **Equity Transaction Statement** email (password-protected PDF)
 Sender: ``service@icicisecurities.com``. Password chain:
 :data:`~scraper.pdf_passwords.ICICI_DIRECT_STATEMENT_PASSWORD_KEYS`.
 
-Produces ``ParsedInvestmentTxn`` rows only (no bank ``ParsedTransaction``).
+Produces ``ParsedInvestmentTxn`` rows and, when the PDF has activity, a derived
+``ParsedHolding`` snapshot per NSE symbol (same path as the MF statement parser).
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import logging
 
 import pipeline.config  # noqa: F401 — load ``.env``
 
+from pipeline.holding_parsers.derived_equity import derive_equity_holdings
 from pipeline.holding_parsers.icici_direct_equity_statement_pdf import (
     parse_icici_direct_equity_statement_pdf,
 )
@@ -37,7 +39,7 @@ def classify_icici_equity_statement_subject(subject: str) -> bool:
 
 
 class ICICIDirectEquityStatementEmailParser(BaseBrokerStatementParser):
-    """Decrypt equity transaction statement PDFs → investment legs."""
+    """Decrypt equity transaction statement PDFs → investment legs + FIFO-derived holdings."""
 
     def can_parse(self, sender: str, subject: str) -> bool:
         return classify_icici_equity_statement_subject(subject)
@@ -68,6 +70,10 @@ class ICICIDirectEquityStatementEmailParser(BaseBrokerStatementParser):
         try:
             rows = parse_icici_direct_equity_statement_pdf(decrypted, aggregate=True)
             self._attachment_inv_txns.extend(rows)
+            if rows:
+                # Same idea as ``ICICIDirectMFStatementEmailParser``: seed ``Holding`` rows
+                # at email-parse time so the portfolio is visible before a separate derive pass.
+                self._attachment_holdings.extend(derive_equity_holdings(rows))
             if not rows:
                 logger.info(
                     "ICICI equity statement PDF produced 0 rows (subject=%r)",

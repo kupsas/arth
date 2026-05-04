@@ -222,3 +222,46 @@ def test_resolve_icici_direct_nse_symbol_bhav_wins_over_isin_override(
         assert resolve_icici_direct_nse_symbol(isin="INE999Z01099", icici_short="X") == "NEWSYM"
     finally:
         invalidate_overrides_cache()
+
+
+def test_derive_equity_holdings_fifo_icici_direct_only() -> None:
+    """FIFO-style quantity after a partial sell; MF platform rows ignored."""
+    from pipeline.holding_parsers.base import ParsedInvestmentTxn
+    from pipeline.holding_parsers.derived_equity import derive_equity_holdings
+
+    d1 = date(2024, 1, 1)
+    d2 = date(2024, 2, 1)
+    buy = ParsedInvestmentTxn(
+        txn_date=d1,
+        symbol="RELIANCE",
+        name="Reliance Industries",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=10,
+        price_per_unit=2500,
+        total_amount=25000,
+        account_platform="ICICI Direct",
+    )
+    partial_sell = ParsedInvestmentTxn(
+        txn_date=d2,
+        symbol="RELIANCE",
+        name="Reliance Industries",
+        txn_type=InvestmentTxnType.SELL.value,
+        quantity=4,
+        price_per_unit=2600,
+        total_amount=10400,
+        account_platform="ICICI Direct",
+    )
+    mf_noise = ParsedInvestmentTxn(
+        txn_date=d1,
+        symbol="119551",
+        name="Some MF",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=100,
+        price_per_unit=10,
+        total_amount=1000,
+        account_platform="ICICI Direct MF",
+    )
+    out = derive_equity_holdings([buy, partial_sell, mf_noise])
+    assert len(out) == 1
+    assert out[0].symbol == "RELIANCE"
+    assert out[0].quantity == pytest.approx(6.0)

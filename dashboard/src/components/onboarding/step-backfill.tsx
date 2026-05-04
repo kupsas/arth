@@ -25,6 +25,9 @@ export type BackfillProgressSnapshot = {
   error_message: string | null
   /** ``statements`` / ``alerts`` when the server runs statement-first import (optional). */
   current_phase?: string | null
+  /** When the API pauses for PDF decryption. */
+  password_parser_key?: string | null
+  password_failure_message_id?: string | null
 }
 
 /** Minimal shape for each source in the pipeline (from GET /backfill-sources). */
@@ -51,6 +54,11 @@ export type StepBackfillProps = {
    * tells the user the import is still running.
    */
   importBusy?: boolean
+  /**
+   * Coarse multi-account phase: **banking** = savings + cards; **portfolio** = broker mail.
+   * Drives a friendly banner so “Section A / B” is visible without new API fields.
+   */
+  wizardSection?: "banking" | "portfolio" | null
 }
 
 /** Map orchestrator status strings to short, user-facing labels. */
@@ -66,6 +74,8 @@ function statusLabel(status: string | undefined): string {
       return "Working through your mail"
     case "needs_classification":
       return "Waiting for your review"
+    case "needs_password":
+      return "PDF password needed"
     case "paused":
       return "Paused"
     case "complete":
@@ -86,6 +96,7 @@ export function StepBackfill({
   onResumeFromPause,
   resumeBusy,
   importBusy,
+  wizardSection,
 }: StepBackfillProps) {
   const pct =
     progress && progress.emails_found > 0
@@ -126,6 +137,17 @@ export function StepBackfill({
             )
           })}
         </div>
+      )}
+
+      {wizardSection && (
+        <p
+          className="text-xs font-medium text-muted-foreground border border-dashed rounded-md px-3 py-2 bg-muted/40"
+          role="status"
+        >
+          {wizardSection === "banking"
+            ? "Section A — Banking transactions (cash ledger)"
+            : "Section B — Portfolio & broker mail (investments)"}
+        </p>
       )}
 
       <Card>

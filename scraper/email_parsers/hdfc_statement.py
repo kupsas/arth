@@ -26,6 +26,7 @@ from pipeline.parsers.hdfc_savings_pdf import HDFCSavingsPdfParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
 from scraper.pdf_passwords import (
     HDFC_COMBINED_STATEMENT_PASSWORD_KEYS,
+    StatementPasswordRequired,
     resolve_pdf_password_chain,
 )
 from scraper.pdf_utils import decrypt_pdf
@@ -53,13 +54,15 @@ class HDFCCombinedStatementEmailParser(BaseStatementEmailParser):
         email_sender: str = "",
         email_subject: str = "",
     ) -> list[ParsedTransaction]:
-        password = resolve_pdf_password_chain(*HDFC_COMBINED_STATEMENT_PASSWORD_KEYS)
+        password = resolve_pdf_password_chain(
+            *HDFC_COMBINED_STATEMENT_PASSWORD_KEYS,
+            parser_key="hdfc_combined_statement",
+        )
         if not password:
-            logger.error(
-                "HDFC statement PDF password not set — configure %s (see .env).",
-                " or ".join(HDFC_COMBINED_STATEMENT_PASSWORD_KEYS),
+            raise StatementPasswordRequired(
+                "hdfc_combined_statement",
+                "HDFC combined statement needs HDFC_STATEMENT_PASSWORD or account number + DOB ingredients.",
             )
-            return []
 
         # Single savings account in config: last four digits of the account number (3703).
         if "3703" not in self.accounts:

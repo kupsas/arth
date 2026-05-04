@@ -28,7 +28,11 @@ import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.hdfc_cc_pdf import HDFCCreditCardPdfParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
-from scraper.pdf_passwords import HDFC_CC_STATEMENT_PASSWORD_KEYS, resolve_pdf_password_chain
+from scraper.pdf_passwords import (
+    HDFC_CC_STATEMENT_PASSWORD_KEYS,
+    StatementPasswordRequired,
+    resolve_pdf_password_chain,
+)
 from scraper.pdf_utils import decrypt_pdf
 
 logger = logging.getLogger(__name__)
@@ -95,13 +99,15 @@ class HDFCCCStatementEmailParser(BaseStatementEmailParser):
         email_sender: str = "",
         email_subject: str = "",
     ) -> list[ParsedTransaction]:
-        password = resolve_pdf_password_chain(*HDFC_CC_STATEMENT_PASSWORD_KEYS)
+        password = resolve_pdf_password_chain(
+            *HDFC_CC_STATEMENT_PASSWORD_KEYS,
+            parser_key="hdfc_cc_statement",
+        )
         if not password:
-            logger.error(
-                "HDFC CC PDF password not set — configure one of: %s",
-                ", ".join(HDFC_CC_STATEMENT_PASSWORD_KEYS),
+            raise StatementPasswordRequired(
+                "hdfc_cc_statement",
+                "HDFC credit card PDF needs HDFC_CC_STATEMENT_PASSWORD or card last 4 + DOB ingredients.",
             )
-            return []
 
         last4 = _card_last4_from_subject(email_subject or "")
         decrypted = decrypt_pdf(pdf_bytes, password)

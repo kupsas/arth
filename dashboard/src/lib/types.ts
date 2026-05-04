@@ -1339,6 +1339,36 @@ export interface OnboardingBackfillSourceRow {
   source_type: string;
 }
 
+/** One row inside ``GET /api/onboarding/portfolio-snapshot`` ``top_holdings``. */
+export interface OnboardingPortfolioSnapshotHoldingRow {
+  id: number | null;
+  name: string | null;
+  symbol: string | null;
+  asset_class: string | null;
+  account_platform: string | null;
+  quantity: number | null;
+  current_value: number;
+}
+
+/** GET /api/onboarding/portfolio-snapshot — broker-only holdings rollup for the wizard. */
+export interface OnboardingPortfolioSnapshotResponse {
+  holding_count: number;
+  equity_count: number;
+  mf_count: number;
+  total_value_inr: number;
+  top_holdings: OnboardingPortfolioSnapshotHoldingRow[];
+}
+
+/** POST /api/onboarding/portfolio-derive — link ledger rows + ingest derived holdings. */
+export interface OnboardingPortfolioDeriveResponse {
+  link_stats: Record<string, number | string>;
+  derived_equity_positions: number;
+  derived_mf_positions: number;
+  ingest_inserted: number;
+  ingest_updated: number;
+  snapshots_upserted: number;
+}
+
 /** GET /api/metrics/classification-stats — coarse automation provenance mix. */
 export interface ClassificationStatsResponse {
   total_transactions: number;

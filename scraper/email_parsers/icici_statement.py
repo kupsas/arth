@@ -39,6 +39,7 @@ from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParse
 from scraper.pdf_passwords import (
     ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS,
     ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS,
+    StatementPasswordRequired,
     resolve_pdf_password_chain,
 )
 from scraper.pdf_utils import decrypt_pdf
@@ -102,11 +103,17 @@ def _statement_kind(
 
 
 def _monthly_password() -> str:
-    return resolve_pdf_password_chain(*ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS)
+    return resolve_pdf_password_chain(
+        *ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS,
+        parser_key="icici_statement_monthly",
+    )
 
 
 def _annual_password() -> str:
-    return resolve_pdf_password_chain(*ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS)
+    return resolve_pdf_password_chain(
+        *ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS,
+        parser_key="icici_statement_annual",
+    )
 
 
 class ICICIStatementEmailParser(BaseBrokerStatementParser):
@@ -137,16 +144,11 @@ class ICICIStatementEmailParser(BaseBrokerStatementParser):
 
         password = _annual_password() if kind == "annual" else _monthly_password()
         if not password:
-            env_name = (
-                "ICICI_STATEMENT_ANNUAL_PASSWORD"
-                if kind == "annual"
-                else "ICICI_STATEMENT_MONTHLY_PASSWORD"
+            pkey = "icici_statement_annual" if kind == "annual" else "icici_statement_monthly"
+            raise StatementPasswordRequired(
+                pkey,
+                "Set ICICI PDF password env vars, save ingredients in onboarding, or add UserSecrets keys.",
             )
-            logger.error(
-                "Missing %s in environment — cannot decrypt ICICI statement PDF.",
-                env_name,
-            )
-            return []
 
         account_id, source_key = self._icici_savings_account()
         if account_id == "UNKNOWN":

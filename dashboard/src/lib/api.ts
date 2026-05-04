@@ -80,6 +80,8 @@ import type {
   OnboardingStateResponse,
   OnboardingPreclassificationSavedResponse,
   OnboardingBackfillSourceRow,
+  OnboardingPortfolioDeriveResponse,
+  OnboardingPortfolioSnapshotResponse,
   ClassificationStatsResponse,
 } from "@/lib/types";
 
@@ -1151,12 +1153,35 @@ export function postOnboardingClassify(body: {
   return post("/api/onboarding/classify", body)
 }
 
+/** GET /api/onboarding/password-requirements — PDF password templates for discovered senders. */
+export function fetchOnboardingPasswordRequirements(): Promise<
+  {
+    parser_key: string;
+    display_name: string;
+    required_fields: string[];
+    notes?: string | null;
+  }[]
+> {
+  return get("/api/onboarding/password-requirements");
+}
+
+/** POST /api/onboarding/password-ingredients — merge PAN/DOB/account fragments into UserSecrets. */
+export function postOnboardingPasswordIngredients(body: {
+  pan?: string | null;
+  dob_iso?: string | null;
+  hdfc_account_number?: string | null;
+  hdfc_cc_last4?: string | null;
+}): Promise<{ ok: boolean }> {
+  return post("/api/onboarding/password-ingredients", body);
+}
+
 /** POST /api/onboarding/backfill/{source} */
 export function postOnboardingBackfillChunk(
   source: string,
   body?: {
     chunk_size?: number;
     resume_after_classification?: boolean;
+    resume_after_password?: boolean;
     resume_from_pause?: boolean;
   },
   opts?: { signal?: AbortSignal },
@@ -1182,6 +1207,8 @@ export function fetchOnboardingBackfillProgress(
   unknowns_pending: number;
   error_message: string | null;
   current_phase: string | null;
+  password_parser_key?: string | null;
+  password_failure_message_id?: string | null;
 }> {
   return get(
     `/api/onboarding/backfill/${encodeURIComponent(source)}/progress`,
@@ -1211,6 +1238,16 @@ export function postOnboardingBackfillResume(source: string): Promise<Record<str
 /** POST /api/onboarding/complete */
 export function postOnboardingComplete(): Promise<{ ok: boolean; current_step: string }> {
   return post<{ ok: boolean; current_step: string }>("/api/onboarding/complete", {});
+}
+
+/** POST /api/onboarding/portfolio-derive — reconcile ledger + derive broker holdings (ICICI Direct slice). */
+export function postOnboardingPortfolioDerive(): Promise<OnboardingPortfolioDeriveResponse> {
+  return post<OnboardingPortfolioDeriveResponse>("/api/onboarding/portfolio-derive", {});
+}
+
+/** GET /api/onboarding/portfolio-snapshot — counts + top broker holdings after derivation/import. */
+export function fetchOnboardingPortfolioSnapshot(): Promise<OnboardingPortfolioSnapshotResponse> {
+  return get<OnboardingPortfolioSnapshotResponse>("/api/onboarding/portfolio-snapshot");
 }
 
 /** GET /api/onboarding/classifier-status — saved keys only (UserSecrets); ignores server env keys. */

@@ -18,11 +18,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import AppUser, OnboardingState, Transaction, UserContact, UserSecrets
+from api.models import AppUser, OnboardingState, PasswordTemplate, Transaction, UserContact, UserSecrets
 from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
 from api.services.classifier_runtime import (
@@ -35,6 +35,10 @@ from api.services.email_import_flow_log import EmailImportFlowLog
 from api.services.onboarding_merchant_propagation import (
     propagate_merchant_keyword_hits,
     transaction_to_canonical,
+)
+from api.services.onboarding_portfolio_derive import (
+    portfolio_snapshot_summary,
+    run_onboarding_portfolio_derivation,
 )
 from api.services.preclassification_identity import (
     build_self_aliases_from_names,
@@ -62,6 +66,13 @@ from scraper.onboarding_orchestrator import (
     pause_backfill_state,
     resume_backfill_state,
     run_onboarding_backfill,
+)
+from scraper.pdf_passwords import (
+    ARTH_PDF_INGREDIENT_DOB_ISO,
+    ARTH_PDF_INGREDIENT_HDFC_ACCOUNT_NUMBER,
+    ARTH_PDF_INGREDIENT_HDFC_CC_LAST4,
+    ARTH_PDF_INGREDIENT_PAN,
+    EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS,
 )
 from scraper.source_builder import persist_scraper_sources_from_discovery
 from scraper.scheduler import resume_scheduler
@@ -228,6 +239,139 @@ def onboarding_backfill_sources(
     return _ordered_backfill_sources(bank)
 
 
+class PasswordRequirementRow(BaseModel):
+    """One PDF password recipe the wizard should collect ingredients for."""
+
+    parser_key: str
+    display_name: str
+    required_fields: list[str]
+    notes: str | None = None
+
+
+class PasswordIngredientsBody(BaseModel):
+    """User-supplied values merged into encrypted ``UserSecrets`` for template-derived PDF passwords."""
+
+    pan: str | None = Field(default=None, description="Income-tax PAN (stored uppercase).")
+    dob_iso: str | None = Field(default=None, description="Date of birth as YYYY-MM-DD for DDMMYYYY derivation.")
+    hdfc_account_number: str | None = None
+    hdfc_cc_last4: str | None = Field(default=None, description="Last four digits of the HDFC credit card for CC PDFs.")
+
+
+@router.get("/password-requirements", response_model=list[PasswordRequirementRow])
+def onboarding_password_requirements(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> list[PasswordRequirementRow]:
+    """Return password templates for bank senders seen during discovery (non-empty mailboxes only)."""
+    row = _get_or_create_state(session, current_user)
+    envelope = _parse_json_object(row.discovery_results_json, {})
+    sources_raw = envelope.get("sources")
+    if not isinstance(sources_raw, list):
+        return []
+
+    bank = get_bank_senders_config(session, current_user)
+    needed_keys: set[str] = set()
+    for item in sources_raw:
+        if not isinstance(item, dict):
+            continue
+        sender = str(item.get("sender_email") or "").strip().lower()
+        est_raw = item.get("email_count_estimate", 0)
+        try:
+            est = int(est_raw)
+        except (TypeError, ValueError):
+            est = 0
+        if est <= 0:
+            continue
+        cfg = bank.get(sender)
+        if not isinstance(cfg, dict):
+            continue
+        pk = str(cfg.get("parser_key") or "").strip()
+        if pk in EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS:
+            needed_keys.update(EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS[pk])
+
+    if not needed_keys:
+        return []
+
+    stmt = select(PasswordTemplate).where(col(PasswordTemplate.parser_key).in_(sorted(needed_keys)))
+    rows = session.exec(stmt).all()
+    out: list[PasswordRequirementRow] = []
+    for tmpl in rows:
+        try:
+            fields_raw = json.loads(tmpl.required_fields_json)
+        except json.JSONDecodeError:
+            fields_raw = []
+        if not isinstance(fields_raw, list):
+            fields_raw = []
+        out.append(
+            PasswordRequirementRow(
+                parser_key=tmpl.parser_key,
+                display_name=tmpl.display_name,
+                required_fields=[str(x) for x in fields_raw],
+                notes=tmpl.notes,
+            )
+        )
+    out.sort(key=lambda r: (r.display_name.lower(), r.parser_key))
+    return out
+
+
+@router.post("/password-ingredients")
+def onboarding_password_ingredients(
+    body: PasswordIngredientsBody,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Merge PAN/DOB/account fragments into ``UserSecrets`` for PDF template resolution."""
+    row = session.exec(select(UserSecrets).where(UserSecrets.user_id == current_user)).first()
+    data: dict[str, Any] = {}
+    if row is not None and row.secrets_json:
+        try:
+            loaded = json.loads(row.secrets_json)
+            if isinstance(loaded, dict):
+                data = loaded
+        except json.JSONDecodeError:
+            data = {}
+
+    if body.pan is not None:
+        pan = "".join(c for c in body.pan.upper() if c.isalnum())
+        if len(pan) > 10:
+            raise HTTPException(status_code=400, detail="PAN must be at most 10 characters.")
+        data[ARTH_PDF_INGREDIENT_PAN] = pan
+    if body.dob_iso is not None:
+        raw_d = body.dob_iso.strip()
+        if raw_d:
+            if len(raw_d) >= 10:
+                parts = raw_d[:10].split("-")
+                if len(parts) != 3 or len(parts[0]) != 4:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Use date of birth as YYYY-MM-DD.",
+                    )
+            data[ARTH_PDF_INGREDIENT_DOB_ISO] = raw_d[:10]
+        else:
+            data.pop(ARTH_PDF_INGREDIENT_DOB_ISO, None)
+    if body.hdfc_account_number is not None:
+        acct = "".join(c for c in body.hdfc_account_number if c.isdigit())
+        if len(acct) > 20:
+            raise HTTPException(status_code=400, detail="Account number looks too long.")
+        data[ARTH_PDF_INGREDIENT_HDFC_ACCOUNT_NUMBER] = acct
+    if body.hdfc_cc_last4 is not None:
+        tail = "".join(c for c in body.hdfc_cc_last4 if c.isdigit())[-4:]
+        data[ARTH_PDF_INGREDIENT_HDFC_CC_LAST4] = tail
+
+    payload = json.dumps(data)
+    now = datetime.datetime.now(datetime.UTC)
+    if row is None:
+        session.add(UserSecrets(user_id=current_user, secrets_json=payload, updated_at=now))
+    else:
+        row.secrets_json = payload
+        row.updated_at = now
+        session.add(row)
+    session.commit()
+    return {"ok": True}
+
+
 def _ndjson_line(payload: dict[str, Any]) -> bytes:
     """One UTF-8 line for ``application/x-ndjson`` streaming."""
     return (json.dumps(payload) + "\n").encode("utf-8")
@@ -367,6 +511,10 @@ class BackfillAdvanceBody(BaseModel):
         default=False,
         description="Clear needs_classification gate after user fixed merchant rules.",
     )
+    resume_after_password: bool = Field(
+        default=False,
+        description="Clear needs_password gate after user saved PDF password ingredients in UserSecrets.",
+    )
     resume_from_pause: bool = Field(
         default=False,
         description="Clear paused status before processing the next chunk.",
@@ -386,6 +534,14 @@ class BackfillProgressResponse(BaseModel):
     current_phase: str | None = Field(
         default=None,
         description="statements | alerts — which tier of mail is being imported (if applicable).",
+    )
+    password_parser_key: str | None = Field(
+        default=None,
+        description="When status is needs_password, which PasswordTemplate row applies (if known).",
+    )
+    password_failure_message_id: str | None = Field(
+        default=None,
+        description="Gmail message id that failed PDF decryption (retry after fixing secrets).",
     )
 
 
@@ -492,6 +648,7 @@ def _run_backfill_locked(
     detail_parts = [
         f"chunk_size={body.chunk_size}",
         f"resume_after_classification={body.resume_after_classification}",
+        f"resume_after_password={body.resume_after_password}",
         f"resume_from_pause={body.resume_from_pause}",
     ]
     if body.after is not None:
@@ -523,6 +680,7 @@ def _run_backfill_locked(
             after=body.after,
             before=body.before,
             resume_after_classification=body.resume_after_classification,
+            resume_after_password=body.resume_after_password,
             resume_from_pause=body.resume_from_pause,
             import_flow_log=flow,
             progress_commit_hook=_flush_backfill_progress_live,
@@ -579,6 +737,10 @@ def onboarding_backfill_progress(
         unknowns_pending=unknowns_live,
         error_message=blob.get("error_message"),
         current_phase=(str(blob["current_phase"]) if blob.get("current_phase") else None),
+        password_parser_key=(str(blob["password_parser_key"]) if blob.get("password_parser_key") else None),
+        password_failure_message_id=(
+            str(blob["password_failure_message_id"]) if blob.get("password_failure_message_id") else None
+        ),
     )
 
 
@@ -1154,6 +1316,30 @@ def onboarding_classify(
         "should_resume": onboarding_should_resume_after_classify(remaining, resume_thresh),
         "auto_propagated": auto_propagated,
     }
+
+
+@router.post("/portfolio-derive")
+def onboarding_portfolio_derive(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Link orphan investment rows, derive ICICI Direct MF/equity holdings from ledger history, ingest.
+
+    Idempotent — safe to call after broker Gmail backfill or when the user lands on the
+    portfolio summary step.
+    """
+    return run_onboarding_portfolio_derivation(session, current_user)
+
+
+@router.get("/portfolio-snapshot")
+def onboarding_portfolio_snapshot(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Broker-slice holdings counts and top rows for the onboarding portfolio summary UI."""
+    return portfolio_snapshot_summary(session, current_user)
 
 
 @router.get("/gaps")

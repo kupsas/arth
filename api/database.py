@@ -746,6 +746,69 @@ def _hydrate_scraper_sender_metadata_from_code() -> None:
         logger.exception("Hydrate scraper_bank_senders from BANK_SENDERS skipped or failed")
 
 
+def _seed_password_templates() -> None:
+    """Insert default PDF password recipes (idempotent — skip if any row exists)."""
+    from sqlmodel import Session, select
+
+    from api.models import PasswordTemplate
+
+    rows: list[dict[str, str | None]] = [
+        {
+            "parser_key": "icici_statement_monthly",
+            "display_name": "ICICI Bank monthly e-statement PDF",
+            "required_fields_json": '["pan"]',
+            "password_formula": "{pan}",
+            "notes": "Often your PAN in uppercase; verify against your bank email.",
+        },
+        {
+            "parser_key": "icici_statement_annual",
+            "display_name": "ICICI Bank annual / FY statement PDF",
+            "required_fields_json": '["pan"]',
+            "password_formula": "{pan}",
+            "notes": "If your bank uses account-number-based passwords, set the full password in UserSecrets for ICICI_STATEMENT_ANNUAL_PASSWORD instead.",
+        },
+        {
+            "parser_key": "hdfc_combined_statement",
+            "display_name": "HDFC Bank combined email statement PDF",
+            "required_fields_json": '["hdfc_account_number", "dob_ddmmyyyy"]',
+            "password_formula": "{hdfc_account_number}{dob_ddmmyyyy}",
+            "notes": "Typical pattern: full savings account number + date of birth as DDMMYYYY.",
+        },
+        {
+            "parser_key": "hdfc_cc_statement",
+            "display_name": "HDFC Bank credit card statement PDF",
+            "required_fields_json": '["hdfc_cc_last4", "dob_ddmmyyyy"]',
+            "password_formula": "{hdfc_cc_last4}{dob_ddmmyyyy}",
+            "notes": "Card last four digits + DOB as DDMMYYYY (common HDFC pattern).",
+        },
+        {
+            "parser_key": "nse_trades_executed",
+            "display_name": "NSE “Trades executed” contract PDF",
+            "required_fields_json": '["pan"]',
+            "password_formula": "{pan}",
+            "notes": "Often PAN-based; matches NSE_TRADES_EXECUTED_PASSWORD.",
+        },
+        {
+            "parser_key": "icici_direct_trade",
+            "display_name": "ICICI Direct / broker PDF (PAN-style)",
+            "required_fields_json": '["pan"]',
+            "password_formula": "{pan}",
+            "notes": "Used when templates substitute ICICI_DIRECT trade emails; you can still set ICICI_DIRECT_EMAIL_PASSWORD explicitly.",
+        },
+    ]
+
+    try:
+        with Session(_engine) as session:
+            if session.exec(select(PasswordTemplate)).first() is not None:
+                return
+            for r in rows:
+                session.add(PasswordTemplate(**r))
+            session.commit()
+            logger.info("Seeded password_templates table (%d rows)", len(rows))
+    except Exception:
+        logger.exception("Password template seed skipped or failed")
+
+
 def init_db() -> None:
     """Create all tables that don't already exist.
 
@@ -760,6 +823,7 @@ def init_db() -> None:
     _apply_sqlite_patches()
     _hydrate_scraper_sender_metadata_from_code()
     _seed_desktop_prereq_defaults()
+    _seed_password_templates()
     _sync_missing_bank_senders_from_config()
     _merge_starter_pack_for_all_users()
     # Phase A.5 — limit exposure of local secrets (SQLite file + Gmail OAuth token).

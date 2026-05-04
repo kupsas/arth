@@ -879,6 +879,25 @@ class UserSecrets(SQLModel, table=True):
     )
 
 
+class PasswordTemplate(SQLModel, table=True):
+    """Recipe for deriving a PDF password from user-supplied ingredients (onboarding / WS3).
+
+    Rows are seeded at startup; ``parser_key`` aligns with :func:`scraper.pdf_passwords.resolve_pdf_password_chain`
+    ``parser_key=…`` and optional statement flows.
+    """
+
+    __tablename__ = "password_templates"
+
+    id: int | None = Field(default=None, primary_key=True)
+    parser_key: str = Field(unique=True, index=True)
+    display_name: str = Field(sa_column=Column(String(256)))
+    # JSON array of logical ingredient names, e.g. ``["pan"]`` or ``["hdfc_account_number","dob_ddmmyyyy"]``.
+    required_fields_json: str = Field(sa_column=Column(Text))
+    # Python ``str.format`` pattern using only placeholders listed in ``required_fields_json``.
+    password_formula: str = Field(sa_column=Column(Text))
+    notes: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+
+
 class FamilyMember(SQLModel, table=True):
     """Household member for **account ownership** (which person owns a linked bank source).
 
