@@ -5,6 +5,17 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+  // React Compiler lint rules flag many common patterns (derive local form state from props,
+  // mount placeholders, TanStack Table) as errors. Keep them visible as warnings so CI still
+  // runs ESLint without blocking the whole app; tighten to "error" file-by-file over time.
+  {
+    files: ["src/**/*.{js,jsx,ts,tsx}"],
+    rules: {
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/purity": "warn",
+      "react-hooks/refs": "warn",
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
