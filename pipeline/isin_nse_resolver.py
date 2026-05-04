@@ -1,10 +1,10 @@
 """
 Resolve Indian equity ISIN → NSE trading symbol using official bhavcopy data.
 
-Static maps live in :mod:`pipeline.holding_parsers.icici_direct_equity` and optional
-``data/icici_nse_symbol_overrides.json``. When an ISIN is missing there, we look it up
-in the latest usable NSE equity bhav file (ISIN + TckrSymb columns), which covers the
-full listed universe for that session.
+Optional ``isin_to_nse`` rows in ``data/icici_nse_symbol_overrides.json`` apply when the
+ISIN is absent from the latest equity bhav file (e.g. delisted). Otherwise we use the
+latest usable NSE equity bhav file (ISIN + TckrSymb columns), which covers the listed
+universe for that session.
 
 Cached per process by session date to avoid repeated downloads.
 """

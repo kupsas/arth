@@ -19,6 +19,7 @@ from typing import Any
 
 from scraper.config import BANK_SENDERS
 from scraper.email_parsers.base import BaseEmailParser
+from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
 from scraper.email_parsers.hdfc_bank import (
     HDFCAccountUpdateParser,
@@ -28,6 +29,12 @@ from scraper.email_parsers.hdfc_bank import (
 from scraper.email_parsers.icici_bank import ICICINetBankingParser
 from scraper.email_parsers.hdfc_cc_statement import HDFCCCStatementEmailParser
 from scraper.email_parsers.hdfc_statement import HDFCCombinedStatementEmailParser
+from scraper.email_parsers.icici_direct_equity_statement import (
+    ICICIDirectEquityStatementEmailParser,
+)
+from scraper.email_parsers.icici_direct_mf_statement import (
+    ICICIDirectMFStatementEmailParser,
+)
 from scraper.email_parsers.icici_direct_trade import ICICIDirectTradeEmailParser
 from scraper.email_parsers.icici_statement import ICICIStatementEmailParser
 
@@ -60,6 +67,7 @@ def build_email_parser_registry(
     hdfc_cc = _acct("emailstatements.cards@hdfcbank.net")
     hdfc_comb = _acct("hdfcbanksmartstatement@hdfcbank.net")
     icici_trade = _acct("nse-direct@nse.co.in")
+    icici_sec_svc = _acct("service@icicisecurities.com")
 
     return {
         "alerts@hdfcbank.net": _hdfc_parser_list(hdfc_a),
@@ -97,6 +105,10 @@ def build_email_parser_registry(
         "nse-direct@nse.co.in": [
             ICICIDirectTradeEmailParser(icici_trade),
         ],
+        "service@icicisecurities.com": [
+            ICICIDirectEquityStatementEmailParser(icici_sec_svc),
+            ICICIDirectMFStatementEmailParser(icici_sec_svc),
+        ],
     }
 
 
@@ -106,5 +118,6 @@ __all__ = [
     "EMAIL_PARSER_REGISTRY",
     "BaseEmailParser",
     "BaseStatementEmailParser",
+    "BaseBrokerStatementParser",
     "build_email_parser_registry",
 ]

@@ -14,14 +14,12 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import ClassVar
 
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 
-from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn
 from pipeline.holding_parsers.icici_direct_contract_note import parse_icici_direct_trade_pdf
 from pipeline.models import ParsedTransaction
-from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
 from scraper.pdf_passwords import NSE_TRADES_EXECUTED_PASSWORD_KEYS, resolve_pdf_password_chain
 from scraper.pdf_utils import decrypt_pdf
 
@@ -45,27 +43,11 @@ def _nse_trades_pdf_password() -> tuple[str, str]:
     return (p, NSE_TRADES_EXECUTED_PASSWORD_KEYS[0])
 
 
-class ICICIDirectTradeEmailParser(BaseStatementEmailParser):
+class ICICIDirectTradeEmailParser(BaseBrokerStatementParser):
     """Decrypt the NSE trades PDF and emit investment rows (no bank ledger rows)."""
-
-    parse_type: ClassVar[str] = "attachment"
-
-    def __init__(self, accounts: dict[str, dict]) -> None:
-        super().__init__(accounts)
-        self._attachment_holdings: list[ParsedHolding] = []
-        self._attachment_inv_txns: list[ParsedInvestmentTxn] = []
 
     def can_parse(self, sender: str, subject: str) -> bool:
         return classify_icici_direct_subject(subject) is not None
-
-    def attachment_investment_outputs(
-        self,
-    ) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
-        return (self._attachment_holdings, self._attachment_inv_txns)
-
-    def reset_attachment_outputs(self) -> None:
-        self._attachment_holdings = []
-        self._attachment_inv_txns = []
 
     def parse_attachment(
         self,

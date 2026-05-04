@@ -28,15 +28,14 @@ from __future__ import annotations
 import datetime
 import logging
 import re
-from typing import ClassVar, Literal
+from typing import Literal
 
 import pipeline.config  # noqa: F401 — ensures ``.env`` is loaded before ``os.getenv``
 
-from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn
 from pipeline.holding_parsers.icici_ppf_pdf import parse_icici_ppf_from_annual_pdf
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.icici_savings import ICICISavingsParser
-from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
 from scraper.pdf_passwords import (
     ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS,
     ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS,
@@ -110,29 +109,11 @@ def _annual_password() -> str:
     return resolve_pdf_password_chain(*ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS)
 
 
-class ICICIStatementEmailParser(BaseStatementEmailParser):
+class ICICIStatementEmailParser(BaseBrokerStatementParser):
     """Decrypt ICICI statement PDFs and parse savings transactions."""
-
-    parse_type: ClassVar[str] = "attachment"
-
-    def __init__(self, accounts: dict[str, dict]) -> None:
-        super().__init__(accounts)
-        self._attachment_holdings: list[ParsedHolding] = []
-        self._attachment_inv_txns: list[ParsedInvestmentTxn] = []
 
     def can_parse(self, sender: str, subject: str) -> bool:
         return _statement_kind(sender, subject) is not None
-
-    def attachment_investment_outputs(
-        self,
-    ) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
-        """PPF (and future) investment rows accumulated for this email's PDF attachment(s)."""
-        return (self._attachment_holdings, self._attachment_inv_txns)
-
-    def reset_attachment_outputs(self) -> None:
-        """Clear PPF side-channels before processing attachment(s) for a new Gmail message."""
-        self._attachment_holdings = []
-        self._attachment_inv_txns = []
 
     def parse_attachment(
         self,

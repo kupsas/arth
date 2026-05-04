@@ -189,10 +189,36 @@ def test_ingest_holdings_round_trip_encrypted_folio(engine) -> None:
         assert row.folio_number_encrypted == "12345"
 
 
-def test_resolve_icici_direct_nse_symbol_isin_bhav_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When static ISIN map misses, :func:`resolve_icici_direct_nse_symbol` uses bhav lookup."""
+def test_resolve_icici_direct_nse_symbol_isin_bhav_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When ISIN is in NSE bhav, :func:`resolve_icici_direct_nse_symbol` uses that symbol."""
     monkeypatch.setattr(
         "pipeline.isin_nse_resolver.lookup_isin_from_nse_bhav",
         lambda isin: "NEWSYM" if isin == "INE999Z01099" else None,
     )
     assert resolve_icici_direct_nse_symbol(isin="INE999Z01099", icici_short="UNKNOWN") == "NEWSYM"
+
+
+def test_resolve_icici_direct_nse_symbol_bhav_wins_over_isin_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disk ``isin_to_nse`` is only used when bhav has no row; bhav takes priority."""
+    from pipeline.icici_symbol_overrides import invalidate_overrides_cache, save_overrides
+
+    p = tmp_path / "icici_nse_symbol_overrides.json"
+    monkeypatch.setenv("ARTH_ICICI_SYMBOL_OVERRIDES", str(p))
+    invalidate_overrides_cache()
+    try:
+        save_overrides(
+            {
+                "icici_short_to_nse": {},
+                "isin_to_nse": {"INE999Z01099": "OLDSYM"},
+            }
+        )
+        monkeypatch.setattr(
+            "pipeline.isin_nse_resolver.lookup_isin_from_nse_bhav",
+            lambda isin: "NEWSYM" if isin == "INE999Z01099" else None,
+        )
+        assert resolve_icici_direct_nse_symbol(isin="INE999Z01099", icici_short="X") == "NEWSYM"
+    finally:
+        invalidate_overrides_cache()

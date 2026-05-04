@@ -71,6 +71,15 @@ _ICICI_DIRECT_TRADE_ACCOUNTS: dict[str, dict] = {
     },
 }
 
+# ICICI Securities statement emails (equity + MF PDFs; ``parser_key`` for onboarding DB).
+# Router entries are added when email parsers land (WS1 Phase 2).
+_ICICI_DIRECT_BROKER_ACCOUNTS: dict[str, dict] = {
+    "0000": {
+        "account_id": "ICICI_DIRECT",
+        "source_key": "icici_direct_equity",
+    },
+}
+
 # Shared discovery regex snippets (Subject line hints; case-insensitive).
 _PAT_HDFC_INSTA = [r"(?i)Insta\s*Alert", r"(?i)HDFC"]
 _PAT_ICICI_NOTIF = [r"(?i)ICICI", r"(?i)Transaction"]
@@ -78,6 +87,10 @@ _PAT_ICICI_STMT = [r"(?i)e-?\s*Statement", r"(?i)ICICI", r"(?i)Account"]
 _PAT_HDFC_CC_STMT = [r"(?i)Credit\s*Card", r"(?i)Statement", r"(?i)HDFC"]
 _PAT_HDFC_COMBINED = [r"(?i)Smart\s*Statement", r"(?i)Combined", r"(?i)HDFC"]
 _PAT_NSE_TRADE = [r"(?i)Trades?\s+executed", r"(?i)NSE"]
+_PAT_ICICI_DIRECT_STMT = [
+    r"(?i)Equity\s+Transaction\s+Statement",
+    r"(?i)Mutual\s+Fund\s+Account\s+Statement",
+]
 
 BANK_SENDERS: dict[str, dict] = {
     "alerts@hdfcbank.net": {
@@ -202,6 +215,17 @@ BANK_SENDERS: dict[str, dict] = {
         "source_type": "broker",
         "discovery_subject_patterns": _PAT_NSE_TRADE,
         "expected_cadence": "per_transaction",
+    },
+    # ICICI Securities — equity / MF **statement** PDFs (password: ICICI_DIRECT_STATEMENT_PASSWORD_KEYS).
+    # Email parsers + registry: WS1 Phase 2. Listed here for Gmail discovery / onboarding.
+    "service@icicisecurities.com": {
+        "parser_key": "icici_direct_statement",
+        "accounts": _ICICI_DIRECT_BROKER_ACCOUNTS,
+        "first_run_lookback_days": 120,
+        "display_name": "ICICI Direct broker statements (equity + MF)",
+        "source_type": "broker",
+        "discovery_subject_patterns": _PAT_ICICI_DIRECT_STMT,
+        "expected_cadence": "quarterly",
     },
 }
 
