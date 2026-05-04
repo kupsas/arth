@@ -37,7 +37,7 @@ pytest-cov>=5.0
 # yfinance: optional international marks only (e.g. GC=F); Indian equities use NSE bhav.
 yfinance>=0.2
 nse>=2.1
-cryptography>=42.0
+cryptography>=47.0.0
 pyxirr>=0.10
 scipy>=1.14
 
