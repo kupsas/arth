@@ -48,7 +48,6 @@ export type WizardStepId =
   | "welcome"
   | "discovery"
   | "preclass"
-  | "passwords"
   | "apikey"
   | "backfill"
   | "portfolio_summary"
@@ -61,7 +60,6 @@ const ALL_WIZARD_STEP_IDS = [
   "welcome",
   "discovery",
   "preclass",
-  "passwords",
   "apikey",
   "backfill",
   "portfolio_summary",
@@ -71,6 +69,10 @@ const ALL_WIZARD_STEP_IDS = [
 ] as const satisfies readonly WizardStepId[]
 
 const WIZARD_STEP_IDS = new Set<WizardStepId>(ALL_WIZARD_STEP_IDS)
+const LEGACY_WIZARD_STEPS: Record<string, WizardStepId> = {
+  /** Merged into Config (``preclass``) — see ``PdfPasswordConfigFields`` in pre-classification. */
+  passwords: "preclass",
+}
 
 /** Progress pills: inserts **Portfolio** after Import mail when discovery included a broker source. */
 function buildOnboardingStepMeta(
@@ -79,8 +81,7 @@ function buildOnboardingStepMeta(
   const rows: { id: WizardStepId; label: string }[] = [
     { id: "welcome", label: "Gmail" },
     { id: "discovery", label: "Find accounts" },
-    { id: "preclass", label: "Your name" },
-    { id: "passwords", label: "PDF secrets" },
+    { id: "preclass", label: "Config" },
     { id: "apikey", label: "Smart labels (opt.)" },
     { id: "backfill", label: "Import mail" },
   ]
@@ -107,6 +108,9 @@ function panelFromServerStep(step: string): WizardStepId {
   if (step === "completed") {
     return "welcome"
   }
+  if (step in LEGACY_WIZARD_STEPS) {
+    return LEGACY_WIZARD_STEPS[step] as WizardStepId
+  }
   if (WIZARD_STEP_IDS.has(step as WizardStepId)) {
     return step as WizardStepId
   }
@@ -118,7 +122,7 @@ export type OnboardingWizardProps = {
   className?: string
   /** Fires after ``POST /api/onboarding/complete`` succeeds. */
   onFinished: () => void
-  /** Optional — first-step **Back** (e.g. return to PDF secrets on ``/setup``). */
+  /** Optional — first-step **Back** (e.g. return from discovery on ``/setup``). */
   onExitFirstStep?: () => void
 }
 
@@ -398,8 +402,7 @@ export function OnboardingWizard({
     const prevMap: Partial<Record<WizardStepId, WizardStepId>> = {
       summary: "goals",
       goals: "gaps",
-      apikey: "passwords",
-      passwords: "preclass",
+      apikey: "preclass",
       preclass: "discovery",
       discovery: "welcome",
       backfill: "apikey",
@@ -464,9 +467,6 @@ export function OnboardingWizard({
             <PreClassificationForm />
           </div>
         )}
-        {panel === "passwords" && (
-          <StepPasswordIngredients mode="wizard" onContinue={() => setUserPanel("apikey")} />
-        )}
         {panel === "apikey" && (
           <div className="mx-auto w-full max-w-2xl space-y-6">
             <OnboardingOptionalLlmKeys />
@@ -486,9 +486,10 @@ export function OnboardingWizard({
             )}
             {!!sourcesQ.data?.length && (
               <>
+                {/* TODO: Add a "paste exact PDF password" path when ingredients are not enough; see
+                    ``onboarding_orchestrator`` needs_password (UserSecrets override, not .env/DB). */}
                 {bfProgress?.status === "needs_password" && activeSourceKey && (
                   <StepPasswordIngredients
-                    mode="resume-import"
                     blockingParserKey={bfProgress.password_parser_key ?? undefined}
                     onSaved={() => void handlePasswordGateResolved()}
                   />
@@ -557,7 +558,7 @@ export function OnboardingWizard({
           </Button>
           <div className="flex flex-wrap gap-2">
             {panel === "preclass" && (
-              <Button type="button" onClick={() => setUserPanel("passwords")}>
+              <Button type="button" onClick={() => setUserPanel("apikey")}>
                 Continue
               </Button>
             )}

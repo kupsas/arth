@@ -23,6 +23,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from api.database import get_engine, init_db
+from api.services.email_import_flow_log import EmailImportFlowLog
 from api.services.holding_enrichment import enrich_single_equity_classification
 from api.services.holdings_sync import ensure_holding_for_transaction, sync_holding_from_transactions
 from api.models import Holding, HoldingValueSnapshot, InvestmentTransaction, Liability
@@ -314,12 +315,16 @@ def ingest_investment_transactions(
     dry_run: bool = False,
     source_type: str | None = None,
     gmail_message_id: str | None = None,
+    import_flow_log: EmailImportFlowLog | None = None,
 ) -> dict[str, Any]:
     """Insert deduped ledger rows. When ``user_id`` is set, resolve ``holding_id`` (MF + equity).
 
     When ``source_type=\"email\"`` (Gmail scraper / statement PDF attachment path), new rows
     get ``is_reviewed=False`` so they surface on the investment review queue — same rule as
     :func:`pipeline.db_writer.write_to_db` for bank transactions.
+
+    When ``import_flow_log`` is set (onboarding email import HTTP path), append diagnostics to
+    ``data/logs/email-import.log`` alongside bank-transaction events from :mod:`scraper.orchestrator`.
     """
     inserted = 0
     skipped = 0
@@ -327,15 +332,37 @@ def ingest_investment_transactions(
     linked_inline = 0
     uid = user_id.strip() if user_id and str(user_id).strip() else None
     inserted_rows: list[InvestmentTransaction] = []
+    # Cap per-message samples so one huge statement PDF cannot flood the log file.
+    _max_sample = 8
+    _n_validate_logged = 0
+    _n_dup_logged = 0
+
+    if import_flow_log:
+        import_flow_log.write(
+            "inv_ingest_start",
+            f"n={len(txns)} user_id={uid or '-'} source_type={source_type or '-'} gmail_id={gmail_message_id or '-'} dry_run={dry_run}",
+        )
 
     for t in txns:
         bad = validate_parsed_inv_txn(t)
         if bad:
             logger.warning("Skip inv txn %s %s: %s", t.txn_date, t.txn_type, bad)
             errors += 1
+            if import_flow_log and _n_validate_logged < _max_sample:
+                import_flow_log.write(
+                    "inv_skip_validate",
+                    f"date={t.txn_date} type={t.txn_type} symbol={t.symbol!r} reason={bad}",
+                )
+                _n_validate_logged += 1
             continue
         if investment_txn_exists(session, t):
             skipped += 1
+            if import_flow_log and _n_dup_logged < _max_sample:
+                import_flow_log.write(
+                    "inv_skip_duplicate",
+                    f"date={t.txn_date} type={t.txn_type} symbol={t.symbol!r} amt={t.total_amount}",
+                )
+                _n_dup_logged += 1
             continue
         if dry_run:
             inserted += 1
@@ -392,6 +419,15 @@ def ingest_investment_transactions(
 
     if not dry_run:
         session.commit()
+
+    if import_flow_log:
+        import_flow_log.write(
+            "inv_ingest_done",
+            f"inserted={inserted} skipped_dup={skipped} errors={errors} linked_inline={linked_inline} "
+            f"orphans_linked={orphan_backfill.get('linked', 0)} orphans_examined={orphan_backfill.get('examined', 0)} "
+            f"orphans_ambiguous={orphan_backfill.get('ambiguous', 0)} holdings_synced={holdings_synced}",
+        )
+
     return {
         "inserted": inserted,
         "skipped_duplicate": skipped,

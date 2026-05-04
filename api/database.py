@@ -747,7 +747,7 @@ def _hydrate_scraper_sender_metadata_from_code() -> None:
 
 
 def _seed_password_templates() -> None:
-    """Insert default PDF password recipes (idempotent — skip if any row exists)."""
+    """Insert or update default PDF password recipes (idempotent by ``parser_key``)."""
     from sqlmodel import Session, select
 
     from api.models import PasswordTemplate
@@ -756,55 +756,74 @@ def _seed_password_templates() -> None:
         {
             "parser_key": "icici_statement_monthly",
             "display_name": "ICICI Bank monthly e-statement PDF",
-            "required_fields_json": '["pan"]',
-            "password_formula": "{pan}",
-            "notes": "Often your PAN in uppercase; verify against your bank email.",
+            "required_fields_json": '["dob_iso"]',
+            "password_formula": "{icici_first4_upper}{dob_ddmm}",
+            "notes": (
+                "Name comes from your saved identity (preclassification) and aliases. "
+                "We try FIRST4+DDMM upper then lower for each name variant. "
+                "Optional UserSecrets override for non-standard bank spellings."
+            ),
         },
         {
             "parser_key": "icici_statement_annual",
             "display_name": "ICICI Bank annual / FY statement PDF",
-            "required_fields_json": '["pan"]',
-            "password_formula": "{pan}",
-            "notes": "If your bank uses account-number-based passwords, set the full password in UserSecrets for ICICI_STATEMENT_ANNUAL_PASSWORD instead.",
+            "required_fields_json": '["dob_iso"]',
+            "password_formula": "{icici_first4_upper}{dob_ddmm}",
+            "notes": (
+                "Same as monthly; env overrides first. Identity name + aliases drive FIRST4."
+            ),
         },
         {
             "parser_key": "hdfc_combined_statement",
             "display_name": "HDFC Bank combined email statement PDF",
-            "required_fields_json": '["hdfc_account_number", "dob_ddmmyyyy"]',
-            "password_formula": "{hdfc_account_number}{dob_ddmmyyyy}",
-            "notes": "Typical pattern: full savings account number + date of birth as DDMMYYYY.",
+            "required_fields_json": '["hdfc_customer_id"]',
+            "password_formula": "{hdfc_customer_id}",
+            "notes": "Typical pattern: your HDFC customer ID (net banking login ID), digits only.",
         },
         {
             "parser_key": "hdfc_cc_statement",
             "display_name": "HDFC Bank credit card statement PDF",
-            "required_fields_json": '["hdfc_cc_last4", "dob_ddmmyyyy"]',
-            "password_formula": "{hdfc_cc_last4}{dob_ddmmyyyy}",
-            "notes": "Card last four digits + DOB as DDMMYYYY (common HDFC pattern).",
+            "required_fields_json": '["dob_iso"]',
+            "password_formula": "{icici_first4_upper}{dob_ddmm}",
+            "notes": (
+                "FIRST4 from your saved identity and aliases + DOB as DDMM. Same rules as ICICI."
+            ),
         },
         {
             "parser_key": "nse_trades_executed",
             "display_name": "NSE “Trades executed” contract PDF",
             "required_fields_json": '["pan"]',
             "password_formula": "{pan}",
-            "notes": "Often PAN-based; matches NSE_TRADES_EXECUTED_PASSWORD.",
+            "notes": "Usually your PAN in uppercase; matches NSE_TRADES_EXECUTED_PASSWORD.",
         },
         {
             "parser_key": "icici_direct_trade",
-            "display_name": "ICICI Direct / broker PDF (PAN-style)",
+            "display_name": "ICICI Direct — NSE trades PDF (PAN)",
             "required_fields_json": '["pan"]',
             "password_formula": "{pan}",
-            "notes": "Used when templates substitute ICICI_DIRECT trade emails; you can still set ICICI_DIRECT_EMAIL_PASSWORD explicitly.",
+            "notes": "Same as NSE contract-note PDFs; set explicit env keys if your broker differs.",
         },
     ]
 
     try:
         with Session(_engine) as session:
-            if session.exec(select(PasswordTemplate)).first() is not None:
-                return
             for r in rows:
-                session.add(PasswordTemplate(**r))
+                pk = str(r.get("parser_key") or "")
+                if not pk:
+                    continue
+                existing = session.exec(
+                    select(PasswordTemplate).where(PasswordTemplate.parser_key == pk)
+                ).first()
+                if existing is None:
+                    session.add(PasswordTemplate(**r))
+                else:
+                    for col_name, val in r.items():
+                        if col_name == "parser_key":
+                            continue
+                        setattr(existing, col_name, val)
+                    session.add(existing)
             session.commit()
-            logger.info("Seeded password_templates table (%d rows)", len(rows))
+            logger.info("Upserted password_templates (%d rows)", len(rows))
     except Exception:
         logger.exception("Password template seed skipped or failed")
 

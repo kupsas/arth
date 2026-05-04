@@ -411,12 +411,14 @@ def _process_email(
             user_id=user_id,
             source_type="email",
             gmail_message_id=msg.id,
+            import_flow_log=import_flow_log,
         )
         total_new += int(hr.get("inserted", 0)) + int(tr.get("inserted", 0))
         if import_flow_log:
             import_flow_log.write(
                 "investment_ingest",
-                f"holdings_ins={hr.get('inserted')} inv_txns_ins={tr.get('inserted')}",
+                f"holdings_ins={hr.get('inserted')} holdings_upd={hr.get('updated')} "
+                f"inv_ins={tr.get('inserted')} inv_skip_dup={tr.get('skipped_duplicate')} inv_err={tr.get('errors')}",
             )
         logger.debug(
             "    investment: holdings upsert=%s/%s inv_txns inserted=%s skipped_dup=%s",

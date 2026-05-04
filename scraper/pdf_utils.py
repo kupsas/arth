@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import os
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 import pikepdf
@@ -62,3 +63,33 @@ def decrypt_pdf(pdf_bytes: bytes, password: str) -> Path:
         raise
 
     return out_path
+
+
+def decrypt_pdf_with_password_candidates(
+    pdf_bytes: bytes,
+    passwords: Sequence[str],
+) -> tuple[Path, str]:
+    """Try each password until the PDF decrypts; return ``(temp_path, password_used)``.
+
+    Order matters: callers should put most likely passwords first (e.g. current ICICI
+    name+DDMM style before legacy lowercase full-name style).
+
+    Raises:
+        pikepdf.PasswordError: if the PDF is encrypted and every candidate failed.
+    """
+    last_err: pikepdf.PasswordError | None = None
+    tried: set[str] = set()
+    for raw in passwords:
+        pw = (raw or "").strip()
+        if pw in tried:
+            continue
+        tried.add(pw)
+        try:
+            path = decrypt_pdf(pdf_bytes, pw)
+            return path, pw
+        except pikepdf.PasswordError as e:
+            last_err = e
+            continue
+    if last_err is not None:
+        raise last_err
+    raise pikepdf.PasswordError("No password candidates were provided.")

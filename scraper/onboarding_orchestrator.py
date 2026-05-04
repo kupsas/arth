@@ -1278,6 +1278,11 @@ def run_onboarding_backfill(
                 if not p_key and isinstance(exc, StatementPasswordRequired):
                     p_key = exc.parser_key
                 err_txt = str(exc).strip() or "PDF password missing or incorrect."
+                # TODO: Product gap — when every derived/env candidate fails, we only surface
+                # ``StepPasswordIngredients`` (PAN/DOB/customer ID). Normal users cannot set a
+                # literal PDF password without editing .env or DB. Add UI + API to store
+                # per-bank override strings in ``UserSecrets`` (mirroring ICICI_STATEMENT_* /
+                # HDFC_* env keys) and show that form here, keyed by ``password_parser_key``.
                 src_state.update(
                     {
                         "source": source_key,

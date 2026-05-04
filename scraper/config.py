@@ -229,5 +229,19 @@ BANK_SENDERS: dict[str, dict] = {
     },
 }
 
+# Gmail From addresses that carry ICICI **savings** statement PDFs (monthly or annual FY).
+# Used by :mod:`scraper.email_parsers.icici_statement` to recognise FY subjects regardless
+# of whether ICICI used ``estatement@…`` or ``customernotification@icicibank.com``.
+# **Exclude** ``customernotification@icici.bank.in`` — that domain is InstaAlerts only today.
+# When ICICI routes FY PDFs from a new ``*@icici.bank.in`` mailbox, add it here and in
+# ``BANK_SENDERS`` with ``parser_key="icici_statement"``.
+ICICI_SAVINGS_STATEMENT_SENDERS: frozenset[str] = frozenset(
+    {
+        "estatement@icicibank.com",
+        "estatement@icici.bank.in",
+        "customernotification@icicibank.com",
+    }
+)
+
 # Convenience set — all sender addresses we care about (used for Gmail queries).
 ALL_SENDERS: set[str] = set(BANK_SENDERS.keys())

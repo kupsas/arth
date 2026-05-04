@@ -1165,12 +1165,25 @@ export function fetchOnboardingPasswordRequirements(): Promise<
   return get("/api/onboarding/password-requirements");
 }
 
+/** GET /api/onboarding/pdf-password-name-preview — names used for FIRST4+DDMM PDF passwords. */
+export function fetchOnboardingPdfPasswordNamePreview(): Promise<{ name_strings: string[] }> {
+  return get("/api/onboarding/pdf-password-name-preview");
+}
+
+/** GET /api/onboarding/password-ingredients — saved PAN/DOB/HDFC (for form hydration after refresh). */
+export function fetchOnboardingPasswordIngredientsSaved(): Promise<{
+  pan: string | null;
+  dob_iso: string | null;
+  hdfc_customer_id: string | null;
+}> {
+  return get("/api/onboarding/password-ingredients");
+}
+
 /** POST /api/onboarding/password-ingredients — merge PAN/DOB/account fragments into UserSecrets. */
 export function postOnboardingPasswordIngredients(body: {
   pan?: string | null;
   dob_iso?: string | null;
-  hdfc_account_number?: string | null;
-  hdfc_cc_last4?: string | null;
+  hdfc_customer_id?: string | null;
 }): Promise<{ ok: boolean }> {
   return post("/api/onboarding/password-ingredients", body);
 }

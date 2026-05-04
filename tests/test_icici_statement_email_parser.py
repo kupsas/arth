@@ -21,6 +21,13 @@ def test_can_parse_annual_customernotification(parser: ICICIStatementEmailParser
     )
 
 
+def test_can_parse_annual_any_sender_subject_only(parser: ICICIStatementEmailParser) -> None:
+    """FY PDFs may arrive from new domains — routing uses subject line, not From:."""
+    assert parser.can_parse(
+        "annualfy@icici.bank.in",
+        "Bank Statement from 01-01-2025 to 31-12-2025 for JOHN DOE",
+    )
+
 def test_can_parse_current_monthly_estatement(parser: ICICIStatementEmailParser) -> None:
     assert parser.can_parse(
         "estatement@icicibank.com",

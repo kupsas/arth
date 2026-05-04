@@ -15,17 +15,17 @@ from __future__ import annotations
 import datetime
 import logging
 
+import pikepdf
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 
 from pipeline.holding_parsers.icici_direct_contract_note import parse_icici_direct_trade_pdf
 from pipeline.models import ParsedTransaction
 from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
 from scraper.pdf_passwords import (
-    NSE_TRADES_EXECUTED_PASSWORD_KEYS,
     StatementPasswordRequired,
-    resolve_pdf_password_chain,
+    resolve_nse_pdf_password_candidates,
 )
-from scraper.pdf_utils import decrypt_pdf
+from scraper.pdf_utils import decrypt_pdf_with_password_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +41,8 @@ def classify_icici_direct_subject(subject: str) -> str | None:
     return None
 
 
-def _nse_trades_pdf_password() -> tuple[str, str]:
-    """Password for NSE-originated trade PDFs and primary env key for error messages."""
-    p = resolve_pdf_password_chain(
-        *NSE_TRADES_EXECUTED_PASSWORD_KEYS,
-        parser_key="nse_trades_executed",
-    )
-    return (p, NSE_TRADES_EXECUTED_PASSWORD_KEYS[0])
+def _nse_trades_pdf_password_candidates() -> list[str]:
+    return resolve_nse_pdf_password_candidates()
 
 
 class ICICIDirectTradeEmailParser(BaseBrokerStatementParser):
@@ -72,14 +67,20 @@ class ICICIDirectTradeEmailParser(BaseBrokerStatementParser):
             )
             return []
 
-        password, env_name = _nse_trades_pdf_password()
-        if not password:
+        candidates = _nse_trades_pdf_password_candidates()
+        if not candidates:
             raise StatementPasswordRequired(
                 "nse_trades_executed",
-                f"Set {env_name}, ICICI_DIRECT_TRADE_PASSWORD, or PAN ingredient for derived passwords.",
+                "Set NSE_TRADES_EXECUTED_PASSWORD or PAN ingredient for derived passwords.",
             )
 
-        decrypted = decrypt_pdf(pdf_bytes, password)
+        try:
+            decrypted, _used = decrypt_pdf_with_password_candidates(pdf_bytes, candidates)
+        except pikepdf.PasswordError as e:
+            raise StatementPasswordRequired(
+                "nse_trades_executed",
+                "None of the NSE PDF password candidates worked. Check env keys and PAN.",
+            ) from e
         try:
             self._attachment_inv_txns.extend(
                 parse_icici_direct_trade_pdf(

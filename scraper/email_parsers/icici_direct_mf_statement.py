@@ -1,7 +1,7 @@
 """
 ICICI Securities **Mutual Fund Account Statement** email (password-protected PDF).
 
-Sender: ``service@icicisecurities.com``. Same password chain as equity statements.
+Same password family as ICICI Bank statements — :func:`~scraper.pdf_passwords.resolve_icici_statement_pdf_password_candidates`.
 
 Emits ``ParsedInvestmentTxn`` rows plus ``ParsedHolding`` rows derived via
 :func:`pipeline.holding_parsers.icici_direct_mf.derive_mf_holdings` for the
@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime
 import logging
 
+import pikepdf
 import pipeline.config  # noqa: F401
 
 from pipeline.holding_parsers.icici_direct_mf import derive_mf_holdings
@@ -21,15 +22,13 @@ from pipeline.holding_parsers.icici_direct_mf_statement_pdf import (
 )
 from pipeline.models import ParsedTransaction
 from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
-from scraper.pdf_passwords import ICICI_DIRECT_STATEMENT_PASSWORD_KEYS, resolve_pdf_password_chain
-from scraper.pdf_utils import decrypt_pdf
+from scraper.pdf_passwords import (
+    StatementPasswordRequired,
+    resolve_icici_statement_pdf_password_candidates,
+)
+from scraper.pdf_utils import decrypt_pdf_with_password_candidates
 
 logger = logging.getLogger(__name__)
-
-
-def _statement_pdf_password() -> tuple[str, str]:
-    p = resolve_pdf_password_chain(*ICICI_DIRECT_STATEMENT_PASSWORD_KEYS)
-    return (p, ICICI_DIRECT_STATEMENT_PASSWORD_KEYS[0])
 
 
 def classify_icici_mf_statement_subject(subject: str) -> bool:
@@ -57,15 +56,21 @@ class ICICIDirectMFStatementEmailParser(BaseBrokerStatementParser):
             )
             return []
 
-        password, env_key = _statement_pdf_password()
-        if not password:
-            logger.error(
-                "Missing %s — cannot decrypt ICICI MF account statement PDF.",
-                env_key,
+        candidates = resolve_icici_statement_pdf_password_candidates()
+        if not candidates:
+            raise StatementPasswordRequired(
+                "icici_direct_statement",
+                "Set ICICI PDF env keys or save registered name + DOB for MF statements.",
             )
-            return []
 
-        decrypted = decrypt_pdf(pdf_bytes, password)
+        try:
+            decrypted, _used = decrypt_pdf_with_password_candidates(pdf_bytes, candidates)
+        except pikepdf.PasswordError as e:
+            raise StatementPasswordRequired(
+                "icici_direct_statement",
+                "None of the ICICI Securities MF PDF password candidates worked.",
+            ) from e
+
         try:
             txns = parse_icici_direct_mf_statement_pdf(decrypted)
             self._attachment_inv_txns.extend(txns)

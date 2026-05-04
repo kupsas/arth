@@ -69,12 +69,12 @@ from scraper.onboarding_orchestrator import (
 )
 from scraper.pdf_passwords import (
     ARTH_PDF_INGREDIENT_DOB_ISO,
-    ARTH_PDF_INGREDIENT_HDFC_ACCOUNT_NUMBER,
-    ARTH_PDF_INGREDIENT_HDFC_CC_LAST4,
+    ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID,
     ARTH_PDF_INGREDIENT_PAN,
     EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS,
+    list_pdf_password_holder_names,
 )
-from scraper.source_builder import persist_scraper_sources_from_discovery
+from scraper.source_builder import filter_redundant_nse_broker_sources, persist_scraper_sources_from_discovery
 from scraper.scheduler import resume_scheduler
 
 logger = logging.getLogger(__name__)
@@ -249,12 +249,57 @@ class PasswordRequirementRow(BaseModel):
 
 
 class PasswordIngredientsBody(BaseModel):
-    """User-supplied values merged into encrypted ``UserSecrets`` for template-derived PDF passwords."""
+    """User-supplied values merged into encrypted ``UserSecrets`` for template-derived PDF passwords.
+
+    TODO: Extend with optional literal PDF password fields (per env-key / parser_key) so users
+    never need manual .env or SQLite edits when ingredient derivation fails — persist alongside
+    ``ARTH_PDF_INGREDIENT_*`` and resolve via ``scraper.secrets_context.resolve_secret_env``.
+    """
 
     pan: str | None = Field(default=None, description="Income-tax PAN (stored uppercase).")
-    dob_iso: str | None = Field(default=None, description="Date of birth as YYYY-MM-DD for DDMMYYYY derivation.")
-    hdfc_account_number: str | None = None
-    hdfc_cc_last4: str | None = Field(default=None, description="Last four digits of the HDFC credit card for CC PDFs.")
+    dob_iso: str | None = Field(default=None, description="Date of birth as YYYY-MM-DD for DDMM derivation.")
+    hdfc_customer_id: str | None = Field(
+        default=None,
+        description="HDFC Bank net-banking customer ID (combined statement PDF password).",
+    )
+
+
+class PasswordIngredientsSaved(BaseModel):
+    """Current PDF ingredient values from ``UserSecrets`` (for Config / import UI hydration)."""
+
+    pan: str | None = None
+    dob_iso: str | None = None
+    hdfc_customer_id: str | None = None
+
+
+@router.get("/password-ingredients", response_model=PasswordIngredientsSaved)
+def get_password_ingredients_saved(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> PasswordIngredientsSaved:
+    """Return saved PAN / DOB / HDFC customer ID so the wizard survives refresh."""
+    row = session.exec(select(UserSecrets).where(UserSecrets.user_id == current_user)).first()
+    if row is None or not row.secrets_json:
+        return PasswordIngredientsSaved()
+    try:
+        data = json.loads(row.secrets_json)
+    except json.JSONDecodeError:
+        return PasswordIngredientsSaved()
+    if not isinstance(data, dict):
+        return PasswordIngredientsSaved()
+    pan_raw = data.get(ARTH_PDF_INGREDIENT_PAN)
+    dob_raw = data.get(ARTH_PDF_INGREDIENT_DOB_ISO)
+    cid_raw = data.get(ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID)
+    pan = str(pan_raw).strip().upper() if pan_raw else None
+    dob_iso = str(dob_raw).strip()[:10] if dob_raw else None
+    if dob_iso == "":
+        dob_iso = None
+    digits = "".join(c for c in str(cid_raw) if c.isdigit()) if cid_raw else ""
+    hdfc_customer_id = digits if digits else None
+    if pan == "":
+        pan = None
+    return PasswordIngredientsSaved(pan=pan, dob_iso=dob_iso, hdfc_customer_id=hdfc_customer_id)
 
 
 @router.get("/password-requirements", response_model=list[PasswordRequirementRow])
@@ -269,6 +314,7 @@ def onboarding_password_requirements(
     sources_raw = envelope.get("sources")
     if not isinstance(sources_raw, list):
         return []
+    sources_raw = filter_redundant_nse_broker_sources(sources_raw)
 
     bank = get_bank_senders_config(session, current_user)
     needed_keys: set[str] = set()
@@ -315,6 +361,16 @@ def onboarding_password_requirements(
     return out
 
 
+@router.get("/pdf-password-name-preview")
+def onboarding_pdf_password_name_preview(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return ordered name strings used for FIRST4+DDMM PDF passwords (profile + optional override)."""
+    return {"name_strings": list_pdf_password_holder_names(session, current_user)}
+
+
 @router.post("/password-ingredients")
 def onboarding_password_ingredients(
     body: PasswordIngredientsBody,
@@ -322,7 +378,10 @@ def onboarding_password_ingredients(
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Merge PAN/DOB/account fragments into ``UserSecrets`` for PDF template resolution."""
+    """Merge PAN/DOB/account fragments into ``UserSecrets`` for PDF template resolution.
+
+    Future: accept raw PDF password overrides here when we build the UI (see ``PasswordIngredientsBody``).
+    """
     row = session.exec(select(UserSecrets).where(UserSecrets.user_id == current_user)).first()
     data: dict[str, Any] = {}
     if row is not None and row.secrets_json:
@@ -351,14 +410,12 @@ def onboarding_password_ingredients(
             data[ARTH_PDF_INGREDIENT_DOB_ISO] = raw_d[:10]
         else:
             data.pop(ARTH_PDF_INGREDIENT_DOB_ISO, None)
-    if body.hdfc_account_number is not None:
-        acct = "".join(c for c in body.hdfc_account_number if c.isdigit())
-        if len(acct) > 20:
-            raise HTTPException(status_code=400, detail="Account number looks too long.")
-        data[ARTH_PDF_INGREDIENT_HDFC_ACCOUNT_NUMBER] = acct
-    if body.hdfc_cc_last4 is not None:
-        tail = "".join(c for c in body.hdfc_cc_last4 if c.isdigit())[-4:]
-        data[ARTH_PDF_INGREDIENT_HDFC_CC_LAST4] = tail
+    if body.hdfc_customer_id is not None:
+        cid = "".join(c for c in body.hdfc_customer_id if c.isdigit())
+        if cid:
+            data[ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID] = cid
+        else:
+            data.pop(ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID, None)
 
     payload = json.dumps(data)
     now = datetime.datetime.now(datetime.UTC)

@@ -19,17 +19,17 @@ import datetime
 import logging
 from typing import ClassVar
 
+import pikepdf
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.hdfc_savings_pdf import HDFCSavingsPdfParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
 from scraper.pdf_passwords import (
-    HDFC_COMBINED_STATEMENT_PASSWORD_KEYS,
     StatementPasswordRequired,
-    resolve_pdf_password_chain,
+    resolve_hdfc_combined_pdf_password_candidates,
 )
-from scraper.pdf_utils import decrypt_pdf
+from scraper.pdf_utils import decrypt_pdf_with_password_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +54,12 @@ class HDFCCombinedStatementEmailParser(BaseStatementEmailParser):
         email_sender: str = "",
         email_subject: str = "",
     ) -> list[ParsedTransaction]:
-        password = resolve_pdf_password_chain(
-            *HDFC_COMBINED_STATEMENT_PASSWORD_KEYS,
-            parser_key="hdfc_combined_statement",
-        )
-        if not password:
+        candidates = resolve_hdfc_combined_pdf_password_candidates()
+        if not candidates:
             raise StatementPasswordRequired(
                 "hdfc_combined_statement",
-                "HDFC combined statement needs HDFC_STATEMENT_PASSWORD or account number + DOB ingredients.",
+                "HDFC combined statement needs HDFC_STATEMENT_PASSWORD or HDFC customer ID "
+                "in onboarding.",
             )
 
         # Single savings account in config: last four digits of the account number (3703).
@@ -75,7 +73,14 @@ class HDFCCombinedStatementEmailParser(BaseStatementEmailParser):
         account_id = entry["account_id"]
         source_key = entry["source_key"]
 
-        decrypted = decrypt_pdf(pdf_bytes, password)
+        try:
+            decrypted, _used = decrypt_pdf_with_password_candidates(pdf_bytes, candidates)
+        except pikepdf.PasswordError as e:
+            raise StatementPasswordRequired(
+                "hdfc_combined_statement",
+                "None of the HDFC combined PDF password candidates worked. Check env keys "
+                "and customer ID.",
+            ) from e
         try:
             rows = HDFCSavingsPdfParser().parse(decrypted)
             return [_stamp(r, account_id, source_key) for r in rows]
