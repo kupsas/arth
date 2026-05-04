@@ -59,10 +59,6 @@ const TOOL_COPY: Record<string, ToolCopy> = {
     noun: "your surplus allocation",
     verbs: ["Working out", "Calculating", "Analyzing", "Reviewing"],
   },
-  get_goal_tree: {
-    noun: "how your goals connect",
-    verbs: ["Mapping out", "Tracing", "Charting", "Reviewing"],
-  },
   get_net_worth: {
     noun: "your net worth",
     verbs: ["Calculating", "Computing", "Tallying up", "Working out"],

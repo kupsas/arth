@@ -385,6 +385,15 @@ def _apply_sqlite_patches() -> None:
         if not _column_exists(conn, "goals", "sensitivity_to_returns"):
             conn.execute(text("ALTER TABLE goals ADD COLUMN sensitivity_to_returns TEXT"))
 
+        # Retire PAUSED activation (Track 3): map existing rows to ACTIVE; progress % shows gaps.
+        if _column_exists(conn, "goals", "activation_status"):
+            conn.execute(
+                text(
+                    "UPDATE goals SET activation_status = 'ACTIVE' "
+                    "WHERE UPPER(TRIM(activation_status)) = 'PAUSED'"
+                )
+            )
+
         # Enforce pyramid_id uniqueness per user when set (SQLite treats NULLs as distinct).
         if not _index_exists(conn, "uq_goals_user_pyramid_id"):
             conn.execute(
@@ -427,6 +436,28 @@ def _apply_sqlite_patches() -> None:
             conn.execute(text("ALTER TABLE goals ADD COLUMN system_priority_score REAL"))
         if not _column_exists(conn, "goals", "goal_subtype"):
             conn.execute(text("ALTER TABLE goals ADD COLUMN goal_subtype TEXT"))
+
+        # Track 3 — decomposition children reference parent on ``goals`` (replaces ``goal_links``).
+        if not _column_exists(conn, "goals", "parent_goal_id"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN parent_goal_id INTEGER"))
+        if _table_exists(conn, "goal_links") and _column_exists(conn, "goals", "parent_goal_id"):
+            conn.execute(
+                text(
+                    """
+                    UPDATE goals SET parent_goal_id = (
+                        SELECT gl.parent_goal_id FROM goal_links gl
+                        WHERE gl.child_goal_id = goals.id AND gl.link_type = 'DECOMPOSES_INTO'
+                        LIMIT 1
+                    )
+                    WHERE EXISTS (
+                        SELECT 1 FROM goal_links gl2
+                        WHERE gl2.child_goal_id = goals.id
+                          AND gl2.link_type = 'DECOMPOSES_INTO'
+                    )
+                    """
+                )
+            )
+            conn.execute(text("DROP TABLE IF EXISTS goal_links"))
 
         if not _column_exists(conn, "holdings", "earliest_liquidity_date"):
             conn.execute(

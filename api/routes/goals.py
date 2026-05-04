@@ -9,14 +9,14 @@ DELETE /api/goals/{id}      — delete a goal
 
 B.3: Hierarchy fields (tier, pyramid_id, activation_*, allocations) are validated
 on write. ``user_id`` is always taken from the session — never from the request body
-or cross-user query params. Tree/allocation/ancestors routes live in ``goal_tree.py``
-and are registered before this router so static paths win.
+or cross-user query params.
 
 Progress computation:
   - EXPENSE_LIMIT goals: auto-computed from transactions DB (current month spend)
-  - All other goal types: use goal.current_value vs goal.target_amount
-  - Response ``status`` is derived progress (ON_TRACK / AT_RISK / …), separate from
-    ``activation_status`` (PENDING / ACTIVE / COMPLETED / PAUSED).
+  - Other goals: sim-on-write cache (full multi-goal ``simulate``) — see
+    ``POST /api/goals/refresh-status`` to force a rebuild.
+  - Response includes ``computed_percentage`` plus optional ``status_data`` /
+    ``projected_completion_pct`` / ``periods_met_pct`` from the cache.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import Goal, GoalLink
+from api.models import Goal
 from api.services.goal_decomposer import (
     LoanParams,
     decompose_debt_goal,
@@ -40,7 +40,6 @@ from api.services.goal_decomposer import (
     parent_has_decompose_children,
     spec_to_goal_row,
 )
-from api.services.goal_graph import validate_link
 from api.services.inflation_service import (
     resolve_goal_inflation,
     simulation_inflation_ema_span,
@@ -58,6 +57,11 @@ from api.services.chart_metrics import (
     validate_chart_key_for_goal,
 )
 from api.services.goal_evaluator import compute_progress
+from api.services.goal_status_cache import (
+    delete_goal_status_row_for_goal,
+    refresh_goal_statuses,
+    simulation_fingerprint,
+)
 from api.services.priority_scorer import PriorityResult, compute_priority_scores
 
 logger = logging.getLogger(__name__)
@@ -129,7 +133,6 @@ class GoalUpdate(BaseModel):
     chart_key: str | None = Field(default=None, max_length=128)
     progress_cadence: str | None = None
     current_value: float | None = None
-    status: str | None = None
     notes: str | None = Field(default=None, max_length=4000)
     pyramid_id: str | None = Field(default=None, max_length=10)
     tier: str | None = Field(default=None, max_length=32)
@@ -156,22 +159,20 @@ _VALID_GOAL_TYPES = {
     "INVESTMENT", "DEBT_PAYOFF", "INSURANCE", "TAX",
 }
 
-_VALID_STATUSES = {"ON_TRACK", "AT_RISK", "BEHIND", "ACHIEVED", "PAUSED"}
-
 _VALID_PROGRESS_CADENCE = {"MONTHLY", "ANNUAL"}
 
 _VALID_TIME_HORIZON = frozenset(
     {"MONTHLY", "QUARTERLY", "ANNUAL", "MULTI_YEAR", "DECADE"}
 )
 _VALID_FUNDING_MODE = frozenset({"ACCUMULATION", "CONSTRAINT", "EVENT", "MAINTENANCE"})
-_VALID_ACTIVATION_STATUS = frozenset({"PENDING", "ACTIVE", "COMPLETED", "PAUSED"})
+_VALID_ACTIVATION_STATUS = frozenset({"PENDING", "ACTIVE", "COMPLETED"})
 _VALID_SENSITIVITY = frozenset({"LOW", "MEDIUM", "HIGH"})
 
 # L1–L4 plus legacy labels (normalised to L* on write).
 _VALID_TIERS = frozenset(
     {"L1", "L2", "L3", "L4", "VISION", "STRATEGY", "TACTIC", "OPERATIONAL"}
 )
-_VALID_GOAL_CLASSES = frozenset({"POINT_IN_TIME", "RECURRING_CASH_FLOW", "GROWTH"})
+_VALID_GOAL_CLASSES = frozenset({"POINT_IN_TIME", "RECURRING_CASH_FLOW"})
 _VALID_GOAL_SUBTYPES = frozenset(
     {
         "HOME_PURCHASE",
@@ -508,7 +509,6 @@ def create_goal(
 @router.get("")
 def list_goals(
     goal_type: str | None = Query(None),
-    status: str | None = Query(None),
     tier: str | None = Query(None),
     activation_status: str | None = Query(None),
     funding_mode: str | None = Query(None),
@@ -521,8 +521,6 @@ def list_goals(
 
     if goal_type is not None:
         query = query.where(Goal.goal_type == goal_type)
-    if status is not None:
-        query = query.where(Goal.status == status)
     if tier is not None:
         query = query.where(Goal.tier == tier.strip().upper())
     if activation_status is not None:
@@ -540,6 +538,27 @@ def list_goals(
         progress = compute_progress(goal, session)
         result.append(_goal_to_dict(goal, progress, session=session))
     return result
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# POST /refresh-status — rebuild sim-on-write goal_status_cache (debug / manual)
+# Must stay before /{goal_id} so "refresh-status" is not parsed as an integer id.
+# ───────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/refresh-status")
+def refresh_goal_simulation_cache(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict:
+    """Re-run full simulation and repopulate per-goal progress cache for this user."""
+    n = refresh_goal_statuses(session, current_user, force=True)
+    session.commit()
+    return {
+        "refreshed_goals": n,
+        "simulation_hash": simulation_fingerprint(session, current_user),
+    }
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -615,28 +634,18 @@ def decompose_goal(
 
     created_ids: list[int] = []
     for spec in result.sub_goals:
-        child = spec_to_goal_row(spec, user_id=current_user)
+        child = spec_to_goal_row(spec, user_id=current_user, parent_goal_id=goal_id)
         session.add(child)
-        session.flush()
-        if child.id is None:
-            raise HTTPException(status_code=500, detail="Failed to allocate child goal id")
-        validate_link(session, goal_id, child.id, current_user)
-        link = GoalLink(
-            parent_goal_id=goal_id,
-            child_goal_id=child.id,
-            link_type="DECOMPOSES_INTO",
-            user_id=current_user,
-            description="Created by goal decomposition",
-        )
-        session.add(link)
         try:
             session.flush()
         except IntegrityError as e:
             session.rollback()
             raise HTTPException(
                 status_code=400,
-                detail="Could not create decomposition link (duplicate or constraint).",
+                detail="Could not persist decomposition child goal.",
             ) from e
+        if child.id is None:
+            raise HTTPException(status_code=500, detail="Failed to allocate child goal id")
         created_ids.append(child.id)
 
     session.commit()
@@ -745,12 +754,6 @@ def update_goal(
 
     old_activation = goal.activation_status
     update_data = body.model_dump(exclude_unset=True)
-
-    if "status" in update_data and update_data["status"] not in _VALID_STATUSES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid status: {update_data['status']!r}. Valid: {sorted(_VALID_STATUSES)}",
-        )
 
     if "target_date" in update_data and update_data["target_date"] is not None:
         try:
@@ -922,6 +925,7 @@ def delete_goal(
     goal = session.get(Goal, goal_id)
     if not _goal_owned(goal, current_user):
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
+    delete_goal_status_row_for_goal(session, goal_id)
     session.delete(goal)
     session.commit()
 
@@ -1012,10 +1016,12 @@ def _goal_to_dict(
         "starting_balance": goal.starting_balance,
         "system_priority_score": goal.system_priority_score,
         "goal_subtype": goal.goal_subtype,
-        # Computed progress fields (progress ``status`` is separate from activation_status)
+        "parent_goal_id": goal.parent_goal_id,
         "computed_current_value": progress["current_value"],
         "computed_percentage": progress["percentage"],
-        "status": progress["status"],
+        "status_data": progress.get("status_data"),
+        "projected_completion_pct": progress.get("projected_completion_pct"),
+        "periods_met_pct": progress.get("periods_met_pct"),
         "created_at": goal.created_at.isoformat() if goal.created_at else None,
         "updated_at": goal.updated_at.isoformat() if goal.updated_at else None,
     }

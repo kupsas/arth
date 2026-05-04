@@ -16,8 +16,8 @@ def test_tool_registry_includes_planned_tools() -> None:
     from agent.tools import get_all_tools
 
     names = {t.name for t in get_all_tools()}
-    # 3 foundation + 14 other tools (top expenses merged into get_spending_by_category) = 18
-    assert len(names) == 18
+    # 3 foundation + 13 other tools (top expenses merged into get_spending_by_category) = 17
+    assert len(names) == 17
     for required in (
         "get_spending_summary",
         "get_spending_by_category",
@@ -31,7 +31,6 @@ def test_tool_registry_includes_planned_tools() -> None:
         "get_goals_overview",
         "get_goal_detail",
         "get_surplus_allocation",
-        "get_goal_tree",
         "run_projection",
         "compare_scenarios",
         "simulate_surplus_change",

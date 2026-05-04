@@ -370,8 +370,6 @@ export type GoalType =
   | "INSURANCE"
   | "TAX";
 
-export type GoalStatus = "ON_TRACK" | "AT_RISK" | "BEHIND" | "ACHIEVED" | "PAUSED";
-
 /** How automatic progress is evaluated (EXPENSE_LIMIT + INVESTMENT on dashboard). */
 export type ProgressCadence = "MONTHLY" | "ANNUAL";
 
@@ -404,13 +402,11 @@ export type GoalFundingMode =
 
 /**
  * Lifecycle state for when a goal is "in play" in the pyramid — separate from
- * progress `status` (ON_TRACK / AT_RISK / …).
+ * computed progress percentage.
  */
-export type GoalActivationStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "PAUSED";
+export type GoalActivationStatus = "PENDING" | "ACTIVE" | "COMPLETED";
 
 export type SensitivityToReturns = "LOW" | "MEDIUM" | "HIGH";
-
-export type GoalLinkType = "DECOMPOSES_INTO" | "DEPENDS_ON" | "CONTRIBUTES_TO";
 
 /** From `resolve_goal_inflation` — category vs headline CPI EMA. */
 export interface GoalInflationResolution {
@@ -436,6 +432,8 @@ export interface Goal {
   /** Defaults to MONTHLY when omitted (older API responses). */
   progress_cadence?: ProgressCadence;
   user_id: string;
+  /** Set when this goal was created as a decomposition child of another goal. */
+  parent_goal_id?: number | null;
   current_value: number | null;    // manually entered
   notes: string | null;
   /** Phase B — optional on legacy rows; API returns null when unset. */
@@ -466,7 +464,6 @@ export interface Goal {
   // Computed progress (live from DB)
   computed_current_value: number;
   computed_percentage: number;     // 0–100+
-  status: GoalStatus;
   created_at: string;
   updated_at: string;
 }
@@ -515,7 +512,6 @@ export interface GoalUpdate {
   chart_key?: string | null;
   progress_cadence?: ProgressCadence | null;
   current_value?: number | null;
-  status?: GoalStatus;
   notes?: string | null;
   pyramid_id?: string | null;
   tier?: string | null;
@@ -542,19 +538,10 @@ export interface GoalUpdate {
 // Simulation sandbox (Sub-Plan H) — mirrors api/services/simulation.py
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH */
+/** POINT_IN_TIME | RECURRING_CASH_FLOW */
 export type SimulationGoalClass =
   | "POINT_IN_TIME"
-  | "RECURRING_CASH_FLOW"
-  | "GROWTH";
-
-/** ON_TRACK | AT_RISK | BEHIND | ACHIEVED | IMPOSSIBLE */
-export type GoalSimStatus =
-  | "ON_TRACK"
-  | "AT_RISK"
-  | "BEHIND"
-  | "ACHIEVED"
-  | "IMPOSSIBLE";
+  | "RECURRING_CASH_FLOW";
 
 export interface OneTimeEvent {
   amount: number;
@@ -606,7 +593,7 @@ export interface MonthlySnapshot {
   monthly_contribution: number;
   monthly_return: number;
   target_at_month?: number | null;
-  /** Engine amortized need this month (PIT dynamic PMT, recurring monthly need, GROWTH 0). */
+  /** Engine amortized need this month (PIT dynamic PMT, recurring monthly need). */
   monthly_need?: number | null;
 }
 
@@ -615,7 +602,14 @@ export interface GoalProjection {
   goal_name: string;
   monthly_allocation: number;
   projected_completion_date: string | null;
-  status: GoalSimStatus;
+  /** POINT_IN_TIME: corpus at deadline / inflated target × 100 (uncapped). */
+  projected_completion_pct?: number | null;
+  corpus_at_deadline?: number | null;
+  inflation_adjusted_target_at_deadline?: number | null;
+  shortfall_at_deadline?: number | null;
+  /** RECURRING_CASH_FLOW: periods that met need / total billable periods × 100. */
+  periods_met_pct?: number | null;
+  worst_period_deficit?: number | null;
   projected_final_amount: number;
   shortfall: number;
   monthly_trajectory: MonthlySnapshot[];
@@ -663,8 +657,8 @@ export interface GoalDelta {
   goal_name: string;
   base_completion?: string | null;
   variant_completion?: string | null;
-  base_status?: GoalSimStatus | null;
-  variant_status?: GoalSimStatus | null;
+  base_progress_pct?: number | null;
+  variant_progress_pct?: number | null;
   months_shifted?: number | null;
 }
 
@@ -735,39 +729,6 @@ export interface PriorityResult {
 export interface GoalReorderItem {
   goal_id: number;
   allocation_priority: number;
-}
-
-/** One edge in the goal pyramid — mirrors api/routes/goal_links.py */
-export interface GoalLink {
-  id: number;
-  parent_goal_id: number;
-  child_goal_id: number;
-  link_type: GoalLinkType | string;
-  description: string | null;
-  contribution_amount: number | null;
-  user_id: string;
-  created_at: string | null;
-}
-
-export interface GoalLinkCreate {
-  parent_goal_id: number;
-  child_goal_id: number;
-  link_type: GoalLinkType | string;
-  description?: string | null;
-  contribution_amount?: number | null;
-}
-
-/**
- * GET /api/goals/tree — goals grouped by tier bucket (l1…l4) plus untiered and links.
- * Each goal includes the same fields as GET /api/goals (including computed progress).
- */
-export interface GoalTree {
-  l1: Goal[];
-  l2: Goal[];
-  l3: Goal[];
-  l4: Goal[];
-  untiered: Goal[];
-  links: GoalLink[];
 }
 
 /** GET /api/life-events — milestones referenced by activation_condition event:… atoms. */

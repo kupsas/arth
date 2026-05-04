@@ -10,7 +10,7 @@ Tables:
                         message ID so the same email is never processed twice
   - RecurringPattern  — auto-detected recurring transaction patterns (Phase 4.5c)
   - Goal              — user-defined financial goals (Phase 4.5d, hierarchy Phase B.0)
-  - GoalLink          — parent/child causal links between goals (Phase B.0)
+  - GoalStatusCache   — sim-on-write snapshot per goal (Track 3: dashboard % without re-sim)
   - InflationRate     — cached CPI / sector inflation (Goals architecture V2)
   - LifeEvent         — flags for activation DSL (event:...) (Phase B.0)
   - Holding           — portfolio position snapshot (Phase A.0)
@@ -277,7 +277,8 @@ class Goal(SQLModel, table=True):
       "INSURANCE"     — maintain adequate insurance cover (manual)
       "TAX"           — maximise 80C deductions / harvest losses (manual)
 
-    status values: "ON_TRACK" | "AT_RISK" | "BEHIND" | "ACHIEVED" | "PAUSED"
+    ``status`` column: legacy string (defaults ON_TRACK) — not used for API progress;
+    the goals API returns ``computed_percentage`` instead of categorical status.
 
     Progress for EXPENSE_LIMIT goals is auto-computed live from the transactions DB.
     All other goals use current_value (manually updated by the user).
@@ -287,8 +288,8 @@ class Goal(SQLModel, table=True):
 
     Phase B.0 — hierarchy / pyramid:
       ``tier`` groups goals (L1 / L2 / L3 / L4; legacy VISION / STRATEGY / TACTIC / OPERATIONAL).
-      ``activation_status`` is lifecycle (PENDING / ACTIVE / COMPLETED / PAUSED), separate
-      from ``status`` which remains progress (ON_TRACK / AT_RISK / …).
+      ``activation_status`` is lifecycle (PENDING / ACTIVE / COMPLETED), separate
+      from legacy ``status``; progress is expressed as ``computed_percentage`` in API responses.
       ``pyramid_id`` is a short stable id (e.g. V1, S4) unique per ``user_id`` for DSL refs.
     """
 
@@ -320,6 +321,14 @@ class Goal(SQLModel, table=True):
     progress_cadence: str = Field(default="MONTHLY", index=True)
 
     user_id: str = Field(index=True)  # always set from authenticated user on create
+
+    # Decomposition: child goals created from POST .../decompose?auto_create=true (replaces goal_links).
+    parent_goal_id: int | None = Field(
+        default=None,
+        foreign_key="goals.id",
+        index=True,
+        description="Parent goal id when this row was created as a decomposition child; NULL otherwise.",
+    )
 
     # Manual override for non-auto-computable goals (updated by PATCH /api/goals/{id})
     current_value: float | None = None
@@ -356,7 +365,7 @@ class Goal(SQLModel, table=True):
         default="ACTIVE",
         index=True,
         max_length=32,
-        description="PENDING | ACTIVE | COMPLETED | PAUSED",
+        description="PENDING | ACTIVE | COMPLETED",
     )
     activation_condition: str | None = Field(
         default=None,
@@ -388,7 +397,7 @@ class Goal(SQLModel, table=True):
     goal_class: str | None = Field(
         default=None,
         max_length=32,
-        description="POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH",
+        description="POINT_IN_TIME | RECURRING_CASH_FLOW",
     )
     recurrence_amount: float | None = Field(
         default=None,
@@ -444,36 +453,33 @@ class Goal(SQLModel, table=True):
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# GoalLink — directed edges in the goal pyramid (Phase B.0)
+# GoalStatusCache — full-simulation progress snapshot (Track 3)
 # ───────────────────────────────────────────────────────────────────────────
 
 
-class GoalLink(SQLModel, table=True):
-    """Relationship between two goals owned by the same user.
+class GoalStatusCache(SQLModel, table=True):
+    """One row per goal: last full ``simulate()`` projection fields + invalidation hash.
 
-    link_type values: DECOMPOSES_INTO | DEPENDS_ON | CONTRIBUTES_TO
-    Cycles and duplicate (parent, child, type) triples are rejected in application code (B.1).
+    Rows are rebuilt when goals/transactions/holdings change (fingerprint mismatch) or
+    when the user calls ``POST /api/goals/refresh-status``. ``monthly_trajectory`` is
+    not stored here — only headline % and supporting scalars (see ``status_data`` JSON).
     """
 
-    __tablename__ = "goal_links"
-    __table_args__ = (
-        Index(
-            "uq_goal_link_parent_child_type",
-            "parent_goal_id",
-            "child_goal_id",
-            "link_type",
-            unique=True,
-        ),
-    )
+    __tablename__ = "goal_status_cache"
 
     id: int | None = Field(default=None, primary_key=True)
-    parent_goal_id: int = Field(foreign_key="goals.id", index=True)
-    child_goal_id: int = Field(foreign_key="goals.id", index=True)
-    link_type: str = Field(max_length=32)
-    description: str | None = Field(default=None, max_length=500)
-    contribution_amount: float | None = Field(default=None, ge=0)
+    goal_id: int = Field(foreign_key="goals.id", unique=True, index=True)
     user_id: str = Field(index=True)
-    created_at: datetime.datetime = Field(
+    goal_class: str = Field(
+        max_length=32,
+        description="POINT_IN_TIME | RECURRING_CASH_FLOW (effective class at compute time).",
+    )
+    percentage: float = Field(
+        description="Headline progress: projected_completion_pct (PIT) or periods_met_pct (recurring).",
+    )
+    status_data: str = Field(sa_column=Column(Text, nullable=False))
+    simulation_hash: str = Field(index=True, max_length=64)
+    computed_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
 

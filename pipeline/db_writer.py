@@ -33,6 +33,7 @@ from sqlmodel import Session, col, select
 
 from api.models import PipelineRun, Transaction
 from api.services.account_user_map import user_id_for_account
+from api.services.goal_status_cache import invalidate_goal_status_cache
 from pipeline.models import CanonicalTransaction, ClassificationSource
 from pipeline.review_confidence import compute_review_confidence, should_auto_review_email
 
@@ -338,6 +339,8 @@ def write_to_db(
     reconciled_count = 0
     date_min: datetime.date | None = None
     date_max: datetime.date | None = None
+    # Bank data changes surplus + EXPENSE_LIMIT progress — drop cached sim rows per user.
+    affected_user_ids: set[str] = set()
 
     for txn in txns:
         content_hash = compute_content_hash(txn)
@@ -377,6 +380,8 @@ def write_to_db(
                 existing.updated_at = datetime.datetime.now(datetime.UTC)
                 session.add(existing)
                 updated_count += 1
+                if row_user_id:
+                    affected_user_ids.add(row_user_id)
             continue
 
         # ── Path B: reconciliation (statement path only) ─────────────────────
@@ -393,6 +398,9 @@ def write_to_db(
                 )
                 session.add(email_match)
                 reconciled_count += 1
+                uid_r = email_match.user_id or user_id_for_account(account_id, session)
+                if uid_r:
+                    affected_user_ids.add(uid_r)
 
                 if date_min is None or txn.txn_date < date_min:
                     date_min = txn.txn_date
@@ -474,6 +482,9 @@ def write_to_db(
         )
         session.add(db_txn)
         new_count += 1
+        ins_uid = db_txn.user_id or row_user_id
+        if ins_uid:
+            affected_user_ids.add(ins_uid)
 
         if date_min is None or txn.txn_date < date_min:
             date_min = txn.txn_date
@@ -494,4 +505,15 @@ def write_to_db(
 
     session.commit()
     session.refresh(run)
+    if affected_user_ids:
+        try:
+            for uid in affected_user_ids:
+                invalidate_goal_status_cache(session, uid)
+            session.commit()
+        except Exception:
+            logger.exception(
+                "goal_status_cache: invalidate after pipeline write failed for user_ids=%s",
+                sorted(affected_user_ids),
+            )
+            session.rollback()
     return run

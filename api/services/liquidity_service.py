@@ -26,10 +26,6 @@ from pipeline.models import AssetClass
 # Conservative sentinel when we cannot infer a real liquidity date (under-count accessible).
 _FAR_FUTURE = datetime.date(2099, 12, 31)
 
-# Goal class from goals architecture V2 — Growth goals have no deadline for matching.
-_GROWTH_CLASS = "GROWTH"
-
-
 def add_business_days(start: datetime.date, n: int) -> datetime.date:
     """Add *n* business days (Mon–Fri); no holiday calendar (India/NSE holidays not modeled)."""
     d = start
@@ -399,7 +395,8 @@ def match_holdings_to_goal(session: Session, goal_id: int, user_id: str, today: 
     """
     Holdings accessible on or before ``goal.target_date``.
 
-    **GROWTH** goals or goals with no ``target_date``: all active holdings (whole portfolio pool).
+    Goals with no ``target_date``: all active holdings (whole portfolio pool); otherwise
+    only holdings with ``earliest_liquidity_date <= target_date``.
     """
     uid = user_id.strip()
     if not uid:
@@ -410,7 +407,6 @@ def match_holdings_to_goal(session: Session, goal_id: int, user_id: str, today: 
     if g is None or g.user_id != uid:
         raise ValueError("goal_not_found")
 
-    growth = (g.goal_class or "").strip().upper() == _GROWTH_CLASS
     no_deadline = g.target_date is None
 
     rows = list(
@@ -430,7 +426,7 @@ def match_holdings_to_goal(session: Session, goal_id: int, user_id: str, today: 
         if ld is None:
             ld = compute_earliest_liquidity_date(session, h, as_of)
 
-        if growth or no_deadline:
+        if no_deadline:
             include = True
         else:
             assert g.target_date is not None

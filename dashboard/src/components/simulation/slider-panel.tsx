@@ -3,7 +3,7 @@
 /**
  * Global sandbox controls: surplus, growth, inflation, and a read-only simulation horizon.
  *
- * Horizon is computed elsewhere (latest PIT/GROWTH target year + 2); this panel only displays it.
+ * Horizon is computed elsewhere (latest PIT target year + 2); this panel only displays it.
  * Layout: one summary row for horizon, then three macro fields in a single horizontal row on
  * medium+ screens to keep the card short.
  */

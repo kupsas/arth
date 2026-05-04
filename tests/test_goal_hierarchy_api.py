@@ -4,8 +4,6 @@ API integration tests for Phase B — Goal Hierarchy endpoints.
 Covers (via FastAPI TestClient, in-memory SQLite):
   B.3 — Extended goals CRUD (hierarchy fields, enum validation, pyramid_id uniqueness,
          activation_condition validation, activation cascade on COMPLETED)
-  B.3 — GoalLink CRUD (create, duplicate guard, cycle guard, delete, patch)
-  B.3 — Goal tree routes (/tree, /allocation, /ancestors, /descendants, /impact)
   B.3 — LifeEvent routes (create, duplicate guard, patch/cascade)
 
 Security checks embedded throughout:
@@ -120,18 +118,6 @@ def _create_goal(client: TestClient, **extra) -> dict:
     return resp.json()
 
 
-def _create_link(client: TestClient, parent_id: int, child_id: int,
-                 link_type: str = "DECOMPOSES_INTO") -> dict:
-    """POST /api/goal-links and assert 201; return body."""
-    resp = client.post("/api/goal-links", json={
-        "parent_goal_id": parent_id,
-        "child_goal_id": child_id,
-        "link_type": link_type,
-    })
-    assert resp.status_code == 201, resp.text
-    return resp.json()
-
-
 def _create_event(client: TestClient, event_key: str, occurred: bool = False) -> dict:
     """POST /api/life-events and assert 201; return body."""
     resp = client.post("/api/life-events", json={
@@ -231,6 +217,11 @@ class TestGoalsCrudHierarchy:
     def test_create_goal_invalid_activation_status_rejected(self, client):
         """An unknown activation_status returns 400."""
         resp = client.post("/api/goals", json={**_GOAL_BASE, "activation_status": "ZOMBIE"})
+        assert resp.status_code == 400
+
+    def test_create_goal_retired_paused_activation_rejected(self, client):
+        """PAUSED was removed; funding gaps show in progress % instead."""
+        resp = client.post("/api/goals", json={**_GOAL_BASE, "activation_status": "PAUSED"})
         assert resp.status_code == 400
 
     def test_second_investment_goal_uses_unlinked_chart_key(self, client):
@@ -339,340 +330,7 @@ class TestGoalsCrudHierarchy:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 2. GOAL LINKS CRUD
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestGoalLinksCrud:
-    """POST / GET / PATCH / DELETE /api/goal-links."""
-
-    def test_create_link_returns_201(self, client):
-        """POST /api/goal-links returns 201 and the new link's data."""
-        parent = _create_goal(client, name="Parent", pyramid_id="V1")
-        child = _create_goal(client, name="Child", pyramid_id="S1")
-        link = _create_link(client, parent["id"], child["id"])
-        assert link["parent_goal_id"] == parent["id"]
-        assert link["child_goal_id"] == child["id"]
-        assert link["link_type"] == "DECOMPOSES_INTO"
-
-    def test_invalid_link_type_rejected(self, client):
-        """An invalid link_type (not in the allowed set) returns 400."""
-        parent = _create_goal(client, name="Parent")
-        child = _create_goal(client, name="Child")
-        resp = client.post("/api/goal-links", json={
-            "parent_goal_id": parent["id"],
-            "child_goal_id": child["id"],
-            "link_type": "TOTALLY_WRONG",
-        })
-        assert resp.status_code == 400
-
-    def test_duplicate_link_rejected(self, client):
-        """Creating the same (parent, child, link_type) triple twice returns 400."""
-        parent = _create_goal(client, name="Parent")
-        child = _create_goal(client, name="Child")
-        _create_link(client, parent["id"], child["id"])
-        # Second identical link:
-        resp = client.post("/api/goal-links", json={
-            "parent_goal_id": parent["id"],
-            "child_goal_id": child["id"],
-            "link_type": "DECOMPOSES_INTO",
-        })
-        assert resp.status_code == 400
-
-    def test_self_link_rejected(self, client):
-        """A goal cannot link to itself — returns 400."""
-        g = _create_goal(client, name="Self")
-        resp = client.post("/api/goal-links", json={
-            "parent_goal_id": g["id"],
-            "child_goal_id": g["id"],
-            "link_type": "DECOMPOSES_INTO",
-        })
-        assert resp.status_code == 400
-
-    def test_cycle_rejected(self, client):
-        """Adding a link that would close a cycle returns 400."""
-        a = _create_goal(client, name="A", pyramid_id="A1")
-        b = _create_goal(client, name="B", pyramid_id="B1")
-        _create_link(client, a["id"], b["id"])
-
-        # Adding B → A would close a cycle:
-        resp = client.post("/api/goal-links", json={
-            "parent_goal_id": b["id"],
-            "child_goal_id": a["id"],
-            "link_type": "DECOMPOSES_INTO",
-        })
-        assert resp.status_code == 400
-        assert "cycle" in resp.json()["detail"].lower()
-
-    def test_list_goal_links(self, client):
-        """GET /api/goal-links returns all links for the user."""
-        parent = _create_goal(client, name="Parent")
-        c1 = _create_goal(client, name="Child1")
-        c2 = _create_goal(client, name="Child2")
-        _create_link(client, parent["id"], c1["id"])
-        _create_link(client, parent["id"], c2["id"], link_type="DEPENDS_ON")
-
-        resp = client.get("/api/goal-links")
-        assert resp.status_code == 200
-        assert len(resp.json()) == 2
-
-    def test_list_goal_links_filter_by_parent(self, client):
-        """GET /api/goal-links?parent_goal_id=X returns only that parent's links."""
-        p1 = _create_goal(client, name="P1")
-        p2 = _create_goal(client, name="P2")
-        c = _create_goal(client, name="Child")
-        _create_link(client, p1["id"], c["id"])
-        _create_link(client, p2["id"], c["id"], link_type="CONTRIBUTES_TO")
-
-        resp = client.get(f"/api/goal-links?parent_goal_id={p1['id']}")
-        assert resp.status_code == 200
-        links = resp.json()
-        assert len(links) == 1
-        assert links[0]["parent_goal_id"] == p1["id"]
-
-    def test_patch_link_description(self, client):
-        """PATCH /api/goal-links/{id} can update description."""
-        parent = _create_goal(client, name="Parent")
-        child = _create_goal(client, name="Child")
-        link = _create_link(client, parent["id"], child["id"])
-
-        resp = client.patch(f"/api/goal-links/{link['id']}", json={
-            "description": "Updated description"
-        })
-        assert resp.status_code == 200
-        assert resp.json()["description"] == "Updated description"
-
-    def test_delete_link(self, client):
-        """DELETE /api/goal-links/{id} removes the link (204)."""
-        parent = _create_goal(client, name="Parent")
-        child = _create_goal(client, name="Child")
-        link = _create_link(client, parent["id"], child["id"])
-
-        resp = client.delete(f"/api/goal-links/{link['id']}")
-        assert resp.status_code == 204
-
-        # Verify it's gone:
-        resp = client.get("/api/goal-links")
-        assert resp.status_code == 200
-        assert all(lk["id"] != link["id"] for lk in resp.json())
-
-    def test_delete_other_users_link_returns_404(self, client):
-        """DELETE on a link owned by 'test_user' from 'other_user' returns 404."""
-        parent = _create_goal(client, name="Parent")
-        child = _create_goal(client, name="Child")
-        link = _create_link(client, parent["id"], child["id"])
-
-        with _as_user("other_user"):
-            resp = client.delete(f"/api/goal-links/{link['id']}")
-        assert resp.status_code == 404
-
-    def test_list_links_no_cross_user_leakage(self, client):
-        """GET /api/goal-links for other_user must not include test_user's links."""
-        parent = _create_goal(client, name="Parent")
-        child = _create_goal(client, name="Child")
-        _create_link(client, parent["id"], child["id"])
-
-        # other_user has no goals/links — should get empty list
-        with _as_user("other_user"):
-            resp = client.get("/api/goal-links")
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 3. GOAL TREE ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestGoalTreeEndpoints:
-    """Tests for GET /api/goals/tree, /allocation, /ancestors, /descendants, /impact."""
-
-    # ── /tree ─────────────────────────────────────────────────────────────
-
-    def test_tree_returns_tier_buckets(self, client):
-        """GET /api/goals/tree returns l1–l4/untiered + links."""
-        _create_goal(client, name="V1 Goal", tier="VISION", pyramid_id="V1")
-        _create_goal(client, name="S1 Goal", tier="STRATEGY", pyramid_id="S1")
-
-        resp = client.get("/api/goals/tree")
-        assert resp.status_code == 200
-        tree = resp.json()
-        assert "l1" in tree
-        assert "l2" in tree
-        assert "l3" in tree
-        assert "l4" in tree
-        assert "links" in tree
-        assert len(tree["l1"]) == 1
-        assert len(tree["l2"]) == 1
-
-    def test_tree_includes_links(self, client):
-        """Links between goals appear in the tree's 'links' list."""
-        v = _create_goal(client, name="Vision", tier="VISION", pyramid_id="V1")
-        s = _create_goal(client, name="Strategy", tier="STRATEGY", pyramid_id="S1")
-        _create_link(client, v["id"], s["id"])
-
-        resp = client.get("/api/goals/tree")
-        assert resp.status_code == 200
-        links = resp.json()["links"]
-        assert len(links) == 1
-        assert links[0]["parent_goal_id"] == v["id"]
-
-    def test_tree_no_cross_user_leakage(self, client):
-        """GET /api/goals/tree for other_user must not include test_user's goals."""
-        _create_goal(client, name="Private goal", tier="VISION")
-        with _as_user("other_user"):
-            resp = client.get("/api/goals/tree")
-        assert resp.status_code == 200
-        tree = resp.json()
-        all_goals = (
-            tree["l1"] + tree["l2"] +
-            tree["l3"] + tree["l4"] + tree["untiered"]
-        )
-        assert all_goals == []  # other_user has no goals
-
-    def test_tree_empty_when_no_goals(self, client):
-        """GET /api/goals/tree for a user with no goals returns empty buckets."""
-        resp = client.get("/api/goals/tree")
-        assert resp.status_code == 200
-        tree = resp.json()
-        all_goals = (
-            tree["l1"] + tree["l2"] +
-            tree["l3"] + tree["l4"] + tree["untiered"]
-        )
-        assert all_goals == []
-
-    # ── /allocation ────────────────────────────────────────────────────────
-
-    def test_allocation_sums_active_goals(self, client):
-        """GET /api/goals/allocation returns sum of ACTIVE goals' monthly_allocation."""
-        _create_goal(client, name="G1", activation_status="ACTIVE", monthly_allocation=20000)
-        _create_goal(client, name="G2", activation_status="ACTIVE", monthly_allocation=15000)
-        # PENDING goal — should not count
-        _create_goal(
-            client, name="G3", activation_status="PENDING",
-            monthly_allocation=5000, activation_condition="event:employed",
-        )
-
-        resp = client.get("/api/goals/allocation")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total_allocated"] == 35000.0
-        assert len(data["goals"]) == 2
-
-    def test_allocation_empty_when_no_active_goals(self, client):
-        """GET /api/goals/allocation returns 0 when there are no ACTIVE goals."""
-        resp = client.get("/api/goals/allocation")
-        assert resp.status_code == 200
-        assert resp.json()["total_allocated"] == 0.0
-        assert resp.json()["goals"] == []
-
-    # ── /ancestors ─────────────────────────────────────────────────────────
-
-    def test_ancestors_of_child(self, client):
-        """GET /api/goals/{id}/ancestors returns the parent chain (BFS order)."""
-        v = _create_goal(client, name="Vision", tier="VISION", pyramid_id="V1")
-        s = _create_goal(client, name="Strategy", tier="STRATEGY", pyramid_id="S1")
-        o = _create_goal(client, name="Ops", tier="OPERATIONAL", pyramid_id="O1")
-        _create_link(client, v["id"], s["id"])
-        _create_link(client, s["id"], o["id"])
-
-        resp = client.get(f"/api/goals/{o['id']}/ancestors")
-        assert resp.status_code == 200
-        ancestors = resp.json()
-        ancestor_ids = [g["id"] for g in ancestors]
-        # Immediate parent (s) comes before grandparent (v)
-        assert ancestor_ids[0] == s["id"]
-        assert v["id"] in ancestor_ids
-        assert o["id"] not in ancestor_ids  # source never returned
-
-    def test_ancestors_of_root_is_empty(self, client):
-        """GET /api/goals/{id}/ancestors for a root goal returns []."""
-        v = _create_goal(client, name="Vision", tier="VISION", pyramid_id="V1")
-        resp = client.get(f"/api/goals/{v['id']}/ancestors")
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-    def test_ancestors_of_nonexistent_goal_returns_404(self, client):
-        """GET /api/goals/99999/ancestors returns 404."""
-        resp = client.get("/api/goals/99999/ancestors")
-        assert resp.status_code == 404
-
-    def test_ancestors_no_cross_user(self, client):
-        """Ancestors endpoint scoped to the authenticated user — cannot traverse
-        other user's chain even if goal ids are known."""
-        v = _create_goal(client, name="Vision")
-        s = _create_goal(client, name="Strategy")
-        _create_link(client, v["id"], s["id"])
-
-        # other_user tries to access test_user's goal — should 404
-        with _as_user("other_user"):
-            resp = client.get(f"/api/goals/{s['id']}/ancestors")
-        assert resp.status_code == 404
-
-    # ── /descendants ────────────────────────────────────────────────────────
-
-    def test_descendants_of_root(self, client):
-        """GET /api/goals/{id}/descendants returns all children (BFS)."""
-        v = _create_goal(client, name="Vision", tier="VISION", pyramid_id="V1")
-        s = _create_goal(client, name="Strategy", tier="STRATEGY", pyramid_id="S1")
-        o = _create_goal(client, name="Ops", tier="OPERATIONAL", pyramid_id="O1")
-        _create_link(client, v["id"], s["id"])
-        _create_link(client, s["id"], o["id"])
-
-        resp = client.get(f"/api/goals/{v['id']}/descendants")
-        assert resp.status_code == 200
-        desc_ids = [g["id"] for g in resp.json()]
-        assert s["id"] in desc_ids
-        assert o["id"] in desc_ids
-        assert v["id"] not in desc_ids
-
-    def test_descendants_of_leaf_is_empty(self, client):
-        """GET /api/goals/{id}/descendants for a leaf goal returns []."""
-        leaf = _create_goal(client, name="Leaf", tier="OPERATIONAL")
-        resp = client.get(f"/api/goals/{leaf['id']}/descendants")
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-    # ── /impact ────────────────────────────────────────────────────────────
-
-    def test_impact_returns_both_directions(self, client):
-        """GET /api/goals/{id}/impact returns ancestors + descendants for a middle node."""
-        v = _create_goal(client, name="Vision", pyramid_id="V1")
-        s = _create_goal(client, name="Strategy", pyramid_id="S1")
-        o = _create_goal(client, name="Ops", pyramid_id="O1")
-        _create_link(client, v["id"], s["id"])
-        _create_link(client, s["id"], o["id"])
-
-        resp = client.get(f"/api/goals/{s['id']}/impact")
-        assert resp.status_code == 200
-        data = resp.json()
-        directions = {row["direction"] for row in data}
-        assert "ancestor" in directions
-        assert "descendant" in directions
-
-    def test_impact_includes_distance_and_link_type(self, client):
-        """Each impact row has 'distance' and 'link_type' fields."""
-        v = _create_goal(client, name="Vision", pyramid_id="V1")
-        s = _create_goal(client, name="Strategy", pyramid_id="S1")
-        _create_link(client, v["id"], s["id"])
-
-        resp = client.get(f"/api/goals/{s['id']}/impact")
-        assert resp.status_code == 200
-        row = resp.json()[0]
-        assert "distance" in row
-        assert "link_type" in row
-        assert row["distance"] == 1
-
-    def test_impact_of_isolated_goal_is_empty(self, client):
-        """A goal with no links has an empty impact list."""
-        alone = _create_goal(client, name="Alone")
-        resp = client.get(f"/api/goals/{alone['id']}/impact")
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 4. LIFE EVENTS + ACTIVATION CASCADE
+# 2. LIFE EVENTS + ACTIVATION CASCADE
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -852,37 +510,6 @@ class TestSecurityInputValidation:
         resp = client.post("/api/goals", json={**_GOAL_BASE, "monthly_allocation": -1})
         assert resp.status_code in (400, 422)
 
-    def test_link_to_nonexistent_goal_returns_404(self, client):
-        """Creating a link where parent_id doesn't exist returns 404."""
-        child = _create_goal(client, name="Child")
-        resp = client.post("/api/goal-links", json={
-            "parent_goal_id": 99999,
-            "child_goal_id": child["id"],
-            "link_type": "DECOMPOSES_INTO",
-        })
-        assert resp.status_code == 404
-
-    def test_patch_link_cannot_change_parent_child(self, client):
-        """PATCH /api/goal-links/{id} only allows description/contribution_amount.
-        Attempting to pass parent_goal_id or child_goal_id is silently ignored (only
-        whitelisted fields are applied), so the link structure stays intact.
-        """
-        p = _create_goal(client, name="Parent")
-        c1 = _create_goal(client, name="Child1")
-        c2 = _create_goal(client, name="Child2")
-        link = _create_link(client, p["id"], c1["id"])
-
-        # Attempt to change child via PATCH (field is not in GoalLinkPatch model)
-        resp = client.patch(f"/api/goal-links/{link['id']}", json={
-            "child_goal_id": c2["id"],
-            "description": "Legitimate update",
-        })
-        assert resp.status_code == 200
-        updated = resp.json()
-        # child_goal_id must remain c1, not c2
-        assert updated["child_goal_id"] == c1["id"]
-        assert updated["description"] == "Legitimate update"
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. AUTH GUARD (B.6.4) — every B.3 endpoint requires authentication
@@ -918,41 +545,6 @@ class TestAuthGuard:
 
     def test_goals_delete_requires_auth(self, bare_client):
         assert bare_client.delete("/api/goals/1").status_code == 401
-
-    # ── Goal tree endpoints ────────────────────────────────────────────────
-
-    def test_goal_tree_requires_auth(self, bare_client):
-        assert bare_client.get("/api/goals/tree").status_code == 401
-
-    def test_goal_allocation_requires_auth(self, bare_client):
-        assert bare_client.get("/api/goals/allocation").status_code == 401
-
-    def test_goal_ancestors_requires_auth(self, bare_client):
-        assert bare_client.get("/api/goals/1/ancestors").status_code == 401
-
-    def test_goal_descendants_requires_auth(self, bare_client):
-        assert bare_client.get("/api/goals/1/descendants").status_code == 401
-
-    def test_goal_impact_requires_auth(self, bare_client):
-        assert bare_client.get("/api/goals/1/impact").status_code == 401
-
-    # ── GoalLink endpoints ─────────────────────────────────────────────────
-
-    def test_goal_links_list_requires_auth(self, bare_client):
-        assert bare_client.get("/api/goal-links").status_code == 401
-
-    def test_goal_links_create_requires_auth(self, bare_client):
-        assert bare_client.post("/api/goal-links", json={
-            "parent_goal_id": 1, "child_goal_id": 2, "link_type": "DECOMPOSES_INTO",
-        }).status_code == 401
-
-    def test_goal_links_patch_requires_auth(self, bare_client):
-        assert bare_client.patch("/api/goal-links/1", json={
-            "description": "x",
-        }).status_code == 401
-
-    def test_goal_links_delete_requires_auth(self, bare_client):
-        assert bare_client.delete("/api/goal-links/1").status_code == 401
 
     # ── LifeEvent endpoints ────────────────────────────────────────────────
 

@@ -2,13 +2,11 @@
  * use-goals.ts — React Query hooks for the Goals endpoints.
  *
  * Phase 4.5d: Goals Table + API
- * Phase B.5: Goal tree, links, life events
+ * Phase B.5: Life events
  *
  * Hooks:
  *   - useGoals()          → list of goals with computed progress
  *   - useGoal(id)         → single goal
- *   - useGoalTree()       → tier-grouped graph + links (GET /api/goals/tree)
- *   - useGoalLinks()      → goal link rows (GET /api/goal-links)
  *   - useLifeEvents()     → life-event milestones (GET /api/life-events)
  *   - useCreateGoal()     → create mutation
  *   - useUpdateGoal()     → update mutation
@@ -29,8 +27,6 @@ import {
   createGoal,
   deleteGoal,
   fetchGoal,
-  fetchGoalLinks,
-  fetchGoalTree,
   fetchGoals,
   fetchLifeEvents,
   updateGoal,
@@ -39,8 +35,6 @@ import {
 import type {
   Goal,
   GoalCreate,
-  GoalLink,
-  GoalTree,
   GoalUpdate,
   LifeEvent,
   LifeEventUpdate,
@@ -56,24 +50,12 @@ export const goalKeys = {
   detail: (id: number) => [...goalKeys.all, "detail", id] as const,
 };
 
-/** Keys for GET /api/goals/tree — invalidate when goals or links change. */
-export const goalTreeKeys = {
-  all: ["goal-tree"] as const,
-};
-
-export const goalLinkKeys = {
-  all: ["goal-links"] as const,
-  list: (params?: object) => [...goalLinkKeys.all, "list", params] as const,
-};
-
 export const lifeEventKeys = {
   all: ["life-events"] as const,
 };
 
 function invalidateGoalRelatedCaches(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: goalKeys.all });
-  queryClient.invalidateQueries({ queryKey: goalTreeKeys.all });
-  queryClient.invalidateQueries({ queryKey: goalLinkKeys.all });
   queryClient.invalidateQueries({ queryKey: lifeEventKeys.all });
 }
 
@@ -104,35 +86,6 @@ export function useGoals(
     queryKey: goalKeys.list(params),
     queryFn: () => fetchGoals(params),
     // Goals progress changes daily — 1 minute stale time for freshness
-    staleTime: 60 * 1_000,
-    ...options,
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// useGoalTree — hierarchy view payload
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function useGoalTree(options?: Partial<UseQueryOptions<GoalTree>>) {
-  return useQuery<GoalTree>({
-    queryKey: goalTreeKeys.all,
-    queryFn: () => fetchGoalTree(),
-    staleTime: 60 * 1_000,
-    ...options,
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// useGoalLinks — raw edges (for future link management UI)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function useGoalLinks(
-  params?: { parent_goal_id?: number; child_goal_id?: number },
-  options?: Partial<UseQueryOptions<GoalLink[]>>,
-) {
-  return useQuery<GoalLink[]>({
-    queryKey: goalLinkKeys.list(params),
-    queryFn: () => fetchGoalLinks(params),
     staleTime: 60 * 1_000,
     ...options,
   });

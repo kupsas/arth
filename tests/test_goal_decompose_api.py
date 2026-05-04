@@ -12,7 +12,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from api.auth import get_current_user
 from api.database import get_session
 from api.main import app
-from api.models import Goal, GoalLink, RecurringPattern
+from api.models import Goal, RecurringPattern
 
 
 @pytest.fixture(name="engine")
@@ -71,7 +71,7 @@ def test_decompose_preview_returns_json(client: TestClient, engine):
     assert "annual_pct" in sim
 
 
-def test_decompose_auto_create_makes_links(client: TestClient, engine):
+def test_decompose_auto_create_sets_parent_goal_id(client: TestClient, engine):
     with Session(engine) as session:
         g = Goal(
             name="Parent",
@@ -96,10 +96,9 @@ def test_decompose_auto_create_makes_links(client: TestClient, engine):
     assert len(created) >= 1
 
     with Session(engine) as session:
-        q = select(GoalLink).where(GoalLink.parent_goal_id == gid)
+        q = select(Goal).where(Goal.parent_goal_id == gid)
         rows = list(session.exec(q).all())
         assert len(rows) >= 1
-        assert all(x.link_type == "DECOMPOSES_INTO" for x in rows)
 
 
 def test_decompose_duplicate_children_rejected(client: TestClient, engine):
@@ -125,14 +124,8 @@ def test_decompose_duplicate_children_rejected(client: TestClient, engine):
         session.commit()
         session.refresh(g)
         session.refresh(c)
-        session.add(
-            GoalLink(
-                parent_goal_id=g.id,
-                child_goal_id=c.id,
-                link_type="DECOMPOSES_INTO",
-                user_id="test_user",
-            )
-        )
+        c.parent_goal_id = g.id
+        session.add(c)
         session.commit()
         gid = g.id
 

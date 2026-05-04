@@ -135,7 +135,7 @@ export function nominalTargetFromTodaysRupees(
 }
 
 export type GoalTargetMoneyExplain = {
-  /** Show the static "today's rupees" explainer (POINT_IN_TIME / GROWTH targets). */
+  /** Show the static "today's rupees" explainer (POINT_IN_TIME lump-sum targets). */
   showTodaysMoneyLine: boolean
   /** Nominal future amount differs meaningfully from raw (inflation > 0, horizon > 0). */
   showNominalFutureLine: boolean

@@ -16,7 +16,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -28,9 +28,6 @@ logger = logging.getLogger(__name__)
 # ── Goal class constants (aligned with pipeline / API) ───────────────────────
 GC_POINT = "POINT_IN_TIME"
 GC_RECURRING = "RECURRING_CASH_FLOW"
-GC_GROWTH = "GROWTH"
-
-GoalSimStatus = Literal["ON_TRACK", "AT_RISK", "BEHIND", "ACHIEVED", "IMPOSSIBLE"]
 
 # After this many months from the recurring window anchor, the nominal need escalates
 # yearly by the goal’s inflation rate (matches decomposer short-horizon idea).
@@ -99,7 +96,7 @@ class SimulationGoal(BaseModel):
     name: str
     goal_class: str = Field(
         ...,
-        description="POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH",
+        description="POINT_IN_TIME | RECURRING_CASH_FLOW",
     )
     target_amount: float | None = None
     target_date: datetime.date | None = None
@@ -184,7 +181,7 @@ class MonthlySnapshot(BaseModel):
     target_at_month: float | None = None
     monthly_need: float | None = Field(
         None,
-        description="Engine amortized need this month (PIT dynamic PMT, recurring monthly need, GROWTH 0).",
+        description="Engine amortized need this month (PIT dynamic PMT, recurring monthly need).",
     )
 
 
@@ -196,11 +193,24 @@ class GoalProjection(BaseModel):
         description="Average monthly INR allocated to this goal over the horizon",
     )
     projected_completion_date: datetime.date | None = None
-    status: GoalSimStatus
+    # PIT: corpus at the deadline month (trajectory) / inflation-adjusted target there × 100 (uncapped)
+    projected_completion_pct: float | None = None
+    corpus_at_deadline: float | None = None
+    inflation_adjusted_target_at_deadline: float | None = None
+    shortfall_at_deadline: float | None = None
+    # Recurring: forward-projected window — periods that meet need / total billable periods × 100
+    periods_met_pct: float | None = None
+    worst_period_deficit: float | None = Field(
+        None,
+        description="RECURRING: largest (need − contribution) within any billing period chunk.",
+    )
     projected_final_amount: float
     shortfall: float = Field(
         ...,
-        description="Positive if behind nominal target at end (POINT_IN_TIME); recurring: max(0, total_needed - total_contributed)",
+        description=(
+            "PIT: shortfall_at_deadline when available; else legacy end-of-horizon gap. "
+            "RECURRING: max(0, total_needed - total_contributed) over the trajectory."
+        ),
     )
     monthly_trajectory: list[MonthlySnapshot] = Field(default_factory=list)
     periods_total: int | None = Field(
@@ -264,8 +274,9 @@ class GoalDelta(BaseModel):
     goal_name: str
     base_completion: datetime.date | None = None
     variant_completion: datetime.date | None = None
-    base_status: GoalSimStatus | None = None
-    variant_status: GoalSimStatus | None = None
+    # Headline % for the goal: PIT → projected_completion_pct, recurring → periods_met_pct
+    base_progress_pct: float | None = None
+    variant_progress_pct: float | None = None
     months_shifted: int | None = Field(
         None,
         description="Negative = variant completes earlier (in months)",
@@ -376,10 +387,17 @@ def _recurrence_period_months(freq: str | None) -> int:
 def _compute_recurring_funding_stats(
     goal: SimulationGoal,
     trajectory: list[MonthlySnapshot],
-) -> tuple[int | None, int | None, float | None, float | None, float | None]:
-    """Aggregate recurring trajectory into period counts and funding_rate (None if no billable periods)."""
+) -> tuple[
+    int | None,
+    int | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+]:
+    """Recurring: period counts, funding_rate, flows, and worst in-period (need−contrib) gap."""
     if goal.goal_class.upper() != GC_RECURRING:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     pm = _recurrence_period_months(goal.recurrence_frequency)
     total_contributed = round(sum(s.monthly_contribution for s in trajectory), 2)
     total_needed = round(sum(s.monthly_need or 0.0 for s in trajectory), 2)
@@ -394,7 +412,7 @@ def _compute_recurring_funding_stats(
             start_idx = j
             break
     if start_idx is None:
-        return 0, 0, None, total_contributed, total_needed
+        return 0, 0, None, total_contributed, total_needed, None
     end_idx = start_idx
     for j in range(len(trajectory) - 1, start_idx - 1, -1):
         if (trajectory[j].monthly_need or 0.0) > 1e-6:
@@ -404,6 +422,7 @@ def _compute_recurring_funding_stats(
 
     periods_total = 0
     periods_funded = 0
+    worst_gap = 0.0
     i = 0
     while i < len(segment):
         chunk = segment[i : i + pm]
@@ -412,25 +431,72 @@ def _compute_recurring_funding_stats(
         contrib_sum = sum(s.monthly_contribution for s in chunk)
         if need_sum <= 1e-6:
             continue
+        gap = max(0.0, need_sum - contrib_sum)
+        if gap > worst_gap:
+            worst_gap = gap
         periods_total += 1
         if contrib_sum + 1e-6 >= need_sum * 0.95:
             periods_funded += 1
 
     if periods_total <= 0:
-        return 0, 0, None, total_contributed, total_needed
+        return 0, 0, None, total_contributed, total_needed, None
 
     fr = round(periods_funded / periods_total, 4)
-    return periods_total, periods_funded, fr, total_contributed, total_needed
+    worst = round(worst_gap, 2) if worst_gap > 1e-6 else None
+    return periods_total, periods_funded, fr, total_contributed, total_needed, worst
+
+
+def _pit_deadline_financials(
+    g: SimulationGoal,
+    trajectory: list[MonthlySnapshot],
+    start_month: datetime.date,
+    sim_months: int,
+    general_inflation_pct: float,
+) -> tuple[float, float, float, float, float]:
+    """PIT: at target month and at end of horizon (last tuple value = legacy ``shortfall``)."""
+    if (
+        g.goal_class.upper() != GC_POINT
+        or g.target_amount is None
+        or g.target_date is None
+    ):
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+    td0 = g.target_date.replace(day=1)
+    m_deadline = months_between(start_month, td0)
+    eff_infl = _effective_goal_inflation(g, general_inflation_pct)
+    raw = float(g.target_amount)
+    infl_t = _inflation_target_at_month(raw, eff_infl, m_deadline)
+    if not trajectory:
+        sfd = max(0.0, infl_t)
+        pct = 0.0
+        return 0.0, round(infl_t, 2), round(sfd, 2), round(pct, 2), round(sfd, 2)
+
+    idx = min(m_deadline, len(trajectory) - 1)
+    idx = max(0, idx)
+    corpus = float(trajectory[idx].cumulative_value)
+    if infl_t <= 1e-9:
+        pct = 0.0
+    else:
+        pct = (corpus / infl_t) * 100.0
+    sfd = max(0.0, infl_t - corpus)
+    last_m = sim_months - 1
+    if last_m < 0:
+        last_m = 0
+    end_corpus = float(trajectory[-1].cumulative_value)
+    end_target = _inflation_target_at_month(raw, eff_infl, last_m)
+    end_gap = max(0.0, end_target - end_corpus)
+    return (
+        round(corpus, 2),
+        round(infl_t, 2),
+        round(sfd, 2),
+        round(pct, 2),
+        round(end_gap, 2),
+    )
 
 
 def _sort_goals_for_allocation(goals: list[SimulationGoal]) -> list[SimulationGoal]:
-    """Non-GROWTH first (by allocation_priority), then GROWTH (by allocation_priority)."""
+    """Lower ``allocation_priority`` first (1 = highest priority)."""
 
-    def key(g: SimulationGoal) -> tuple[int, int]:
-        is_growth = 1 if g.goal_class.upper() == GC_GROWTH else 0
-        return (is_growth, g.allocation_priority)
-
-    return sorted(goals, key=key)
+    return sorted(goals, key=lambda g: g.allocation_priority)
 
 
 def _pick_overflow_goal_index(
@@ -454,16 +520,13 @@ def _overflow_candidate_indices_simulate(
     completed: list[bool],
     current_month: datetime.date,
 ) -> list[int]:
-    """Goals that may absorb post-minimum surplus: PIT still open, or GROWTH — not RECURRING."""
+    """Goals that may absorb post-minimum surplus: open POINT_IN_TIME only — not RECURRING."""
     out: list[int] = []
     for i in ordered_indices:
         if completed[i]:
             continue
         g = goals[i]
         gc = g.goal_class.upper()
-        if gc == GC_GROWTH:
-            out.append(i)
-            continue
         if gc == GC_POINT:
             if g.target_amount is None or g.target_date is None:
                 continue
@@ -579,7 +642,7 @@ def _apply_minimum_monthly_contribution_floor(
 ) -> float:
     """Zero allocations in ``(0, MIN)``; add freed cash to the overflow sink or return spill.
 
-    Returns rupees **not** placed on any goal (no open PIT/GROWTH sink), to add to unallocated.
+    Returns rupees **not** placed on any goal (no open PIT sink), to add to unallocated.
     """
     min_inr = MIN_MONTHLY_GOAL_CONTRIBUTION_INR
     freed = 0.0
@@ -620,9 +683,7 @@ def _allocate_surplus_apply_minimum_floor(
     cand_j: list[int] = []
     for j, g in enumerate(ordered):
         gc = g.goal_class.upper()
-        if gc == GC_GROWTH:
-            cand_j.append(j)
-        elif gc == GC_POINT:
+        if gc == GC_POINT:
             if g.target_amount is None or g.target_date is None:
                 continue
             if months_between(month_start, g.target_date) <= 0:
@@ -754,11 +815,11 @@ def allocate_surplus(
     child education): each active goal takes min(monthly need, remaining surplus),
     in ``allocation_priority`` order.
 
-    **Pass 2 — PIT + discretionary recurring**: same min(need, remaining) rule among
-    non-GROWTH goals. Discretionary recurring does *not* jump ahead of PIT.
+    **Pass 2 — PIT + discretionary recurring**: same min(need, remaining) rule.
+    Discretionary recurring does *not* jump ahead of PIT.
 
     **Pass 3 — overflow** to one sink: lowest ``allocation_priority`` among open PIT
-    and GROWTH. RECURRING goals never absorb overflow (capped at their need).
+    goals. RECURRING goals never absorb overflow (capped at their need).
 
     When a POINT_IN_TIME goal has ``inflation_rate is None``, *general_inflation_rate*
     is used (same rule as :func:`simulate`). When *salary_growth_rate* is positive,
@@ -766,6 +827,7 @@ def allocate_surplus(
     """
     if not goals:
         return {}
+    goals = list(goals)
     td = today or datetime.date.today()
     month_start = td.replace(day=1)
     remaining = max(0.0, float(surplus))
@@ -794,8 +856,6 @@ def allocate_surplus(
     # Pass 2: PIT + discretionary recurring (compete by allocation_priority).
     for g in ordered:
         gc = g.goal_class.upper()
-        if gc == GC_GROWTH:
-            continue
         if gc == GC_RECURRING:
             if _recurring_is_mandatory_bill(g):
                 continue
@@ -835,15 +895,13 @@ def allocate_surplus(
             out[g.name] += take
             remaining -= take
 
-    # Remaining surplus → single highest-priority overflow sink (PIT still open, or GROWTH).
+    # Remaining surplus → single lowest allocation_priority among open PIT goals.
     # RECURRING goals never take more than their monthly need (EMI-style).
     if remaining > 0:
         cand_j: list[int] = []
         for j, g in enumerate(ordered):
             gc = g.goal_class.upper()
-            if gc == GC_GROWTH:
-                cand_j.append(j)
-            elif gc == GC_POINT:
+            if gc == GC_POINT:
                 if g.target_amount is None or g.target_date is None:
                     continue
                 if months_between(month_start, g.target_date) <= 0:
@@ -906,7 +964,7 @@ def _compute_pmt_ceilings(
     for i in pit_indices:
         g = goals[i]
         proj = by_name.get(g.name)
-        if proj is None or proj.status != "ACHIEVED" or proj.projected_completion_date is None:
+        if proj is None or proj.projected_completion_date is None:
             continue
         td = g.target_date
         assert td is not None
@@ -921,11 +979,7 @@ def _compute_pmt_ceilings(
             continue
         blocker_i = pit_indices[ki - 1]
         blocker_proj = by_name.get(goals[blocker_i].name)
-        if (
-            blocker_proj is None
-            or blocker_proj.projected_completion_date is None
-            or blocker_proj.status != "ACHIEVED"
-        ):
+        if blocker_proj is None or blocker_proj.projected_completion_date is None:
             continue
         cascade_date = blocker_proj.projected_completion_date
         if cascade_date.replace(day=1) > cd.replace(day=1):
@@ -993,17 +1047,35 @@ def _log_simulation_debug_pit_snapshot(
             continue
         td = g.target_date
         cd = pr.projected_completion_date
+        p_pct = pr.projected_completion_pct
         early = (
             cd is not None
             and td is not None
-            and pr.status == "ACHIEVED"
             and cd.replace(day=1) < td.replace(day=1)
         )
         parts.append(
-            f"[{i}]{g.name!r} pri={g.allocation_priority} {pr.status} "
+            f"[{i}]{g.name!r} pri={g.allocation_priority} pct={p_pct} "
             f"done={cd} target={td} early={early}",
         )
     logger.debug("simulation %s: %s", label, "; ".join(parts) if parts else "(no PIT)")
+
+
+def _projection_fully_successful(p: GoalProjection) -> bool:
+    """True when PIT reached the target in-sim, or recurring funded every billable period."""
+    if p.projected_completion_date is not None:
+        return True
+    if p.periods_met_pct is not None and p.periods_met_pct >= 100.0 - 1e-6:
+        return True
+    return False
+
+
+def _headline_sim_progress_pct(p: GoalProjection) -> float | None:
+    """The single % to show or compare: PIT completion % else recurring periods met %."""
+    if p.projected_completion_pct is not None:
+        return p.projected_completion_pct
+    if p.periods_met_pct is not None:
+        return p.periods_met_pct
+    return None
 
 
 def _simulate_inner(
@@ -1088,13 +1160,7 @@ def _simulate_inner(
 
         remaining_surplus = max(0.0, active_surplus + extra)
 
-        ordered_indices = sorted(
-            by_idx,
-            key=lambda idx: (
-                1 if goals[idx].goal_class.upper() == GC_GROWTH else 0,
-                goals[idx].allocation_priority,
-            ),
-        )
+        ordered_indices = sorted(by_idx, key=lambda idx: goals[idx].allocation_priority)
 
         alloc_this_month: dict[int, float] = {i: 0.0 for i in range(n_goals)}
 
@@ -1125,8 +1191,6 @@ def _simulate_inner(
                 continue
             g = goals[i]
             gc = g.goal_class.upper()
-            if gc == GC_GROWTH:
-                continue
 
             if gc == GC_RECURRING:
                 if _recurring_is_mandatory_bill(g):
@@ -1166,7 +1230,7 @@ def _simulate_inner(
                 remaining_surplus -= take
 
         # Post-minimum surplus → one overflow bucket: lowest allocation_priority among
-        # POINT_IN_TIME (still chasing) and GROWTH. RECURRING does not absorb overflow.
+        # open POINT_IN_TIME goals. RECURRING does not absorb overflow.
         if remaining_surplus > 0:
             cand = _overflow_candidate_indices_simulate(
                 goals, ordered_indices, completed, current_month
@@ -1207,8 +1271,6 @@ def _simulate_inner(
                 if ccap is not None:
                     nd = min(nd, ccap)
                 need_by_idx[ii] = nd
-            elif gcls == GC_GROWTH:
-                need_by_idx[ii] = 0.0
             else:
                 need_by_idx[ii] = 0.0
         _redistribute_excess_to_shortfalls(goals, alloc_this_month, need_by_idx, completed)
@@ -1280,9 +1342,7 @@ def _simulate_inner(
                     beneficiaries = [
                         goals[j].name
                         for j in ordered_indices
-                        if j != i
-                        and not completed[j]
-                        and goals[j].goal_class.upper() != GC_GROWTH
+                        if j != i and not completed[j]
                     ]
                     cascade_events.append(
                         CascadeEvent(
@@ -1314,49 +1374,47 @@ def _simulate_inner(
         surplus_map[g.name] = round(avg_alloc, 2)
         final_amt = current_value[i]
 
-        st: GoalSimStatus = "ON_TRACK"
         shortfall = 0.0
+        p_pct: float | None = None
+        p_m_pct: float | None = None
+        corpus_d: float | None = None
+        infl_t_d: float | None = None
+        shortfall_at_dl: float | None = None
+        wdef: float | None = None
         periods_total: int | None = None
         periods_funded: int | None = None
         funding_rate: float | None = None
         total_contributed: float | None = None
         total_needed: float | None = None
 
-        if g.goal_class.upper() == GC_POINT and g.target_amount is not None:
-            eff_infl = _effective_goal_inflation(g, params.general_inflation_rate)
-            final_target = _inflation_target_at_month(
-                float(g.target_amount),
-                eff_infl,
-                params.simulation_months - 1,
+        if (
+            g.goal_class.upper() == GC_POINT
+            and g.target_amount is not None
+            and g.target_date is not None
+        ):
+            cps, it, sh_at_dead, pct, end_gap = _pit_deadline_financials(
+                g,
+                trajectories[i],
+                start_month,
+                sim_months,
+                params.general_inflation_rate,
             )
-            if completed[i]:
-                st = "ACHIEVED"
-            elif final_amt >= final_target * 0.99:
-                st = "ON_TRACK"
-            elif final_amt >= final_target * 0.8:
-                st = "AT_RISK"
-            elif final_amt >= final_target * 0.2:
-                st = "BEHIND"
-            else:
-                st = "IMPOSSIBLE"
-            shortfall = max(0.0, final_target - final_amt)
+            p_pct = pct
+            shortfall = end_gap
+            corpus_d = cps
+            infl_t_d = it
+            shortfall_at_dl = sh_at_dead
         elif g.goal_class.upper() == GC_RECURRING:
-            periods_total, periods_funded, funding_rate, total_contributed, total_needed = (
+            periods_total, periods_funded, funding_rate, total_contributed, total_needed, wdef = (
                 _compute_recurring_funding_stats(g, trajectories[i])
             )
             shortfall = max(0.0, (total_needed or 0.0) - (total_contributed or 0.0))
-            if funding_rate is None:
-                st = "ON_TRACK"
-            elif funding_rate >= 0.95:
-                st = "ACHIEVED" if (periods_total or 0) > 0 and periods_funded == periods_total else "ON_TRACK"
-            elif funding_rate >= 0.75:
-                st = "AT_RISK"
-            elif funding_rate >= 0.50:
-                st = "BEHIND"
-            else:
-                st = "IMPOSSIBLE"
+            p_m_pct = (
+                round(100.0 * (periods_funded or 0) / (periods_total or 1), 2)
+                if (periods_total or 0) > 0
+                else None
+            )
         else:
-            st = "ON_TRACK"
             shortfall = 0.0
 
         projections.append(
@@ -1365,7 +1423,12 @@ def _simulate_inner(
                 goal_name=g.name,
                 monthly_allocation=round(avg_alloc, 2),
                 projected_completion_date=completion_date[i],
-                status=st,
+                projected_completion_pct=p_pct,
+                periods_met_pct=p_m_pct,
+                corpus_at_deadline=corpus_d,
+                inflation_adjusted_target_at_deadline=infl_t_d,
+                shortfall_at_deadline=shortfall_at_dl,
+                worst_period_deficit=wdef,
                 projected_final_amount=round(final_amt, 2),
                 shortfall=round(shortfall, 2),
                 monthly_trajectory=trajectories[i],
@@ -1377,7 +1440,7 @@ def _simulate_inner(
             )
         )
 
-    projections.sort(key=lambda p: (p.status != "ACHIEVED", p.goal_name))
+    projections.sort(key=lambda p: (not _projection_fully_successful(p), p.goal_name))
 
     total_alloc = sum(surplus_map.values())
     avg_unallocated = sum_unallocated / sim_months
@@ -1402,15 +1465,17 @@ def simulate(params: SimulationParams) -> SimulationResult:
     1% relative) or :data:`MAX_REFINEMENT_PASSES` is reached.
 
     **When results look unchanged:** refinement only runs if at least one PIT goal has
-    ``status == ACHIEVED`` and ``projected_completion_date`` is *before* the goal’s
-    ``target_date`` month. Otherwise ``_compute_pmt_ceilings`` returns ``{}`` and only
-    the first inner pass runs (same as pre-refinement behavior).
+    ``projected_completion_date`` set (reached the inflated target in-sim) *before* the
+    goal’s ``target_date`` month. Otherwise ``_compute_pmt_ceilings`` returns ``{}`` and
+    only the first inner pass runs (same as pre-refinement behavior).
 
     **Debug:** set ``ARTH_SIMULATION_DEBUG=1`` or ``arth_simulation_debug=1`` in the API
     process environment (e.g. root ``.env`` loaded by ``python-dotenv``) and restart
     uvicorn. Logs go to ``data/logs/arth.log`` at DEBUG (stdout stays INFO unless you
     lower the stream level).
     """
+    params = params.model_copy(update={"goals": list(params.goals)})
+
     dbg = _simulation_debug_enabled()
     if dbg:
         logger.debug(
@@ -1431,7 +1496,7 @@ def simulate(params: SimulationParams) -> SimulationResult:
         if not ceilings:
             if dbg:
                 logger.debug(
-                    "simulate refinement: no ceilings (no eligible PIT — need ACHIEVED "
+                    "simulate refinement: no ceilings (no eligible PIT — need early completion "
                     "with completion month strictly before target month, plus predecessor PIT). "
                     "passes_used=%d",
                     pass_num,
@@ -1509,13 +1574,15 @@ def compare_scenarios(
             elif bcd and not vcd:
                 ms = 60
 
+            b_pct = _headline_sim_progress_pct(bp)
+            v_pct = _headline_sim_progress_pct(vp)
             deltas.append(
                 GoalDelta(
                     goal_name=gn,
                     base_completion=bcd,
                     variant_completion=vcd,
-                    base_status=bp.status,
-                    variant_status=vp.status,
+                    base_progress_pct=b_pct,
+                    variant_progress_pct=v_pct,
                     months_shifted=ms,
                 )
             )

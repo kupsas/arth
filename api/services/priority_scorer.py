@@ -84,11 +84,11 @@ class PriorityResult(BaseModel):
 def _effective_goal_class(goal: Goal) -> str:
     """Resolve goal_class; infer from goal_type when unset (legacy rows)."""
     gc = (goal.goal_class or "").strip().upper()
-    if gc in ("POINT_IN_TIME", "RECURRING_CASH_FLOW", "GROWTH"):
+    if gc in ("POINT_IN_TIME", "RECURRING_CASH_FLOW"):
         return gc
     # Legacy inference
     if goal.goal_type == "INVESTMENT":
-        return "GROWTH"
+        return "POINT_IN_TIME"
     if goal.goal_type == "EXPENSE_LIMIT":
         return "RECURRING_CASH_FLOW"
     return "POINT_IN_TIME"
@@ -146,13 +146,10 @@ def time_pressure(goal: Goal, today: datetime.date) -> float:
     """
     Dimension 1: how urgently this goal needs surplus funding (0–100).
 
-    GROWTH goals: always low (10). RECURRING: urgency from proximity of next payment.
+    RECURRING: urgency from proximity of next payment.
     POINT_IN_TIME: ``behind_ratio`` vs timeline (see master plan).
     """
     gclass = _effective_goal_class(goal)
-
-    if gclass == "GROWTH":
-        return 10.0
 
     if gclass == "RECURRING_CASH_FLOW":
         nxt = _next_recurrence_date(goal, today)
@@ -196,8 +193,6 @@ def time_pressure(goal: Goal, today: datetime.date) -> float:
 def consequence_severity(goal: Goal) -> float:
     """Dimension 2: impact if the goal is missed (0–100)."""
     gclass = _effective_goal_class(goal)
-    if gclass == "GROWTH":
-        return 10.0
 
     subtype = (goal.goal_subtype or "").strip().upper() or None
     base = CONSEQUENCE_SCORES.get(subtype, 30.0) if subtype else 30.0
@@ -242,9 +237,6 @@ def funding_feasibility(
     """
     gclass = _effective_goal_class(goal)
     needs_revision = False
-
-    if gclass == "GROWTH":
-        return 20.0, False
 
     if monthly_surplus <= 0 and gclass in ("POINT_IN_TIME", "RECURRING_CASH_FLOW"):
         # Nothing can be funded from surplus; flag high urgency on feasibility axis.
@@ -297,10 +289,9 @@ def asset_alignment(
     """
     Dimension 4: inverted — higher coverage by accessible holdings => lower score.
 
-    GROWTH / no deadline: neutral 50 (whole portfolio matches per liquidity service).
+    No deadline on a POINT_IN_TIME goal: neutral 50 (cannot align maturities to a date).
     """
-    gclass = _effective_goal_class(goal)
-    if gclass == "GROWTH" or goal.target_date is None:
+    if goal.target_date is None:
         return 50.0
 
     assert goal.id is not None
@@ -340,12 +331,6 @@ def generate_explanation(
     """One-line explanation; dominant factor drives the blurb."""
     name = goal.name
     dominant = _dominant_factor_name(breakdown)
-
-    if _effective_goal_class(goal) == "GROWTH":
-        return (
-            f"Ranked #{rank}: {name} — growth goal; absorbs remaining surplus "
-            f"after higher-priority goals."
-        )
 
     parts: list[str] = []
     if dominant == "time_pressure":
@@ -432,7 +417,7 @@ def compute_priority_scores(
         )
         rows.append((g, bd, composite, needs_rev))
 
-    # Sort: score desc, then expected_return_rate desc (tie-break for GROWTH), then id
+    # Sort: score desc, then expected_return_rate desc (tie-break), then id
     def sort_key(item: tuple[Goal, PriorityBreakdown, float, bool]) -> tuple[float, float, int]:
         goal, _, score, _ = item
         er = goal.expected_return_rate or 0.0

@@ -40,6 +40,7 @@ _TIER_MAP = {
 }
 
 _FAR_FUTURE = datetime.date(2099, 12, 31)
+_DEFAULT_GROWTH_HORIZON_YEARS = 10
 
 
 def _add_business_days(start: datetime.date, n: int) -> datetime.date:
@@ -89,7 +90,7 @@ def _goal_class_from_type(goal_type: str) -> str:
     if gt == "EXPENSE_LIMIT":
         return "RECURRING_CASH_FLOW"
     if gt == "INVESTMENT":
-        return "GROWTH"
+        return "POINT_IN_TIME"
     # SAVINGS, EMERGENCY_FUND, DEBT_PAYOFF, TAX, INSURANCE, …
     return "POINT_IN_TIME"
 
@@ -114,6 +115,7 @@ def run_migration() -> None:
     with Session(engine) as session:
         goals = session.exec(select(Goal)).all()
         tier_updates = 0
+        growth_to_pit = 0
         for g in goals:
             t = (g.tier or "").strip().upper()
             if t in _TIER_MAP:
@@ -121,6 +123,13 @@ def run_migration() -> None:
                 tier_updates += 1
             if g.goal_class is None:
                 g.goal_class = _goal_class_from_type(g.goal_type)
+            if (g.goal_class or "").strip().upper() == "GROWTH":
+                g.goal_class = "POINT_IN_TIME"
+                growth_to_pit += 1
+                if g.target_date is None:
+                    g.target_date = today + datetime.timedelta(
+                        days=365 * _DEFAULT_GROWTH_HORIZON_YEARS
+                    )
             if g.goal_subtype is None:
                 g.goal_subtype = _goal_subtype_from_type(g.goal_type)
             session.add(g)
@@ -136,6 +145,8 @@ def run_migration() -> None:
         session.commit()
         print(f"  ✓ Tier labels migrated (rows touched): {tier_updates}")
         print(f"  ✓ goal_class / goal_subtype backfilled for {len(goals)} goals")
+        if growth_to_pit:
+            print(f"  ✓ GROWTH → POINT_IN_TIME (with default horizon if needed): {growth_to_pit} goals")
         print(f"  ✓ earliest_liquidity_date set for {liq_updates} holdings (was NULL)")
 
     print("\nMigration complete.\n")

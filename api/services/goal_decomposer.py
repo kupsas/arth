@@ -2,7 +2,7 @@
 Goal decomposition and pattern-based suggestions (Goals architecture Sub-Plan D).
 
 Pure math helpers build sub-goal *specs* (Pydantic models). The API can preview them
-or persist child ``Goal`` rows plus ``GoalLink`` rows (DECOMPOSES_INTO).
+or persist child ``Goal`` rows (``parent_goal_id`` points at the decomposed parent).
 
 Design notes:
   - Point-in-time math follows the master plan: inflation-adjust target, FV of
@@ -22,7 +22,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from sqlmodel import Session, col, select
 
-from api.models import Goal, GoalLink, RecurringPattern
+from api.models import Goal, RecurringPattern
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class LoanParams(BaseModel):
 
 
 class SubGoalSpec(BaseModel):
-    """Suggested child goal — maps to ``Goal`` + ``GoalLink`` on persist."""
+    """Suggested child goal — maps to a ``Goal`` row (with ``parent_goal_id``) on persist."""
 
     name: str
     tier: str = Field(..., description="L2 | L3 | L4")
@@ -455,7 +455,7 @@ def suggest_goals_from_patterns(session: Session, user_id: str) -> list[GoalSugg
                     source_pattern_id=p.id or 0,
                     counterparty=p.counterparty,
                     suggested_name="SIP / investment target",
-                    goal_class="GROWTH",
+                    goal_class="POINT_IN_TIME",
                     goal_type="INVESTMENT",
                     recurrence_amount=amt,
                     recurrence_frequency="MONTHLY",
@@ -512,12 +512,11 @@ def _title_from_counterparty(cp: str) -> str:
 
 
 def parent_has_decompose_children(session: Session, parent_goal_id: int, user_id: str) -> bool:
-    """True if any DECOMPOSES_INTO link exists from this parent."""
+    """True if any decomposition child goal already exists for this parent."""
     q = (
-        select(GoalLink.id)
-        .where(GoalLink.parent_goal_id == parent_goal_id)
-        .where(GoalLink.link_type == "DECOMPOSES_INTO")
-        .where(GoalLink.user_id == user_id)
+        select(Goal.id)
+        .where(Goal.parent_goal_id == parent_goal_id)
+        .where(Goal.user_id == user_id)
     )
     return session.exec(q).first() is not None
 
@@ -526,6 +525,7 @@ def spec_to_goal_row(
     spec: SubGoalSpec,
     *,
     user_id: str,
+    parent_goal_id: int | None = None,
 ) -> Goal:
     """Build a ``Goal`` ORM object from a ``SubGoalSpec`` (not yet added to session)."""
     # Derive allocation_priority later in API if needed; leave None.
@@ -535,6 +535,7 @@ def spec_to_goal_row(
         target_amount=spec.target_amount,
         target_date=spec.target_date,
         user_id=user_id,
+        parent_goal_id=parent_goal_id,
         tier=spec.tier,
         goal_class=spec.goal_class,
         recurrence_amount=spec.recurrence_amount,

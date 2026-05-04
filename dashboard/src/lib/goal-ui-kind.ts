@@ -5,7 +5,7 @@
  * (simulation shape). We derive `goal_type` from the user's kind choice so the
  * server contract stays unchanged.
  *
- * - POINT_IN_TIME / GROWTH / RECURRING_CASH_FLOW → map to goal_class + goal_type
+ * - POINT_IN_TIME / RECURRING_CASH_FLOW → map to goal_class + goal_type
  * - EXPENSE_LIMIT → only goal_type (chart-linked spend caps); goal_class stays unset
  */
 
@@ -17,17 +17,15 @@ import {
   CHART_KEY_INVESTMENT_NET,
 } from "@/lib/chart-keys"
 
-/** Four options in the dashboard: three V2 classes + spending cap (legacy EXPENSE_LIMIT). */
+/** Three simulation shapes in the dashboard + spending cap (legacy EXPENSE_LIMIT). */
 export type GoalUiKind =
   | "POINT_IN_TIME"
   | "RECURRING_CASH_FLOW"
-  | "GROWTH"
   | "EXPENSE_LIMIT"
 
 export const GOAL_UI_KIND_LABELS: Record<GoalUiKind, string> = {
-  POINT_IN_TIME: "One-time target",
+  POINT_IN_TIME: "One-time or investment target (lump sum)",
   RECURRING_CASH_FLOW: "Recurring cash flow (EMI, rent…)",
-  GROWTH: "Growth / invest toward a target",
   EXPENSE_LIMIT: "Spending cap (budget)",
 }
 
@@ -38,13 +36,13 @@ export interface AddGoalFormState {
   notes: string
   priority: number
   linked_layer: number
-  /** POINT_IN_TIME, GROWTH, EXPENSE_LIMIT */
+  /** POINT_IN_TIME, EXPENSE_LIMIT */
   target_amount?: number
   target_date?: string
-  /** POINT_IN_TIME, GROWTH */
+  /** POINT_IN_TIME */
   starting_balance?: number
   goal_specific_inflation_rate?: number
-  /** GROWTH */
+  /** POINT_IN_TIME (optional; defaults on server if unset) */
   expected_return_rate?: number
   /** RECURRING_CASH_FLOW */
   recurrence_amount?: number
@@ -80,7 +78,6 @@ export function defaultAddGoalForm(): AddGoalFormState {
  */
 export function simulationGoalClassToGoalType(gc: string): GoalType {
   const u = gc.toUpperCase()
-  if (u === "GROWTH") return "INVESTMENT"
   if (u === "RECURRING_CASH_FLOW") return "DEBT_PAYOFF"
   return "SAVINGS"
 }
@@ -91,9 +88,8 @@ export function simulationGoalClassToGoalType(gc: string): GoalType {
 export function inferGoalUiKind(goal: Goal): GoalUiKind {
   if (goal.goal_type === "EXPENSE_LIMIT") return "EXPENSE_LIMIT"
   if (goal.goal_class === "RECURRING_CASH_FLOW") return "RECURRING_CASH_FLOW"
-  if (goal.goal_class === "GROWTH") return "GROWTH"
   if (goal.goal_class === "POINT_IN_TIME") return "POINT_IN_TIME"
-  if (goal.goal_type === "INVESTMENT") return "GROWTH"
+  if (goal.goal_type === "INVESTMENT") return "POINT_IN_TIME"
   if (goal.goal_type === "DEBT_PAYOFF") return "RECURRING_CASH_FLOW"
   return "POINT_IN_TIME"
 }
@@ -127,18 +123,22 @@ export function addGoalFormToCreatePayload(form: AddGoalFormState): GoalCreate {
         progress_cadence: form.progress_cadence,
         chart_key: form.chart_key ?? CHART_KEY_EXPENSE_NEED_WANT_STACK,
       }
-    case "POINT_IN_TIME":
+    case "POINT_IN_TIME": {
+      const fromInvestmentChart = form.chart_key === CHART_KEY_INVESTMENT_NET
       return {
         ...base,
-        goal_type: "SAVINGS",
+        goal_type: fromInvestmentChart ? "INVESTMENT" : "SAVINGS",
         goal_class: "POINT_IN_TIME",
         target_amount: form.target_amount,
         target_date: form.target_date || undefined,
         starting_balance: form.starting_balance,
         goal_specific_inflation_rate: form.goal_specific_inflation_rate,
+        expected_return_rate: form.expected_return_rate,
         current_value: form.starting_balance,
         goal_subtype: form.goal_subtype || "CUSTOM",
+        chart_key: fromInvestmentChart ? CHART_KEY_INVESTMENT_NET : undefined,
       }
+    }
     case "RECURRING_CASH_FLOW":
       return {
         ...base,
@@ -150,20 +150,6 @@ export function addGoalFormToCreatePayload(form: AddGoalFormState): GoalCreate {
         recurrence_end: form.recurrence_end || undefined,
         goal_subtype: form.goal_subtype || undefined,
       }
-    case "GROWTH":
-      return {
-        ...base,
-        goal_type: "INVESTMENT",
-        goal_class: "GROWTH",
-        target_amount: form.target_amount,
-        target_date: form.target_date || undefined,
-        starting_balance: form.starting_balance,
-        expected_return_rate: form.expected_return_rate,
-        goal_specific_inflation_rate: form.goal_specific_inflation_rate,
-        current_value: form.starting_balance,
-        chart_key: CHART_KEY_INVESTMENT_NET,
-        goal_subtype: form.goal_subtype || "CUSTOM",
-      }
   }
 }
 
@@ -172,7 +158,7 @@ export function prefillAddFormForChartKey(
   chartKey: string | null | undefined,
 ): Partial<AddGoalFormState> {
   if (chartKey === CHART_KEY_INVESTMENT_NET) {
-    return { uiKind: "GROWTH" }
+    return { uiKind: "POINT_IN_TIME", chart_key: CHART_KEY_INVESTMENT_NET }
   }
   if (chartKey === CHART_KEY_EXPENSE_NEED_WANT_STACK || chartKey?.startsWith("category:")) {
     return { uiKind: "EXPENSE_LIMIT", chart_key: chartKey ?? undefined }

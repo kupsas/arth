@@ -25,8 +25,6 @@ from api.services.inflation_service import sync_imf_cpi_history
 from api.services.price_feed import run_startup_price_sync
 from api.routes.auth import router as auth_router
 from api.routes.chat_ws import router as chat_router
-from api.routes.goal_links import router as goal_links_router
-from api.routes.goal_tree import router as goal_tree_router
 from api.routes.goals import router as goals_router
 from api.routes.life_events import router as life_events_router
 from api.routes.holdings import router as holdings_router
@@ -192,10 +190,7 @@ app.include_router(liquidity_router,    prefix="/api/liquidity",     tags=["Liqu
 app.include_router(goal_suggestions_router, prefix="/api/goal-suggestions", tags=["Goal suggestions"], dependencies=_auth)
 app.include_router(inflation_router,   prefix="/api/inflation",     tags=["Inflation"],     dependencies=_auth)
 app.include_router(simulate_router,    prefix="/api/simulate",      tags=["Simulation"],    dependencies=_auth)
-# goal_tree_router first: static paths /tree and /allocation must not hit /{goal_id}.
-app.include_router(goal_tree_router,   prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
 app.include_router(goals_router,        prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
-app.include_router(goal_links_router,   prefix="/api/goal-links",   tags=["Goal links"],    dependencies=_auth)
 app.include_router(life_events_router, prefix="/api/life-events",   tags=["Life events"],   dependencies=_auth)
 app.include_router(settings_router,    prefix="/api/settings",      tags=["Settings"],      dependencies=_auth)
 app.include_router(

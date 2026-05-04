@@ -6,7 +6,6 @@
 
 import * as React from "react";
 
-import { defaultHypotheticalGoal } from "@/components/simulation/goal-cards";
 import { GoalExplorer } from "@/components/simulation/goal-explorer";
 import { SaveSimulationDialog } from "@/components/simulation/save-dialog";
 import { SliderPanel } from "@/components/simulation/slider-panel";
@@ -14,15 +13,33 @@ import { SurplusWaterfall } from "@/components/simulation/surplus-waterfall";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSimulation } from "@/hooks/use-simulation";
+import { newSimulationClientRowId } from "@/lib/simulation-goal-identity";
+import type { SimulationGoal } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
+
+/** Default row when the user adds a hypothetical goal in the sandbox (was ``goal-cards``). */
+function defaultHypotheticalGoal(): SimulationGoal {
+  return {
+    id: null,
+    client_row_id: newSimulationClientRowId(),
+    name: "New hypothetical goal",
+    goal_class: "POINT_IN_TIME",
+    target_amount: 500000,
+    target_date: new Date(Date.now() + 86400 * 365 * 3).toISOString().slice(0, 10),
+    starting_balance: 0,
+    allocation_priority: 50,
+    expected_return_rate: 10,
+    inflation_rate: null,
+    goal_subtype: "CUSTOM",
+  };
+}
 
 export default function SimulatePage() {
   const {
     baseParams,
     baseResult,
     draftParams,
-    meta,
     result,
     isLoading,
     isSimulating,

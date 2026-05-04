@@ -74,8 +74,7 @@ async def generate_user_profile(client: AsyncClient) -> str:
             for row in goals[:8]:
                 name = row.get("name", "?")
                 pct = row.get("computed_percentage")
-                stat = row.get("status")
-                parts.append(f"- **{name}** — progress ~{pct!s}%, status {stat!s}")
+                parts.append(f"- **{name}** — progress ~{pct!s}% (of target or cap)")
         parts.append("")
         parts.append("### Priority scores (system)")
         for p in (pri.get("priorities") or [])[:8]:

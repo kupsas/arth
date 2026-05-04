@@ -62,11 +62,13 @@ def _sim_body():
         "goals": [
             {
                 "name": "Test goal",
-                "goal_class": "GROWTH",
+                "goal_class": "POINT_IN_TIME",
                 "allocation_priority": 1,
                 "expected_return_rate": 10.0,
                 "inflation_rate": 6.0,
                 "starting_balance": 0.0,
+                "target_amount": 50_000_000.0,
+                "target_date": "2050-12-01",
             }
         ],
         "monthly_surplus": 50_000.0,
@@ -110,8 +112,12 @@ def test_post_allocate(client: TestClient) -> None:
             "goals": [
                 {
                     "name": "G",
-                    "goal_class": "GROWTH",
+                    "goal_class": "POINT_IN_TIME",
                     "allocation_priority": 1,
+                    "target_amount": 1e12,
+                    "target_date": "2100-01-01",
+                    "starting_balance": 0.0,
+                    "expected_return_rate": 10.0,
                 }
             ],
             "surplus": 25_000.0,

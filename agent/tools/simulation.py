@@ -83,12 +83,21 @@ def format_run_projection_for_agent(
                 continue
         comp = _parse_date(p.get("projected_completion_date"))
         months_to_completion = _months_between(anchor, comp)
-        st = str(p.get("status") or "")
-        on_track = st in ("ON_TRACK", "ACHIEVED")
+        pit_pct = p.get("projected_completion_pct")
+        rec_pct = p.get("periods_met_pct")
+        if pit_pct is not None:
+            headline = float(pit_pct)
+        elif rec_pct is not None:
+            headline = float(rec_pct)
+        else:
+            headline = None
+        on_track = headline is not None and headline >= 60.0
         projections_out.append(
             {
                 "goal_name": name,
-                "status": st,
+                "projected_completion_pct": pit_pct,
+                "periods_met_pct": rec_pct,
+                "headline_progress_pct": headline,
                 "projected_completion_date": str(p.get("projected_completion_date"))
                 if p.get("projected_completion_date")
                 else None,
@@ -194,8 +203,8 @@ def format_compare_result_for_agent(
                 if d.get("variant_completion")
                 else None,
                 "months_shifted": d.get("months_shifted"),
-                "base_status": d.get("base_status"),
-                "variant_status": d.get("variant_status"),
+                "base_progress_pct": d.get("base_progress_pct"),
+                "variant_progress_pct": d.get("variant_progress_pct"),
             }
         )
     return {

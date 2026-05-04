@@ -4,9 +4,9 @@
  * Rule (product): run through **December of (latest goal end calendar year + 2)**.
  * Example: a goal with a deadline in 2046 → horizon includes all of 2048 (ends Dec 2048).
  *
- * Only **POINT_IN_TIME** and **GROWTH** goals participate — we take each such goal’s
- * `target_date` and use the latest year among them. **RECURRING** goals are ignored here
- * (they may have no end date or would skew the horizon awkwardly).
+ * Only **POINT_IN_TIME** goals participate — we take each such goal’s `target_date` and use
+ * the latest year among them. **RECURRING** goals are ignored here (they may have no end date
+ * or would skew the horizon awkwardly).
  *
  * This mirrors how the Python engine counts months from `as_of_date` (month 0 = first
  * simulated month) so the last simulated month is the last month we need for that horizon.
@@ -21,15 +21,14 @@ export const SIMULATION_MONTHS_MAX = 600;
 const FALLBACK_SIMULATION_MONTHS = 240;
 
 const GC_POINT = "POINT_IN_TIME";
-const GC_GROWTH = "GROWTH";
 
 /**
- * Target date used for horizon sizing — only PIT / GROWTH with a `target_date`.
+ * Target date used for horizon sizing — only PIT with a `target_date`.
  * Recurring goals are not used.
  */
-function pitOrGrowthTargetDateIso(g: SimulationGoal): string | null {
+function pitTargetDateIso(g: SimulationGoal): string | null {
   const gc = String(g.goal_class ?? "").toUpperCase();
-  if (gc !== GC_POINT && gc !== GC_GROWTH) {
+  if (gc !== GC_POINT) {
     return null;
   }
   return g.target_date ?? null;
@@ -64,7 +63,7 @@ function startMonthFromAsOf(asOfIso: string | null | undefined): Date {
 }
 
 /**
- * Number of simulated months so the run ends in **December** of `(max PIT/GROWTH target year) + 2`.
+ * Number of simulated months so the run ends in **December** of `(max PIT target year) + 2`.
  * Falls back to 240 months when no such goal has a `target_date`.
  */
 export function computeSimulationHorizonMonths(
@@ -75,7 +74,7 @@ export function computeSimulationHorizonMonths(
 
   let maxYear: number | null = null;
   for (const g of goals) {
-    const iso = pitOrGrowthTargetDateIso(g);
+    const iso = pitTargetDateIso(g);
     if (!iso) continue;
     const y = Number(iso.slice(0, 4));
     if (!Number.isFinite(y)) continue;
@@ -103,7 +102,7 @@ export function simulationHorizonEndYearLabel(
 
   let maxYear: number | null = null;
   for (const g of goals) {
-    const iso = pitOrGrowthTargetDateIso(g);
+    const iso = pitTargetDateIso(g);
     if (!iso) continue;
     const y = Number(iso.slice(0, 4));
     if (!Number.isFinite(y)) continue;

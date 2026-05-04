@@ -11,7 +11,6 @@ import pytest
 
 from api.services import simulation as sim_mod
 from api.services.simulation import (
-    GC_GROWTH,
     GC_POINT,
     GC_RECURRING,
     MANDATORY_RECURRING_SUBTYPES,
@@ -51,17 +50,34 @@ def _pit(
     )
 
 
+def _overflow_sink_pit(
+    tid: int,
+    name: str = "Overflow sink",
+    *,
+    priority: int = 99,
+    ret: float = 10.0,
+) -> SimulationGoal:
+    """Open PIT with a far horizon — absorbs surplus like the removed GROWTH class."""
+
+    return SimulationGoal(
+        id=tid,
+        name=name,
+        goal_class=GC_POINT,
+        target_amount=1e15,
+        target_date=datetime.date(2100, 1, 1),
+        starting_balance=0.0,
+        allocation_priority=priority,
+        expected_return_rate=ret,
+        inflation_rate=0.0,
+    )
+
+
 def test_single_point_in_time_goal_projection():
     """20L target in 5 years, 12% return, ₹30k surplus — expect trajectory + completion."""
     today = datetime.date(2026, 1, 1)
     target_d = datetime.date(2031, 1, 1)
     g = _pit("House", tid=1, target=2_000_000.0, target_date=target_d, priority=1)
-    g2 = SimulationGoal(
-        id=2,
-        name="Growth",
-        goal_class=GC_GROWTH,
-        allocation_priority=2,
-    )
+    g2 = _overflow_sink_pit(2, "Overflow", priority=2)
     p = SimulationParams(
         goals=[g, g2],
         monthly_surplus=30_000.0,
@@ -71,7 +87,8 @@ def test_single_point_in_time_goal_projection():
     r = simulate(p)
     house = next(x for x in r.projections if x.goal_name == "House")
     assert house.projected_completion_date is not None
-    assert house.status == "ACHIEVED"
+    assert house.projected_completion_date is not None
+    assert (house.projected_completion_pct or 0) >= 100.0
     assert len(house.monthly_trajectory) == 120
     assert house.monthly_trajectory[0].month == today.replace(day=1)
 
@@ -99,7 +116,7 @@ def test_cascade_two_goals_second_gets_surplus_after_first_completes():
         ret=10.0,
         infl=0.0,
     )
-    growth = SimulationGoal(id=3, name="Invest", goal_class=GC_GROWTH, allocation_priority=3)
+    growth = _overflow_sink_pit(3, "Invest", priority=3)
     p = SimulationParams(
         goals=[g1, g2, growth],
         monthly_surplus=25_000.0,
@@ -108,7 +125,8 @@ def test_cascade_two_goals_second_gets_surplus_after_first_completes():
     )
     r = simulate(p)
     quick = next(x for x in r.projections if x.goal_name == "Quick")
-    assert quick.status == "ACHIEVED"
+    assert quick.projected_completion_date is not None
+    assert (quick.projected_completion_pct or 0) >= 100.0
     assert len(r.cascade_events) >= 1
 
 
@@ -126,7 +144,7 @@ def test_recurring_emi_within_window():
         recurrence_end=datetime.date(2046, 1, 1),
         expected_return_rate=0.0,
     )
-    growth = SimulationGoal(id=2, name="Rest", goal_class=GC_GROWTH, allocation_priority=2)
+    growth = _overflow_sink_pit(2, "Rest", priority=2)
     p = SimulationParams(
         goals=[emi, growth],
         monthly_surplus=100_000.0,
@@ -135,7 +153,7 @@ def test_recurring_emi_within_window():
     )
     r = simulate(p)
     emi_p = next(x for x in r.projections if x.goal_name == "Loan EMI")
-    # Average allocation to EMI should be substantial (capped by surplus after growth split)
+    # Average allocation to EMI should be substantial (capped by surplus after overflow sink)
     assert emi_p.monthly_allocation > 40_000.0
 
 
@@ -146,7 +164,7 @@ def test_mandatory_recurring_subtypes_constant():
 
 
 def test_minimum_monthly_floor_zeros_small_allocation_and_redistributes_to_overflow():
-    """Sub-₹5k/mo flows become 0; freed cash goes to the overflow sink (e.g. GROWTH)."""
+    """Sub-₹5k/mo flows become 0; freed cash goes to an open PIT overflow sink."""
     assert MIN_MONTHLY_GOAL_CONTRIBUTION_INR == 5000.0
     today = datetime.date(2026, 1, 1)
     travel = SimulationGoal(
@@ -160,12 +178,7 @@ def test_minimum_monthly_floor_zeros_small_allocation_and_redistributes_to_overf
         recurrence_start=today,
         expected_return_rate=0.0,
     )
-    growth = SimulationGoal(
-        id=2,
-        name="Growth",
-        goal_class=GC_GROWTH,
-        allocation_priority=2,
-    )
+    growth = _overflow_sink_pit(2, "Growth", priority=2)
     p = SimulationParams(
         goals=[travel, growth],
         monthly_surplus=10_000.0,
@@ -192,7 +205,7 @@ def test_allocate_surplus_applies_same_minimum_floor():
         recurrence_start=datetime.date(2026, 1, 1),
         expected_return_rate=0.0,
     )
-    growth = SimulationGoal(id=2, name="Growth", goal_class=GC_GROWTH, allocation_priority=3)
+    growth = _overflow_sink_pit(2, "Growth", priority=3)
     out = allocate_surplus([tiny, growth], 10_000.0, datetime.date(2026, 1, 1))
     assert out.get("Tiny bill", 0.0) == 0.0
     assert out.get("Growth", 0.0) == pytest.approx(10_000.0)
@@ -265,14 +278,8 @@ def test_allocate_surplus_discretionary_recurring_after_pit():
     assert out["House"] >= out["Travel"]
 
 
-def test_growth_absorbs_remainder():
-    g = SimulationGoal(
-        id=1,
-        name="Long",
-        goal_class=GC_GROWTH,
-        allocation_priority=1,
-        expected_return_rate=10.0,
-    )
+def test_open_pit_absorbs_remainder():
+    g = _overflow_sink_pit(1, "Long", priority=1, ret=10.0)
     p = SimulationParams(
         goals=[g],
         monthly_surplus=50_000.0,
@@ -285,12 +292,7 @@ def test_growth_absorbs_remainder():
 
 
 def test_salary_growth_increases_surplus():
-    g = SimulationGoal(
-        id=1,
-        name="G",
-        goal_class=GC_GROWTH,
-        allocation_priority=1,
-    )
+    g = _overflow_sink_pit(1, "G", priority=1)
     p = SimulationParams(
         goals=[g],
         monthly_surplus=100_000.0,
@@ -315,7 +317,7 @@ def test_one_time_inflow_accelerates():
         priority=1,
         ret=8.0,
     )
-    g2 = SimulationGoal(id=2, name="Gr", goal_class=GC_GROWTH, allocation_priority=2)
+    g2 = _overflow_sink_pit(2, "Gr", priority=2)
     bonus = OneTimeEvent(amount=500_000.0, date=datetime.date(2026, 6, 15), description="bonus")
     p = SimulationParams(
         goals=[g, g2],
@@ -342,7 +344,7 @@ def test_inflation_reduces_achievement():
     today = datetime.date(2026, 1, 1)
     td = datetime.date(2031, 1, 1)
     g = _pit("T", tid=1, target=1_000_000.0, target_date=td, priority=1, infl=0.0)
-    g2 = SimulationGoal(id=2, name="X", goal_class=GC_GROWTH, allocation_priority=2)
+    g2 = _overflow_sink_pit(2, "X", priority=2)
     p0 = SimulationParams(goals=[g, g2], monthly_surplus=15_000.0, simulation_months=120, as_of_date=today)
     g_hi = _pit("T", tid=1, target=1_000_000.0, target_date=td, priority=1, infl=8.0)
     p1 = SimulationParams(goals=[g_hi, g2], monthly_surplus=15_000.0, simulation_months=120, as_of_date=today)
@@ -371,20 +373,20 @@ def test_edge_already_funded():
     )
     p = SimulationParams(goals=[g], monthly_surplus=0.0, simulation_months=12, as_of_date=today)
     r = simulate(p)
-    assert r.projections[0].status == "ACHIEVED"
+    assert (r.projections[0].projected_completion_pct or 0) >= 100.0
 
 
-def test_allocate_surplus_sums_to_surplus_when_growth_present():
+def test_allocate_surplus_sums_to_surplus_when_sink_pit_present():
     goals = [
         _pit("A", tid=1, target=500_000.0, target_date=datetime.date(2030, 1, 1), priority=1),
-        SimulationGoal(id=2, name="G", goal_class=GC_GROWTH, allocation_priority=2),
+        _overflow_sink_pit(2, "G", priority=2),
     ]
     out = allocate_surplus(goals, 80_000.0, today=datetime.date(2026, 1, 1))
     assert abs(sum(out.values()) - 80_000.0) < 1.0
 
 
-def test_allocate_surplus_overflow_to_top_priority_among_pit_and_growth():
-    """After minimums, leftover surplus goes to priority-1 PIT, not the GROWTH bucket."""
+def test_allocate_surplus_overflow_to_highest_priority_open_pit():
+    """After pass 2, leftover surplus goes to the lowest allocation_priority number among open PITs."""
     g1 = _pit(
         "House",
         tid=1,
@@ -403,16 +405,27 @@ def test_allocate_surplus_overflow_to_top_priority_among_pit_and_growth():
         ret=10.0,
         infl=0.0,
     )
-    gr = SimulationGoal(id=3, name="Invest", goal_class=GC_GROWTH, allocation_priority=3)
+    # Past, over-funded PIT — no pass-2 need (like removed GROWTH); overflow stays with real goals.
+    sink = SimulationGoal(
+        id=3,
+        name="Invest",
+        goal_class=GC_POINT,
+        target_amount=100.0,
+        target_date=datetime.date(2000, 1, 1),
+        starting_balance=1_000_000.0,
+        allocation_priority=3,
+        expected_return_rate=10.0,
+        inflation_rate=0.0,
+    )
     out = allocate_surplus(
-        [g1, g2, gr],
+        [g1, g2, sink],
         200_000.0,
         today=datetime.date(2026, 1, 1),
         general_inflation_rate=6.0,
     )
     assert abs(sum(out.values()) - 200_000.0) < 1.0
     assert out["House"] > out["FIRE"]
-    assert out["House"] > out["Invest"]
+    assert out["Invest"] == pytest.approx(0.0, abs=1.0)
 
 
 def test_allocate_surplus_single_goal_no_growth_funnels_all_surplus():
@@ -462,7 +475,7 @@ def test_simulate_single_pit_no_growth_no_false_unallocated():
 def test_compare_scenarios_delta():
     today = datetime.date(2026, 1, 1)
     g = _pit("X", tid=1, target=800_000.0, target_date=datetime.date(2032, 1, 1), priority=1)
-    gr = SimulationGoal(id=2, name="G", goal_class=GC_GROWTH, allocation_priority=2)
+    gr = _overflow_sink_pit(2, "G", priority=2)
     base = SimulationParams(goals=[g, gr], monthly_surplus=20_000.0, simulation_months=100, as_of_date=today)
     var = SimulationParams(goals=[g, gr], monthly_surplus=40_000.0, simulation_months=100, as_of_date=today)
     comps = compare_scenarios(base, [var])
@@ -637,7 +650,7 @@ def test_refinement_preserves_mandatory_recurring_totals():
         recurrence_end=datetime.date(2046, 1, 1),
         expected_return_rate=0.0,
     )
-    growth = SimulationGoal(id=2, name="Rest", goal_class=GC_GROWTH, allocation_priority=2)
+    growth = _overflow_sink_pit(2, "Rest", priority=2)
     p = SimulationParams(
         goals=[emi, growth],
         monthly_surplus=100_000.0,
@@ -684,7 +697,8 @@ def test_recurring_trajectory_has_monthly_need_and_funding_stats():
     assert loan.funding_rate >= 0.99
     assert loan.total_needed is not None
     assert loan.total_contributed is not None
-    assert loan.status in ("ACHIEVED", "ON_TRACK")
+    assert loan.periods_met_pct is not None
+    assert loan.periods_met_pct >= 99.0
 
 
 def test_recurring_quarterly_funding_stats_align_to_first_billable_month():

@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchSimulateFromCurrent, runSimulation } from "@/lib/api";
 import { sanitizeSimulationParams } from "@/lib/onboarding-input-validation";
-import { goalKeys, goalTreeKeys, goalLinkKeys, lifeEventKeys } from "@/hooks/use-goals";
+import { goalKeys, lifeEventKeys } from "@/hooks/use-goals";
 import { newSimulationClientRowId } from "@/lib/simulation-goal-identity";
 import { computeSimulationHorizonMonths } from "@/lib/simulation-horizon";
 import type { SimulationGoal, SimulationParams, SimulationResult } from "@/lib/types";
@@ -297,8 +297,6 @@ export function useSimulation() {
     setResult(res);
     hydratedRef.current = true;
     void queryClient.invalidateQueries({ queryKey: goalKeys.all });
-    void queryClient.invalidateQueries({ queryKey: goalTreeKeys.all });
-    void queryClient.invalidateQueries({ queryKey: goalLinkKeys.all });
     void queryClient.invalidateQueries({ queryKey: lifeEventKeys.all });
   }, [queryClient]);
 

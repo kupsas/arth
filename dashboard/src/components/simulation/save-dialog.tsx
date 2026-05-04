@@ -136,8 +136,16 @@ export function SaveSimulationDialog({
       baseResult && draftResult
         ? completionShifts(baseResult.projections, draftResult.projections)
         : [];
-    const impossible = (draftResult?.projections ?? []).filter((p) => p.status === "IMPOSSIBLE");
-    return { globalChanges, goalRows, newHypos, shifts, impossible };
+    const lowProgressGoals = (draftResult?.projections ?? []).filter((p) => {
+      if (p.projected_completion_pct != null) {
+        return p.projected_completion_pct < 30;
+      }
+      if (p.periods_met_pct != null) {
+        return p.periods_met_pct < 30;
+      }
+      return false;
+    });
+    return { globalChanges, goalRows, newHypos, shifts, lowProgressGoals };
   }, [baseParams, draftParams, baseResult, draftResult]);
 
   const runSave = async () => {
@@ -191,11 +199,11 @@ export function SaveSimulationDialog({
 
         {summary && (
           <div className="space-y-3 text-sm">
-            {summary.impossible.length > 0 && (
+            {summary.lowProgressGoals.length > 0 && (
               <div className="rounded-md border border-destructive/50 bg-destructive/5 p-2 text-destructive">
-                <p className="font-medium">Impossible trajectories</p>
+                <p className="font-medium">Very low projected progress (&lt;30%)</p>
                 <ul className="list-inside list-disc">
-                  {summary.impossible.map((p) => (
+                  {summary.lowProgressGoals.map((p) => (
                     <li key={p.goal_name}>{p.goal_name}</li>
                   ))}
                 </ul>

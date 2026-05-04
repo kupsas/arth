@@ -29,10 +29,7 @@ import type {
   ExpenseStackedRow,
   Goal,
   GoalCreate,
-  GoalLink,
-  GoalLinkCreate,
   GoalProgressResponse,
-  GoalTree,
   GoalUpdate,
   Holding,
   HoldingDetail,
@@ -613,33 +610,6 @@ export function fetchPriorities(persist = true): Promise<PriorityResult> {
 /** POST /api/goals/reorder — update allocation_priority ranks only. */
 export function reorderGoals(goalOrder: GoalReorderItem[]): Promise<unknown> {
   return post<unknown>("/api/goals/reorder", { goal_order: goalOrder });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Goal hierarchy (Phase B.5) — /api/goals/tree, /api/goal-links, /api/life-events
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** GET /api/goals/tree — tier buckets + links, goals include live progress. */
-export function fetchGoalTree(): Promise<GoalTree> {
-  return get<GoalTree>("/api/goals/tree");
-}
-
-/** GET /api/goal-links — optional filter by parent or child goal id. */
-export function fetchGoalLinks(params?: {
-  parent_goal_id?: number;
-  child_goal_id?: number;
-}): Promise<GoalLink[]> {
-  return get<GoalLink[]>("/api/goal-links", params as QueryParams);
-}
-
-/** POST /api/goal-links — create edge (server runs cycle detection). */
-export function createGoalLink(body: GoalLinkCreate): Promise<GoalLink> {
-  return post<GoalLink>("/api/goal-links", body);
-}
-
-/** DELETE /api/goal-links/{id} */
-export function deleteGoalLink(id: number): Promise<void> {
-  return del(`/api/goal-links/${id}`);
 }
 
 /** GET /api/life-events */

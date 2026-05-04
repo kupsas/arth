@@ -94,13 +94,16 @@ def test_time_pressure_deadline_passed_is_100():
     assert time_pressure(g, FIXED_TODAY) == 100.0
 
 
-def test_time_pressure_growth_is_10():
+def test_time_pressure_point_in_time_no_deadline_is_10():
     g = Goal(
         name="Grow",
         goal_type="INVESTMENT",
         user_id="u",
-        goal_class="GROWTH",
+        goal_class="POINT_IN_TIME",
+        target_amount=1_000_000.0,
+        starting_balance=0.0,
         activation_status="ACTIVE",
+        target_date=None,
     )
     assert time_pressure(g, FIXED_TODAY) == 10.0
 
@@ -345,7 +348,9 @@ def test_compute_persists_system_score(mock_surplus, session: Session):
         name="Only",
         goal_type="SAVINGS",
         user_id="test_user",
-        goal_class="GROWTH",
+        goal_class="POINT_IN_TIME",
+        target_amount=500_000.0,
+        target_date=datetime.date(2035, 1, 1),
         activation_status="ACTIVE",
     )
     session.add(g)
@@ -392,7 +397,9 @@ def test_api_get_priorities(mock_surplus, client: TestClient, session: Session):
         name="API Goal",
         goal_type="SAVINGS",
         user_id="test_user",
-        goal_class="GROWTH",
+        goal_class="POINT_IN_TIME",
+        target_amount=200_000.0,
+        target_date=datetime.date(2030, 1, 1),
         activation_status="ACTIVE",
     )
     session.add(g)
@@ -413,7 +420,9 @@ def test_api_reorder_updates_allocation_only(client: TestClient, session: Sessio
         name="A",
         goal_type="SAVINGS",
         user_id="test_user",
-        goal_class="GROWTH",
+        goal_class="POINT_IN_TIME",
+        target_amount=100_000.0,
+        target_date=datetime.date(2030, 1, 1),
         activation_status="ACTIVE",
         system_priority_score=42.5,
     )
@@ -421,7 +430,9 @@ def test_api_reorder_updates_allocation_only(client: TestClient, session: Sessio
         name="B",
         goal_type="SAVINGS",
         user_id="test_user",
-        goal_class="GROWTH",
+        goal_class="POINT_IN_TIME",
+        target_amount=150_000.0,
+        target_date=datetime.date(2031, 1, 1),
         activation_status="ACTIVE",
         system_priority_score=42.5,
     )
@@ -462,7 +473,9 @@ def test_api_reorder_duplicate_ranks_400(client: TestClient, session: Session):
         name="Solo",
         goal_type="SAVINGS",
         user_id="test_user",
-        goal_class="GROWTH",
+        goal_class="POINT_IN_TIME",
+        target_amount=50_000.0,
+        target_date=datetime.date(2028, 1, 1),
         activation_status="ACTIVE",
     )
     session.add(g)

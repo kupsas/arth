@@ -182,7 +182,6 @@ class MutualFundType(str, Enum):
 class GoalClass(str, Enum):
     POINT_IN_TIME = "POINT_IN_TIME"
     RECURRING_CASH_FLOW = "RECURRING_CASH_FLOW"
-    GROWTH = "GROWTH"
 
 
 class GoalSubtype(str, Enum):
