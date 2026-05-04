@@ -16,10 +16,17 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.models import Transaction
 from scraper.config_loader import BankSendersConfig
+
+# InstaAlert Gmail searches use these slice sizes when building targeted windows
+# (onboarding orchestrator — see :func:`compute_alert_backfill_windows`).
+ALERT_BACKFILL_PRE_STATEMENT_DAYS = 90
+ALERT_BACKFILL_UNCERTAIN_SLICE_DAYS = 90
+# Cap ``coverage_uncertain`` slices when gap detection cannot infer months yet (no rows).
+ALERT_BACKFILL_MAX_UNCERTAIN_WINDOWS = 48
 
 
 # ── month helpers ────────────────────────────────────────────────────────────
@@ -465,6 +472,157 @@ def filter_onboarding_alert_ids_after_statements(
         if _in_windows(rdt):
             out.append(str(mid))
     return out
+
+
+def _earliest_txn_date_for_source(
+    session: Session,
+    user_id: str,
+    source_key: str,
+) -> dt.date | None:
+    """Oldest transaction date for this pipeline ``source_key`` (any ``source_type``).
+
+    Used to anchor **pre-statement** InstaAlert windows: statement PDFs parsed from email
+    still store ``source_type='email'``, so this date is the start of “known good”
+    statement-backed coverage; alerts *before* this day may be the only history.
+    """
+    q = (
+        select(Transaction)
+        .where(Transaction.user_id == user_id)
+        .where(Transaction.source_statement == source_key)
+        .where(col(Transaction.txn_date).is_not(None))
+        .order_by(col(Transaction.txn_date).asc())
+        .limit(1)
+    )
+    row = session.exec(q).first()
+    if row is None:
+        return None
+    return row.txn_date
+
+
+def _slice_range_into_windows(
+    start_inclusive: dt.date,
+    end_exclusive: dt.date,
+    *,
+    max_days: int,
+    kind: str,
+    label_prefix: str,
+) -> list[dict[str, Any]]:
+    """Split ``[start_inclusive, end_exclusive)`` into consecutive Gmail-sized windows."""
+    out: list[dict[str, Any]] = []
+    cur = start_inclusive
+    while cur < end_exclusive:
+        nxt = min(cur + dt.timedelta(days=max_days), end_exclusive)
+        if cur < nxt:
+            out.append(
+                {
+                    "after": cur.isoformat(),
+                    "before": nxt.isoformat(),
+                    "kind": kind,
+                    "label": f"{label_prefix}: {cur.isoformat()} .. {nxt.isoformat()}",
+                }
+            )
+        cur = nxt
+    return out
+
+
+def compute_alert_backfill_windows(
+    session: Session,
+    user_id: str,
+    source_key: str,
+    bank: BankSendersConfig,
+    *,
+    gmail_after_inclusive: dt.date,
+    gmail_before_exclusive: dt.date,
+    had_statement_ids_at_init: bool,
+) -> list[dict[str, Any]]:
+    """Plan small Gmail date windows for InstaAlert import after statement PDFs ran.
+
+    **Order**
+      1. **Gap** windows — months :func:`detect_gaps` marks as missing coverage (statement
+         is source of truth; alerts only fill holes).
+      2. **Pre-statement** window — up to :data:`ALERT_BACKFILL_PRE_STATEMENT_DAYS` before the
+         oldest stored transaction (alerts may be the only data before statements began).
+      3. **Coverage-uncertain** slices — only when we cannot trust gap detection (no report
+         yet, or “not enough month coverage”, or sporadic ``per_transaction`` metadata).
+
+    Each returned dict is JSON-serialisable::
+
+        {"after": "YYYY-MM-DD", "before": "YYYY-MM-DD", "kind": str, "label": str}
+
+    ``after`` is Gmail-inclusive; ``before`` is Gmail-**exclusive** (matches
+    ``GmailClient.search_messages`` query semantics).
+
+    When (2) and (3) both apply, gap windows still come first; uncertain slices are a
+    fallback so onboarding never fires one giant unbounded InstaAlert search.
+    """
+    windows: list[dict[str, Any]] = []
+    reports = detect_gaps(session, user_id, bank)
+    rep = next((r for r in reports if str(r.get("source") or "") == source_key), None)
+
+    if rep:
+        for g in rep.get("gaps") or []:
+            if not isinstance(g, dict):
+                continue
+            ps = g.get("period_start")
+            pe = g.get("period_end")
+            if not (isinstance(ps, str) and isinstance(pe, str) and ps.strip() and pe.strip()):
+                continue
+            d0, d1 = _ym_to_date_range(ps.strip(), pe.strip())
+            before_ex = d1 + dt.timedelta(days=1)
+            before_ex = min(before_ex, gmail_before_exclusive)
+            d0 = max(d0, gmail_after_inclusive)
+            if d0 < before_ex:
+                windows.append(
+                    {
+                        "after": d0.isoformat(),
+                        "before": before_ex.isoformat(),
+                        "kind": "gap",
+                        "label": f"Gap fill: {ps.strip()}..{pe.strip()}",
+                    }
+                )
+
+    earliest = _earliest_txn_date_for_source(session, user_id, source_key)
+    if earliest:
+        end_ex = earliest
+        start = end_ex - dt.timedelta(days=ALERT_BACKFILL_PRE_STATEMENT_DAYS)
+        start = max(start, gmail_after_inclusive)
+        if start < end_ex:
+            windows.append(
+                {
+                    "after": start.isoformat(),
+                    "before": end_ex.isoformat(),
+                    "kind": "pre_statement",
+                    "label": f"Backfill before statements: {start.isoformat()} .. {end_ex.isoformat()}",
+                }
+            )
+
+    if not had_statement_ids_at_init:
+        return windows
+
+    note = str((rep or {}).get("note") or "").lower()
+    ec = str((rep or {}).get("expected_cadence") or "").lower()
+    gaps = (rep or {}).get("gaps") or []
+
+    need_uncertain = False
+    if rep is None:
+        need_uncertain = True
+    elif not gaps:
+        if "not enough month coverage" in note:
+            need_uncertain = True
+        elif "sporadic" in note or ec == "per_transaction":
+            need_uncertain = True
+
+    if need_uncertain:
+        uncertain = _slice_range_into_windows(
+            gmail_after_inclusive,
+            gmail_before_exclusive,
+            max_days=ALERT_BACKFILL_UNCERTAIN_SLICE_DAYS,
+            kind="coverage_uncertain",
+            label_prefix="Alert import (coverage uncertain)",
+        )
+        windows.extend(uncertain[:ALERT_BACKFILL_MAX_UNCERTAIN_WINDOWS])
+
+    return windows
 
 
 def list_transaction_sources(

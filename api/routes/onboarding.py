@@ -543,6 +543,18 @@ class BackfillProgressResponse(BaseModel):
         default=None,
         description="Gmail message id that failed PDF decryption (retry after fixing secrets).",
     )
+    current_window_label: str | None = Field(
+        default=None,
+        description="Human label for the active InstaAlert Gmail window (windowed onboarding only).",
+    )
+    windows_total: int = Field(
+        default=0,
+        description="Number of date windows planned for InstaAlert import (may grow during pre-statement expansion).",
+    )
+    windows_completed: int = Field(
+        default=0,
+        description="How many InstaAlert windows have been fully drained.",
+    )
 
 
 def _strip_internal_keys(d: dict[str, Any]) -> dict[str, Any]:
@@ -737,10 +749,17 @@ def onboarding_backfill_progress(
         unknowns_pending=unknowns_live,
         error_message=blob.get("error_message"),
         current_phase=(str(blob["current_phase"]) if blob.get("current_phase") else None),
-        password_parser_key=(str(blob["password_parser_key"]) if blob.get("password_parser_key") else None),
+        password_parser_key=(
+            str(blob["password_parser_key"]) if blob.get("password_parser_key") else None
+        ),
         password_failure_message_id=(
             str(blob["password_failure_message_id"]) if blob.get("password_failure_message_id") else None
         ),
+        current_window_label=(
+            str(blob["current_window_label"]) if blob.get("current_window_label") else None
+        ),
+        windows_total=int(blob.get("windows_total") or 0),
+        windows_completed=int(blob.get("windows_completed") or 0),
     )
 
 

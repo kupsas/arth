@@ -28,6 +28,10 @@ export type BackfillProgressSnapshot = {
   /** When the API pauses for PDF decryption. */
   password_parser_key?: string | null
   password_failure_message_id?: string | null
+  /** InstaAlert windowed import (WS4): which slice is active and overall progress. */
+  current_window_label?: string | null
+  windows_total?: number
+  windows_completed?: number
 }
 
 /** Minimal shape for each source in the pipeline (from GET /backfill-sources). */

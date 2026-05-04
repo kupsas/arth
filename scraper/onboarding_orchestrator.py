@@ -12,8 +12,8 @@ Wraps the same parse → classify → DB path as :mod:`scraper.orchestrator`, bu
     does not paginate thousands of alerts and hit HTTP timeouts. After statements, alert
     IDs are filtered with :func:`scraper.gap_detector.filter_onboarding_alert_ids_after_statements`.
 
-  * **HDFC Savings onboarding** intentionally skips the InstaAlert sweep (statements only);
-    see ``ONBOARDING_SKIP_INSTAALERT_SOURCES``.
+  * **HDFC Savings onboarding** can skip InstaAlerts entirely via
+    ``ONBOARDING_SKIP_INSTAALERT_SOURCES`` (empty by default — use for emergency kill-switch).
 """
 
 from __future__ import annotations
@@ -37,7 +37,10 @@ from api.services.email_import_flow_log import EmailImportFlowLog
 from scraper.config_loader import BankSendersConfig, get_bank_senders_config
 from scraper.email_router import _normalise_sender
 from scraper.email_parsers import build_email_parser_registry
-from scraper.gap_detector import filter_onboarding_alert_ids_after_statements
+from scraper.gap_detector import (
+    compute_alert_backfill_windows,
+    filter_onboarding_alert_ids_after_statements,
+)
 from scraper.gmail_client import GmailClient
 from scraper.orchestrator import _get_processed_ids, _process_email, _record_email
 from scraper.pdf_passwords import StatementPasswordRequired, is_statement_password_failure
@@ -51,9 +54,13 @@ DEFAULT_CHUNK_SIZE = 10
 UNKNOWN_THRESHOLD = int(os.environ.get("ONBOARDING_UNKNOWN_THRESHOLD", "20"))
 
 # Pipeline ``source_key`` values for which chunk onboarding imports **statement mail only**
-# (no InstaAlert / per-transaction Gmail listing). Keeps the wizard fast; product can re-enable
-# later per source once alert UX is ready.
-ONBOARDING_SKIP_INSTAALERT_SOURCES: frozenset[str] = frozenset({"hdfc_savings"})
+# (no InstaAlert / per-transaction Gmail listing). Empty by default — InstaAlerts use
+# :func:`compute_alert_backfill_windows` for small targeted Gmail searches.
+ONBOARDING_SKIP_INSTAALERT_SOURCES: frozenset[str] = frozenset()
+
+# After a **pre_statement** window yields at least this many alert emails, add another
+# 90-day slice further back (stop when a slice is sparse — user likely had no alerts then).
+ALERT_PRE_STATEMENT_EXPAND_MIN_RESULTS = 5
 
 # Default historical sweep — wide window; callers can override with after/before.
 _DEFAULT_LOOKBACK_YEARS = 15
@@ -507,6 +514,237 @@ def _load_backfill_progress_from_db(
     return dict(all_bf.get(source_key) or {})
 
 
+def _gather_alert_items_for_date_window(
+    client: GmailClient,
+    bank: BankSendersConfig,
+    source_key: str,
+    *,
+    after: datetime.date,
+    before_exclusive: datetime.date,
+    session: Session,
+    exclude_message_ids: set[str],
+    import_flow_log: EmailImportFlowLog | None = None,
+) -> list[dict[str, str]]:
+    """InstaAlert Gmail search restricted to ``[after, before_exclusive)`` (narrow windows).
+
+    Same behaviour as :func:`_gather_alert_message_items` but accepts an explicit slice
+    so onboarding never lists an unbounded multi-year alert queue in one HTTP request.
+    """
+    return _gather_alert_message_items(
+        client,
+        bank,
+        source_key,
+        after=after,
+        before=before_exclusive,
+        session=session,
+        exclude_message_ids=exclude_message_ids,
+        import_flow_log=import_flow_log,
+    )
+
+
+def _filter_alert_items_for_window_kind(
+    session: Session,
+    user_id: str,
+    source_key: str,
+    bank: BankSendersConfig,
+    alert_items: list[dict[str, str]],
+    *,
+    window_kind: str,
+    had_statement_ids_at_init: bool,
+) -> list[str]:
+    """Turn Gmail rows into pending message ids for this window ``kind``."""
+    if window_kind in ("pre_statement", "coverage_uncertain"):
+        def _sk(row: dict[str, str]) -> tuple[int, str]:
+            raw = row.get("received_at") or ""
+            try:
+                d = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return (int(d.timestamp()), row.get("id") or "")
+            except ValueError:
+                return (0, row.get("id") or "")
+
+        ordered = sorted(alert_items, key=_sk)
+        return [str(r["id"]) for r in ordered if r.get("id")]
+    return filter_onboarding_alert_ids_after_statements(
+        session,
+        user_id,
+        source_key,
+        bank,
+        alert_items,
+        had_statement_ids_at_init=had_statement_ids_at_init,
+    )
+
+
+def _try_extend_pre_statement_windows(
+    src_state: dict[str, Any],
+    *,
+    global_after: datetime.date,
+    global_before_exclusive: datetime.date,
+) -> bool:
+    """Append another pre-statement slice after a dense older slice; returns True if appended."""
+    kind = str(src_state.get("_last_drained_window_kind") or "")
+    cnt = int(src_state.get("_last_drained_window_loaded_count") or 0)
+    if kind != "pre_statement" or cnt < ALERT_PRE_STATEMENT_EXPAND_MIN_RESULTS:
+        return False
+    windows: list[dict[str, Any]] = list(src_state.get("_alert_windows") or [])
+    if not windows:
+        return False
+    last = windows[-1]
+    if str(last.get("kind") or "") != "pre_statement":
+        return False
+    try:
+        prev_start = datetime.date.fromisoformat(str(last["after"])[:10])
+    except ValueError:
+        return False
+    new_before_ex = prev_start
+    new_start = prev_start - datetime.timedelta(days=90)
+    new_start = max(new_start, global_after)
+    if new_start >= new_before_ex or new_before_ex > global_before_exclusive:
+        return False
+    windows.append(
+        {
+            "after": new_start.isoformat(),
+            "before": new_before_ex.isoformat(),
+            "kind": "pre_statement",
+            "label": f"Backfill before statements: {new_start.isoformat()} .. {new_before_ex.isoformat()}",
+        }
+    )
+    src_state["_alert_windows"] = windows
+    return True
+
+
+def _ensure_alert_queue_ready_windowed(
+    session: Session,
+    user_id: str,
+    source_key: str,
+    bank: BankSendersConfig,
+    src_state: dict[str, Any],
+    *,
+    gmail_client: GmailClient,
+    after: datetime.date,
+    before: datetime.date,
+    import_flow_log: EmailImportFlowLog | None = None,
+    progress_commit_hook: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    """Fill ``_pending_alert_ids`` using :func:`compute_alert_backfill_windows` slices."""
+    if src_state.get("_pending_alert_ids") and src_state.get("_use_alert_windows"):
+        return
+
+    if not src_state.get("_alerts_transitioned"):
+        windows = compute_alert_backfill_windows(
+            session,
+            user_id,
+            source_key,
+            bank,
+            gmail_after_inclusive=after,
+            gmail_before_exclusive=before,
+            had_statement_ids_at_init=bool(src_state.get("_had_statement_ids_at_init")),
+        )
+        src_state["_use_alert_windows"] = True
+        src_state["_alert_windows"] = windows
+        src_state["_alert_next_window_idx"] = 0
+        src_state["_alert_emails_planned_total"] = 0
+        src_state["windows_total"] = len(windows)
+        src_state["windows_completed"] = int(src_state.get("windows_completed") or 0)
+        src_state["_defer_alert_fetch"] = False
+        if progress_commit_hook is not None:
+            src_state["status"] = "processing_alerts"
+            src_state["current_phase"] = "listing_alerts"
+            progress_commit_hook(dict(src_state))
+
+    exclude_ids = set(src_state.get("_statement_id_set_at_init") or [])
+    stmt_planned = int(src_state.get("_statement_total_at_init") or 0)
+    had_stmt = bool(src_state.get("_had_statement_ids_at_init"))
+
+    while True:
+        windows = list(src_state.get("_alert_windows") or [])
+        nxt = int(src_state.get("_alert_next_window_idx") or 0)
+        if nxt >= len(windows):
+            if _try_extend_pre_statement_windows(
+                src_state, global_after=after, global_before_exclusive=before
+            ):
+                windows = list(src_state.get("_alert_windows") or [])
+                src_state["windows_total"] = len(windows)
+                continue
+            break
+
+        w = windows[nxt]
+        try:
+            wa = datetime.date.fromisoformat(str(w["after"])[:10])
+            wb = datetime.date.fromisoformat(str(w["before"])[:10])
+        except ValueError:
+            nxt += 1
+            src_state["_alert_next_window_idx"] = nxt
+            continue
+
+        kind = str(w.get("kind") or "gap")
+        if import_flow_log:
+            import_flow_log.write(
+                "gmail_alert_window_search",
+                f"source_key={source_key} window_idx={nxt}/{len(windows)} kind={kind!r} "
+                f"after={wa.isoformat()} before={wb.isoformat()}",
+            )
+
+        items = _gather_alert_items_for_date_window(
+            gmail_client,
+            bank,
+            source_key,
+            after=wa,
+            before_exclusive=wb,
+            session=session,
+            exclude_message_ids=exclude_ids,
+            import_flow_log=import_flow_log,
+        )
+        ids = _filter_alert_items_for_window_kind(
+            session,
+            user_id,
+            source_key,
+            bank,
+            items,
+            window_kind=kind,
+            had_statement_ids_at_init=had_stmt,
+        )
+        if ids:
+            src_state["_pending_alert_ids"] = ids
+            src_state["_alert_loaded_window_idx"] = nxt
+            src_state["_alert_loaded_window_size"] = len(ids)
+            planned = int(src_state.get("_alert_emails_planned_total") or 0) + len(ids)
+            src_state["_alert_emails_planned_total"] = planned
+            src_state["emails_found"] = stmt_planned + planned
+            src_state["_initial_pending_total"] = src_state["emails_found"]
+            src_state["current_window_label"] = str(w.get("label") or "")
+            if import_flow_log:
+                import_flow_log.write(
+                    "gmail_alert_window_loaded",
+                    f"window_idx={nxt} pending_ids={len(ids)} kind={kind!r}",
+                )
+            src_state["_alert_next_window_idx"] = nxt + 1
+            break
+
+        nxt += 1
+        src_state["_alert_next_window_idx"] = nxt
+        if import_flow_log:
+            import_flow_log.write(
+                "gmail_alert_window_empty",
+                f"window_idx={nxt - 1} advanced to {nxt}",
+            )
+
+    if not src_state.get("_pending_alert_ids"):
+        src_state["current_window_label"] = None
+        planned = int(src_state.get("_alert_emails_planned_total") or 0)
+        stmt_planned = int(src_state.get("_statement_total_at_init") or 0)
+        src_state["emails_found"] = stmt_planned + planned
+        src_state["_initial_pending_total"] = src_state["emails_found"]
+
+    src_state["_alerts_transitioned"] = True
+    if import_flow_log:
+        import_flow_log.write(
+            "gmail_alert_queue_after_gaps",
+            f"windowed=True pending={len(src_state.get('_pending_alert_ids') or [])} "
+            f"next_window_idx={int(src_state.get('_alert_next_window_idx') or 0)} "
+            f"windows={len(src_state.get('_alert_windows') or [])}",
+        )
+
+
 def _ensure_alert_queue_ready(
     session: Session,
     user_id: str,
@@ -520,16 +758,50 @@ def _ensure_alert_queue_ready(
     import_flow_log: EmailImportFlowLog | None = None,
     progress_commit_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
-    if src_state.get("_alerts_transitioned"):
-        return
-    # Wipe any deferred InstaAlert payload for sources we import as statements-only, so a
-    # half-finished JSON blob from an older build cannot resurrect a giant alert search.
+    """Build or extend the InstaAlert slice of the onboarding queue (statement-first)."""
     if source_key in ONBOARDING_SKIP_INSTAALERT_SOURCES:
         src_state["_alert_items_full"] = []
         src_state["_defer_alert_fetch"] = False
+        src_state["_use_alert_windows"] = False
+        src_state["_pending_alert_ids"] = []
+        src_state["_alerts_transitioned"] = True
+        stmt_planned = int(src_state.get("_statement_total_at_init") or 0)
+        src_state["emails_found"] = stmt_planned
+        src_state["_initial_pending_total"] = stmt_planned
+        return
+
+    defer = bool(src_state.get("_defer_alert_fetch"))
+    had = bool(src_state.get("_had_statement_ids_at_init"))
+    can_window = (
+        had
+        and gmail_client is not None
+        and after is not None
+        and before is not None
+    )
+    # Statement-first deferral *or* an in-progress windowed run (``_defer_alert_fetch`` is
+    # cleared after the first window plan is built — keep routing on ``_use_alert_windows``).
+    if can_window and (defer or src_state.get("_use_alert_windows")):
+        assert gmail_client is not None and after is not None and before is not None
+        _ensure_alert_queue_ready_windowed(
+            session,
+            user_id,
+            source_key,
+            bank,
+            src_state,
+            gmail_client=gmail_client,
+            after=after,
+            before=before,
+            import_flow_log=import_flow_log,
+            progress_commit_hook=progress_commit_hook,
+        )
+        return
+
+    if src_state.get("_alerts_transitioned"):
+        return
+
     full = list(src_state.get("_alert_items_full") or [])
 
-    if src_state.get("_defer_alert_fetch") and not full:
+    if defer and not full:
         if gmail_client is None or after is None or before is None:
             logger.warning(
                 "Deferred InstaAlert listing missing gmail_client or date window — "
@@ -538,20 +810,8 @@ def _ensure_alert_queue_ready(
             )
             full = []
             src_state["_defer_alert_fetch"] = False
-        elif source_key in ONBOARDING_SKIP_INSTAALERT_SOURCES:
-            full = []
-            src_state["_alert_items_full"] = full
-            src_state["_defer_alert_fetch"] = False
-            if import_flow_log:
-                import_flow_log.write(
-                    "gmail_alert_search_skipped",
-                    f"source_key={source_key} reason=onboarding_inst_alert_disabled",
-                )
         else:
             exclude_ids = set(src_state.get("_statement_id_set_at_init") or [])
-            # InstaAlert listing can paginate for a long time. When the API passes
-            # ``progress_commit_hook``, flush a snapshot first so GET /progress does not
-            # look "stuck" on the last statement counts while Gmail search runs.
             if progress_commit_hook is not None:
                 src_state["status"] = "processing_alerts"
                 src_state["current_phase"] = "listing_alerts"
@@ -569,14 +829,14 @@ def _ensure_alert_queue_ready(
             src_state["_alert_items_full"] = full
             src_state["_defer_alert_fetch"] = False
 
-    had = bool(src_state.get("_had_statement_ids_at_init"))
+    had_stmt = bool(src_state.get("_had_statement_ids_at_init"))
     filtered_ids = filter_onboarding_alert_ids_after_statements(
         session,
         user_id,
         source_key,
         bank,
         full,
-        had_statement_ids_at_init=had,
+        had_statement_ids_at_init=had_stmt,
     )
     src_state["_pending_alert_ids"] = filtered_ids
     src_state["_alerts_transitioned"] = True
@@ -588,7 +848,7 @@ def _ensure_alert_queue_ready(
     if import_flow_log:
         import_flow_log.write(
             "gmail_alert_queue_after_gaps",
-            f"alert_ids_after_gap_filter={len(filtered_ids)} (had_statement_phase={had})",
+            f"alert_ids_after_gap_filter={len(filtered_ids)} (had_statement_phase={had_stmt})",
         )
 
 
@@ -926,6 +1186,17 @@ def run_onboarding_backfill(
             "_defer_alert_fetch",
             "_statement_total_at_init",
             "_statement_id_set_at_init",
+            "_use_alert_windows",
+            "_alert_windows",
+            "_alert_next_window_idx",
+            "_alert_loaded_window_idx",
+            "_alert_loaded_window_size",
+            "_alert_emails_planned_total",
+            "_last_drained_window_kind",
+            "_last_drained_window_loaded_count",
+            "current_window_label",
+            "windows_total",
+            "windows_completed",
         ):
             src_state.pop(k, None)
         if import_flow_log:
@@ -1074,6 +1345,21 @@ def run_onboarding_backfill(
     if pub_status == "processing_statements":
         src_state["_pending_statement_ids"] = rest
     else:
+        # Windowed InstaAlert import: record completed slice so we can expand pre-statement.
+        if (
+            pub_status == "processing_alerts"
+            and src_state.get("_use_alert_windows")
+            and not rest
+        ):
+            lw = int(src_state.get("_alert_loaded_window_idx") or -1)
+            wins = list(src_state.get("_alert_windows") or [])
+            if lw >= 0 and lw < len(wins):
+                src_state["_last_drained_window_kind"] = str(wins[lw].get("kind") or "")
+                src_state["_last_drained_window_loaded_count"] = int(
+                    src_state.get("_alert_loaded_window_size") or 0
+                )
+                wc = int(src_state.get("windows_completed") or 0) + 1
+                src_state["windows_completed"] = wc
         src_state["_pending_alert_ids"] = rest
 
     stmt_rest = list(src_state.get("_pending_statement_ids") or [])
@@ -1103,6 +1389,17 @@ def run_onboarding_backfill(
                 "_defer_alert_fetch",
                 "_statement_total_at_init",
                 "_statement_id_set_at_init",
+                "_use_alert_windows",
+                "_alert_windows",
+                "_alert_next_window_idx",
+                "_alert_loaded_window_idx",
+                "_alert_loaded_window_size",
+                "_alert_emails_planned_total",
+                "_last_drained_window_kind",
+                "_last_drained_window_loaded_count",
+                "current_window_label",
+                "windows_total",
+                "windows_completed",
             ):
                 src_state.pop(k, None)
     elif not stmt_rest and not alert_rest:
@@ -1117,6 +1414,17 @@ def run_onboarding_backfill(
             "_defer_alert_fetch",
             "_statement_total_at_init",
             "_statement_id_set_at_init",
+            "_use_alert_windows",
+            "_alert_windows",
+            "_alert_next_window_idx",
+            "_alert_loaded_window_idx",
+            "_alert_loaded_window_size",
+            "_alert_emails_planned_total",
+            "_last_drained_window_kind",
+            "_last_drained_window_loaded_count",
+            "current_window_label",
+            "windows_total",
+            "windows_completed",
         ):
             src_state.pop(k, None)
     else:

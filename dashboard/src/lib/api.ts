@@ -1209,6 +1209,9 @@ export function fetchOnboardingBackfillProgress(
   current_phase: string | null;
   password_parser_key?: string | null;
   password_failure_message_id?: string | null;
+  current_window_label?: string | null;
+  windows_total?: number;
+  windows_completed?: number;
 }> {
   return get(
     `/api/onboarding/backfill/${encodeURIComponent(source)}/progress`,
