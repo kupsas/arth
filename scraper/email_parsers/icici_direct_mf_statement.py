@@ -78,8 +78,8 @@ class ICICIDirectMFStatementEmailParser(BaseBrokerStatementParser):
                 self._attachment_holdings.extend(derive_mf_holdings(txns))
             else:
                 logger.info(
-                    "ICICI MF statement PDF produced 0 rows (subject=%r)",
-                    (email_subject or "")[:120],
+                    "ICICI MF statement PDF produced 0 rows (subject_len=%d)",
+                    len(email_subject or ""),
                 )
         except Exception:
             logger.exception("ICICI MF account statement PDF parse failed")

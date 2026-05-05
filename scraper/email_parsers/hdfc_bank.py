@@ -123,8 +123,8 @@ class HDFCCreditCardAlertParser(BaseEmailParser):
         m = self._PATTERN.search(text)
         if not m:
             logger.warning(
-                "HDFCCreditCardAlertParser: regex did not match — body text was:\n%s",
-                text[:300],
+                "HDFCCreditCardAlertParser: regex did not match (extracted_plain_text_len=%d)",
+                len(text),
             )
             return []
 
@@ -298,8 +298,8 @@ class HDFCUPIAlertParser(BaseEmailParser):
             ]
 
         logger.warning(
-            "HDFCUPIAlertParser: regex did not match — body text was:\n%s",
-            text[:300],
+            "HDFCUPIAlertParser: regex did not match (extracted_plain_text_len=%d)",
+            len(text),
         )
         return []
 

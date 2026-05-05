@@ -467,10 +467,11 @@ def check_and_update_activations(
             try:
                 node = parse_condition(condition_str)
             except ConditionParseError:
+                # Do not log activation_condition — it can embed thresholds tied to balances or amounts.
                 logger.warning(
-                    "Skipping unparseable activation_condition on goal %s "
-                    "(pyramid_id=%s): %r",
-                    goal.id, goal.pyramid_id, goal.activation_condition,
+                    "Skipping unparseable activation_condition on goal id=%s (pyramid_id=%s)",
+                    goal.id,
+                    goal.pyramid_id,
                 )
                 continue
 
@@ -480,8 +481,9 @@ def check_and_update_activations(
                 session.add(goal)
                 activated_this_pass.append(goal)
                 logger.info(
-                    "Auto-activated goal %s (%s / %s): condition %r satisfied",
-                    goal.id, goal.pyramid_id, goal.name, goal.activation_condition,
+                    "Auto-activated goal id=%s (pyramid_id=%s)",
+                    goal.id,
+                    goal.pyramid_id,
                 )
 
         all_activated.extend(activated_this_pass)

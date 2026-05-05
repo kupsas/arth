@@ -236,10 +236,9 @@ def _process_email(
         The caller is responsible for catching and recording the failure.
     """
     if import_flow_log:
-        subj = (msg.subject or "")[:200]
         import_flow_log.write(
             "gmail_message_read",
-            f"id={msg.id} subject={subj!r}",
+            f"id={msg.id} subject_len={len(msg.subject or '')}",
         )
 
     # ── Step 1: subject-line filter ──────────────────────────────────────────
@@ -251,8 +250,9 @@ def _process_email(
         # This is normal — banks send non-transaction emails (MAB reminders,
         # marketing, OTP, etc.) from the same address as transaction alerts.
         logger.debug(
-            "No parser for sender='%s' subject='%s' — skipping",
-            msg.sender, msg.subject[:80],
+            "No parser for sender='%s' (subject_len=%d) — skipping",
+            msg.sender,
+            len(msg.subject or ""),
         )
         if import_flow_log:
             import_flow_log.write(
@@ -320,9 +320,9 @@ def _process_email(
         and not attachment_holdings
     ):
         logger.debug(
-            "Parser %s returned no bank rows and no investment rows for subject='%s' — skipping",
+            "Parser %s returned no bank rows and no investment rows (subject_len=%d) — skipping",
             type(parser).__name__,
-            msg.subject[:80],
+            len(msg.subject or ""),
         )
         if import_flow_log:
             import_flow_log.write("parse", "parser returned no transactions — skipped")
@@ -532,11 +532,13 @@ def scrape_new_emails(
                     result.emails_processed += 1
                     result.txns_created += txn_count
                     logger.debug(
-                        "   ✓ Processed '%s' → %d txn(s)", msg.subject[:70], txn_count
+                        "   ✓ Processed message %s → %d txn(s)",
+                        msg.id,
+                        txn_count,
                     )
                 else:
                     result.emails_skipped += 1
-                    logger.debug("   · Skipped '%s'", msg.subject[:70])
+                    logger.debug("   · Skipped message %s", msg.id)
 
                 # Add to our local dedup set so if the same message ID somehow
                 # appears again in this cycle (shouldn't happen, but defensive),
@@ -544,8 +546,8 @@ def scrape_new_emails(
                 already_done.add(msg.id)
 
             except Exception as exc:
-                error_msg = f"[{msg.id}] {msg.subject[:60]}: {exc}"
-                logger.exception("Failed to process email %s (%s)", msg.id, msg.subject[:60])
+                error_msg = f"[{msg.id}] subject_len={len(msg.subject or '')}: {exc}"
+                logger.exception("Failed to process email %s", msg.id)
                 session.rollback()
                 result.emails_failed += 1
                 result.errors.append(error_msg)

@@ -88,7 +88,7 @@ import type {
 } from "@/lib/types";
 
 import { buildApiUrl } from "@/lib/api-base";
-import { userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
+import { parseApiErrorResponseBody } from "@/lib/user-facing-api-error";
 import type { ChatSessionDetail, ChatSessionSummary } from "@/lib/chat-types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -97,16 +97,33 @@ import type { ChatSessionDetail, ChatSessionSummary } from "@/lib/chat-types";
 
 /**
  * Thrown by get() and patch() when the server returns a non-2xx status.
- * You can catch this in React Query's onError handlers and inspect .status.
+ * You can catch this in React Query's onError handlers and inspect .status,
+ * .errorCode (when the server returns Arth structured errors), and .hint.
  */
 export class ApiError extends Error {
+  readonly errorCode?: string;
+  readonly hint?: string;
+
   constructor(
     public readonly status: number,
     message: string,
+    opts?: { errorCode?: string; hint?: string },
   ) {
     super(message);
     this.name = "ApiError";
+    this.errorCode = opts?.errorCode;
+    this.hint = opts?.hint;
   }
+}
+
+/** Parse a failed response body and throw ApiError (never returns). */
+function throwApiHttpError(status: number, raw: string, emptyMessageFallback?: string): never {
+  const p = parseApiErrorResponseBody(raw);
+  const msg =
+    p.message.trim() ||
+    emptyMessageFallback ||
+    "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
+  throw new ApiError(status, msg, { errorCode: p.errorCode, hint: p.hint });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -146,7 +163,7 @@ async function get<T>(
 
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+    throwApiHttpError(res.status, raw);
   }
 
   return res.json() as Promise<T>;
@@ -176,7 +193,7 @@ async function patch<T>(
 
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+    throwApiHttpError(res.status, raw);
   }
 
   return res.json() as Promise<T>;
@@ -208,7 +225,7 @@ async function post<T>(
 
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+    throwApiHttpError(res.status, raw);
   }
 
   // 204 No Content has no body — return undefined cast to T
@@ -234,7 +251,7 @@ async function del(path: string): Promise<void> {
 
   if (!res.ok && res.status !== 204) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+    throwApiHttpError(res.status, raw);
   }
 }
 
@@ -389,7 +406,11 @@ export async function login(username: string, password: string): Promise<void> {
   });
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw) || "That didn't work. Double-check your username and password?");
+    throwApiHttpError(
+      res.status,
+      raw,
+      "That didn't work. Double-check your username and password?",
+    );
   }
 }
 
@@ -760,7 +781,7 @@ export async function uploadStatement(
 
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+    throwApiHttpError(res.status, raw);
   }
 
   return res.json() as Promise<StatementUploadResult>;
@@ -801,7 +822,7 @@ export async function uploadHoldingsStatement(
 
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+    throwApiHttpError(res.status, raw);
   }
 
   return res.json() as Promise<HoldingUploadResult>;
@@ -1051,7 +1072,7 @@ export async function streamOnboardingDiscover(
 
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText)
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw))
+    throwApiHttpError(res.status, raw);
   }
 
   const reader = res.body?.getReader()
@@ -1349,7 +1370,7 @@ export async function streamOnboardingBackfill(
 
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+    throwApiHttpError(res.status, raw);
   }
 
   const reader = res.body?.getReader();

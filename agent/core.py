@@ -266,6 +266,13 @@ async def run_agent_turn(
         msg = choice.message
         finish = str(choice.finish_reason or "").strip().lower()
         model_used = _response_model_id(response)
+        # Correlates with ``agent.llm`` DEBUG lines (latency_ms + tokens) for this HTTP round-trip.
+        logger.debug(
+            "Agent loop after LLM step=%s model=%s finish_reason=%s",
+            llm_step,
+            model_used,
+            finish or None,
+        )
         raw_content = getattr(msg, "content", None)
         content: str | None
         if isinstance(raw_content, str):
@@ -351,6 +358,13 @@ async def run_agent_turn(
                     parsed_args: dict[str, Any] = json.loads(args or "{}")
                 except json.JSONDecodeError:
                     parsed_args = {"_invalid_json": args}
+                # Visible at DEBUG: ties Datadog/console traces to UI ToolCallStarted events.
+                logger.debug(
+                    "Tool invocation start step=%s tool=%s tool_call_id=%s",
+                    llm_step,
+                    name,
+                    tid or "(none)",
+                )
                 await _emit_event(
                     event_callback,
                     ToolCallStarted(
@@ -369,6 +383,15 @@ async def run_agent_turn(
                     safe = {"status": "success", "data": safe}
                 body = wrap_tool_output(name, safe)
                 dur_ms = int((time.perf_counter() - t0) * 1000)
+                tool_outcome = "unknown_tool" if spec is None else "ok"
+                # One line per tool at INFO — enough to profile slow tools without DEBUG spam from tokens.
+                logger.info(
+                    "Tool invocation finished step=%s tool=%s duration_ms=%s outcome=%s",
+                    llm_step,
+                    name,
+                    dur_ms,
+                    tool_outcome,
+                )
                 tools_for_timeline.append(
                     {
                         "name": name,

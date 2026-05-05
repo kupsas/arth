@@ -82,8 +82,8 @@ class ICICIDirectEquityStatementEmailParser(BaseBrokerStatementParser):
                 self._attachment_holdings.extend(derive_equity_holdings(rows))
             if not rows:
                 logger.info(
-                    "ICICI equity statement PDF produced 0 rows (subject=%r)",
-                    (email_subject or "")[:120],
+                    "ICICI equity statement PDF produced 0 rows (subject_len=%d)",
+                    len(email_subject or ""),
                 )
         except Exception:
             logger.exception("ICICI equity transaction statement PDF parse failed")

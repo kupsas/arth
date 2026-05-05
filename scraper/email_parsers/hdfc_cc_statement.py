@@ -122,10 +122,10 @@ class HDFCCCStatementEmailParser(BaseStatementEmailParser):
             if last4 is None or last4 not in self.accounts:
                 logger.warning(
                     "Could not map HDFC CC PDF to an account "
-                    "(last4=%r, known=%s, subject=%r)",
-                    last4,
-                    list(self.accounts.keys()),
-                    (email_subject or "")[:100],
+                    "(configured_card_slots=%d subject_len=%d inferred_tail=%s)",
+                    len(self.accounts),
+                    len(email_subject or ""),
+                    "yes" if last4 is not None else "no",
                 )
                 return []
 

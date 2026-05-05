@@ -434,7 +434,12 @@ def _parse_one_line(
     # All INR amounts on the line; the **last** one is this txn's settlement amount.
     matches = list(_INR_AMOUNT.finditer(rest))
     if not matches:
-        logger.debug("hdfc_cc_pdf: no INR amount in line: %s", line[:120])
+        # Statement lines embed merchants and amounts — log structure only, not the raw text.
+        logger.debug(
+            "hdfc_cc_pdf: no INR amount in line (line_len=%d section=%s)",
+            len(line),
+            section,
+        )
         return None
 
     last = matches[-1]

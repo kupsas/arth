@@ -65,7 +65,8 @@ class HDFCCombinedStatementEmailParser(BaseStatementEmailParser):
         # Single savings account in config: last four digits of the account number (3703).
         if "3703" not in self.accounts:
             logger.error(
-                "HDFC combined statement parser has no account mapping for 3703 — check BANK_SENDERS."
+                "HDFC combined statement parser has no account mapping for configured HDFC "
+                "savings tail — check BANK_SENDERS."
             )
             return []
 

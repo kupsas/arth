@@ -118,11 +118,13 @@ class ICICIStatementEmailParser(BaseBrokerStatementParser):
         subject = email_subject or ""
         kind = _statement_kind(sender, subject)
         if kind is None:
+            # Subject/sender can identify accounts or statement periods — log lengths only for routing bugs.
             logger.warning(
                 "ICICIStatementEmailParser.parse_attachment called but "
-                "subject/sender would not match can_parse (sender=%r subject=%r)",
-                sender,
-                subject[:120],
+                "subject/sender would not match can_parse "
+                "(sender_len=%d subject_len=%d)",
+                len(sender),
+                len(subject),
             )
             return []
 
@@ -180,8 +182,9 @@ class ICICIStatementEmailParser(BaseBrokerStatementParser):
             e = next(iter(self.accounts.values()))
             return e["account_id"], e["source_key"]
         logger.warning(
-            "ICICIStatementEmailParser: expected account 6118 in accounts, found %s",
-            list(self.accounts.keys()),
+            "ICICIStatementEmailParser: expected mapped ICICI savings tail in accounts "
+            "(configured_account_slots=%d)",
+            len(self.accounts),
         )
         return "UNKNOWN", "unknown"
 

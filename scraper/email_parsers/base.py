@@ -82,11 +82,9 @@ class BaseEmailParser(ABC):
         entry = self.accounts.get(last4)
         if not entry:
             logger.warning(
-                "%s: received alert for account/card ending in '%s' but "
-                "it's not configured in BANK_SENDERS — skipping transaction. "
-                "Add it to scraper/config.py if you want it tracked.",
+                "%s: received alert for an account/card tail not present in BANK_SENDERS "
+                "— skipping transaction. Add the mapping in scraper/config.py if you want it tracked.",
                 type(self).__name__,
-                last4,
             )
             return None
         return entry["account_id"], entry["source_key"]

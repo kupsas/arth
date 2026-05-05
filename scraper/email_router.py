@@ -67,16 +67,16 @@ def find_parser(
     for parser in parsers:
         if parser.can_parse(sender, subject):
             logger.debug(
-                "Routing '%s' from '%s' → %s",
-                subject[:60],
+                "Routing subject_len=%d from '%s' → %s",
+                len(subject or ""),
                 sender,
                 type(parser).__name__,
             )
             return parser
 
     logger.debug(
-        "Sender '%s' is registered but no parser matched subject: '%s'",
+        "Sender '%s' is registered but no parser matched (subject_len=%d)",
         sender,
-        subject,
+        len(subject or ""),
     )
     return None

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -23,6 +24,69 @@ logger = logging.getLogger(__name__)
 
 # Stripped before every provider call — stored in RAM/SQLite for UI + replay only.
 _ARTH_PERSIST_KEYS = frozenset({"_arth_thinking", "_arth_timeline"})
+
+
+def _usage_tokens_snapshot(response: Any) -> tuple[int, int, int]:
+    """
+    Pull token counts from a LiteLLM / OpenAI-shaped response for structured logs.
+
+    Mirrors :func:`agent.security.cost_tracker._usage_tokens` so LLM logging stays
+    self-contained (no import cycle) while staying consistent with billing math.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0, 0, 0
+    pt = int(getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None) or 0)
+    ct = int(
+        getattr(usage, "completion_tokens", None)
+        or getattr(usage, "output_tokens", None)
+        or 0
+    )
+    tt = int(getattr(usage, "total_tokens", None) or (pt + ct))
+    return pt, ct, tt
+
+
+def _response_finish_reason(response: Any) -> str | None:
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return None
+    fr = getattr(choices[0], "finish_reason", None)
+    return str(fr) if fr is not None else None
+
+
+def _log_llm_roundtrip_debug(
+    *,
+    usage_call_type: str,
+    model_attempt: str,
+    latency_ms: int,
+    response: Any,
+    streaming: bool,
+) -> None:
+    """
+    Emit latency + usage metadata for each successful provider round-trip.
+
+    Kept at DEBUG so normal runs stay quiet; turn on DEBUG when profiling latency
+    or correlating token usage with slow steps.
+    """
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    pt, ct, tt = _usage_tokens_snapshot(response)
+    rid = getattr(response, "model", None) or getattr(response, "model_id", None)
+    finish = _response_finish_reason(response)
+    logger.debug(
+        "LLM round-trip usage_call_type=%r model_attempt=%r response_model=%r "
+        "streaming=%s latency_ms=%s finish_reason=%r prompt_tokens=%s "
+        "completion_tokens=%s total_tokens=%s",
+        usage_call_type,
+        model_attempt,
+        rid,
+        streaming,
+        latency_ms,
+        finish,
+        pt,
+        ct,
+        tt,
+    )
 
 
 def messages_for_llm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -151,7 +215,16 @@ async def chat_completion(
             if cfg.AGENT_REASONING_EFFORT:
                 kwargs["reasoning_effort"] = cfg.AGENT_REASONING_EFFORT
         try:
+            t0 = time.perf_counter()
             resp = await acompletion(**kwargs)
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            _log_llm_roundtrip_debug(
+                usage_call_type=usage_call_type,
+                model_attempt=m,
+                latency_ms=latency_ms,
+                response=resp,
+                streaming=False,
+            )
             if cost_tracker is not None:
                 cost_tracker.record_litellm_response(
                     response=resp, call_type=usage_call_type, model=m
@@ -366,6 +439,7 @@ async def streaming_chat_completion(
     think_streamed = False
     thinking_done_emitted = False
 
+    stream_t0 = time.perf_counter()
     try:
         stream = await acompletion(**kwargs)
     except TypeError:
@@ -400,6 +474,15 @@ async def streaming_chat_completion(
     full = stream_chunk_builder(chunks, messages=api_messages)
     if full is None:
         raise RuntimeError("streaming_chat_completion: stream_chunk_builder returned None")
+
+    stream_latency_ms = int((time.perf_counter() - stream_t0) * 1000)
+    _log_llm_roundtrip_debug(
+        usage_call_type=usage_call_type,
+        model_attempt=m,
+        latency_ms=stream_latency_ms,
+        response=full,
+        streaming=True,
+    )
 
     if cost_tracker is not None:
         cost_tracker.record_litellm_response(

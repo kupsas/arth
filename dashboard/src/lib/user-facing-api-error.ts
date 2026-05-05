@@ -2,7 +2,11 @@
  * Converts FastAPI / fetch error payloads into a single string suitable for
  * in-app UI (no raw JSON, no API path hints unless unavoidable).
  *
- * FastAPI often returns: { "detail": string | { message, hint } | array }
+ * FastAPI often returns:
+ *   - `{ "detail": string }`
+ *   - `{ "detail": { "error_code", "message", "hint" } }` (Arth structured errors)
+ *   - `{ "detail": { message, hint } }` (legacy object form)
+ *   - `{ "detail": [...] }` (validation errors)
  */
 
 /**
@@ -45,6 +49,7 @@ function formatDetailValue(detail: unknown): string {
     return parts.join(" — ") || "That didn't work. Double-check your input and try again?";
   }
 
+  // Object detail: Arth `{ error_code, message, hint }` or legacy `{ message, hint }`
   if (detail && typeof detail === "object" && "message" in detail) {
     const o = detail as { message?: unknown; hint?: unknown };
     const msg = typeof o.message === "string" ? o.message.trim() : "";
@@ -89,6 +94,79 @@ export function userMessageFromApiResponseBody(text: string): string {
 
   if (t.length > 800) return `${t.slice(0, 797)}…`;
   return t;
+}
+
+/** Shape of structured errors returned inside FastAPI `detail` for `ArthError`. */
+export type ErrorResponse = {
+  error_code: string;
+  message: string;
+  hint?: string | null;
+};
+
+/** Parsed API error for UI + optional branching on `errorCode`. */
+export type ParsedApiError = {
+  message: string;
+  errorCode?: string;
+  hint?: string;
+};
+
+/**
+ * Parse a non-2xx HTTP body into a user-facing message plus optional `error_code`
+ * (when the server returns Arth structured errors).
+ */
+export function parseApiErrorResponseBody(text: string): ParsedApiError {
+  const t = text.trim();
+  if (!t) {
+    return {
+      message:
+        "Something broke on our end. Try refreshing — if it keeps happening, let us know.",
+    };
+  }
+
+  if (!looksLikeJsonObject(t)) {
+    return {
+      message: t.length > 800 ? `${t.slice(0, 797)}…` : t,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(t) as { detail?: unknown };
+    if (parsed && typeof parsed === "object" && "detail" in parsed && parsed.detail !== undefined) {
+      const detail = parsed.detail;
+      if (
+        detail &&
+        typeof detail === "object" &&
+        "error_code" in detail &&
+        typeof (detail as ErrorResponse).error_code === "string" &&
+        "message" in detail
+      ) {
+        const d = detail as ErrorResponse;
+        const msg = typeof d.message === "string" ? d.message.trim() : "";
+        const hint =
+          d.hint != null && typeof d.hint === "string" ? d.hint.trim() : undefined;
+        let message = msg;
+        if (hint && msg && !msg.toLowerCase().includes(hint.toLowerCase().slice(0, 24))) {
+          message = `${msg} ${hint}`;
+        } else if (hint && !msg) {
+          message = hint;
+        }
+        if (!message) {
+          message =
+            "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
+        }
+        return {
+          message,
+          errorCode: d.error_code,
+          hint: hint || undefined,
+        };
+      }
+      return { message: formatDetailValue(detail) };
+    }
+  } catch {
+    /* fall through */
+  }
+
+  return { message: userMessageFromApiResponseBody(text) };
 }
 
 /**

@@ -91,8 +91,8 @@ class ICICIDirectTradeEmailParser(BaseBrokerStatementParser):
             )
             if not self._attachment_inv_txns:
                 logger.info(
-                    "NSE trades PDF produced 0 rows (subject=%r) — layout may need parser tweaks",
-                    (email_subject or "")[:100],
+                    "NSE trades PDF produced 0 rows (subject_len=%d) — layout may need parser tweaks",
+                    len(email_subject or ""),
                 )
         except Exception:
             logger.exception("NSE trades PDF parse failed")

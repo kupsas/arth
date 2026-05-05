@@ -97,9 +97,10 @@ class ICICINetBankingParser(BaseEmailParser):
         text = _extract_icici_body_text(html_body)
         m = self._PATTERN.search(text)
         if not m:
+            # Never log raw email body — it contains amounts, counterparty names, and masked account tails.
             logger.warning(
-                "ICICINetBankingParser: regex did not match — body text was:\n%s",
-                text[:300],
+                "ICICINetBankingParser: regex did not match (extracted_plain_text_len=%d)",
+                len(text),
             )
             return []
 

@@ -1014,9 +1014,10 @@ def _compute_pmt_ceilings(
 
         if _simulation_debug_enabled():
             logger.debug(
-                "refinement ceiling for %s: clash months=%d max_early=%.2f max_full=%.2f → cap=%.2f "
-                "(early_shrink=%.2f full_shrink=%.2f)",
-                g.name,
+                "refinement ceiling for goal_idx=%s goal_id=%s: clash months=%d max_early=%.2f "
+                "max_full=%.2f → cap=%.2f (early_shrink=%.2f full_shrink=%.2f)",
+                i,
+                g.id,
                 phase1_len,
                 max_early,
                 max_full,
@@ -1054,7 +1055,7 @@ def _log_simulation_debug_pit_snapshot(
             and cd.replace(day=1) < td.replace(day=1)
         )
         parts.append(
-            f"[{i}]{g.name!r} pri={g.allocation_priority} pct={p_pct} "
+            f"[{i}]goal_id={g.id!r} pri={g.allocation_priority} pct={p_pct} "
             f"done={cd} target={td} early={early}",
         )
     logger.debug("simulation %s: %s", label, "; ".join(parts) if parts else "(no PIT)")
@@ -1503,12 +1504,16 @@ def simulate(params: SimulationParams) -> SimulationResult:
                 )
             break
         if dbg:
-            ceiling_labels = {
-                params.goals[i].name: round(v, 2)
+            # Index-keyed ceilings avoid logging goal titles (user-chosen, often personally identifying).
+            ceiling_by_idx = {
+                i: round(v, 2)
                 for i, v in ceilings.items()
                 if 0 <= i < len(params.goals)
             }
-            logger.debug("simulate refinement: computed ceilings INR/month %s", ceiling_labels)
+            logger.debug(
+                "simulate refinement: computed ceilings INR/month by_goal_idx=%s",
+                ceiling_by_idx,
+            )
 
         # First refinement: prev is empty — must apply ceilings once (do not treat as converged).
         if prev_ceilings and _ceilings_converged(prev_ceilings, ceilings):
