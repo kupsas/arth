@@ -144,7 +144,7 @@ async function savePreclassification(payload: {
   });
   const t = await res.text();
   if (!res.ok) {
-    throw new Error(userMessageFromApiResponseBody(t) || "Could not save. Try again.");
+    throw new Error(userMessageFromApiResponseBody(t) || "Couldn't save. Try again.");
   }
 }
 

@@ -220,7 +220,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             cs = chat_service.get_session(db, chat_session_id, user)
             if cs is None:
                 await websocket.send_json(
-                    {"type": "error", "message": "Unknown or archived chat session.", "recoverable": False}
+                    {"type": "error", "message": "We couldn't open that chat — it may have been archived. Start a new chat?", "recoverable": False}
                 )
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
@@ -352,7 +352,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     await websocket.send_json(
                         {
                             "type": "error",
-                            "message": "Something went wrong running the agent. Please try again.",
+                            "message": "Something broke while answering — try again? If it keeps happening, refresh the page.",
                             "recoverable": True,
                         }
                     )

@@ -617,7 +617,7 @@ def patch_holding(
     if h.valuation_method != ValuationMethod.MANUAL.value:
         raise HTTPException(
             status_code=400,
-            detail="PATCH is only supported for MANUAL valuation_method holdings",
+            detail="You can only edit value and dates for holdings you track manually.",
         )
     today = datetime.datetime.now(datetime.UTC).date()
     if body.current_value is not None:

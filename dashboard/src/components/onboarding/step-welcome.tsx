@@ -124,7 +124,7 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
       const t = await res.text()
       if (!res.ok) {
         // FastAPI may return { detail: ... } — userMessageFromApiResponseBody flattens it
-        setError(userMessageFromApiResponseBody(t) || "Could not start sign-in. Try again.")
+        setError(userMessageFromApiResponseBody(t) || "Couldn't start sign-in. Try again.")
         return
       }
       // Start lightweight auto-checks after OAuth launch; primary button shows poll spinner.

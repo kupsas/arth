@@ -47,7 +47,7 @@ export function SessionSidebar({
             const active = s.id === activeSessionId;
             const label =
               (s.title && s.title.trim()) ||
-              `Chat ${s.id.slice(0, 8)}…`;
+              `Untitled chat (${s.id.slice(0, 6)}…)`;
             return (
               <div
                 key={s.id}

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Simulation sandbox — Sub-Plan H. Full-page client shell; state lives in useSimulation.
+ * Simulate — what-if surplus and goal funding (Sub-Plan H). Full-page client shell; state lives in useSimulation.
  */
 
 import * as React from "react";
@@ -23,7 +23,7 @@ function defaultHypotheticalGoal(): SimulationGoal {
   return {
     id: null,
     client_row_id: newSimulationClientRowId(),
-    name: "New hypothetical goal",
+    name: "New what-if goal",
     goal_class: "POINT_IN_TIME",
     target_amount: 500000,
     target_date: new Date(Date.now() + 86400 * 365 * 3).toISOString().slice(0, 10),
@@ -67,7 +67,7 @@ export default function SimulatePage() {
   if (error && !draftParams) {
     return (
       <div className="p-6 text-destructive">
-        Failed to load simulation: {error}
+        Couldn&apos;t load your simulation. Try refreshing? {error}
       </div>
     );
   }
@@ -75,7 +75,7 @@ export default function SimulatePage() {
   if (!draftParams || !result) {
     return (
       <div className="p-6 text-muted-foreground">
-        No simulation data.
+        Nothing to show yet — tweak the sliders or add a goal, then we&apos;ll crunch the numbers.
       </div>
     );
   }
@@ -84,13 +84,13 @@ export default function SimulatePage() {
     <div className="mx-auto max-w-5xl space-y-6 p-4 pb-16">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">Simulation sandbox</h2>
+          <h2 className="text-lg font-semibold tracking-tight">Simulate</h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {isSimulating && (
             <span className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-              Running simulation…
+              Running numbers…
             </span>
           )}
           <Button

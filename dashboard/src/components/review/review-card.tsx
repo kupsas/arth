@@ -1,5 +1,5 @@
 /**
- * ReviewCard — a single card in the Review Queue.
+ * ReviewCard — a single card on the Review screen.
  *
  * Displays the key details of an unreviewed transaction and offers three actions:
  *   ✓ Approve        — one click, marks is_reviewed: true immediately

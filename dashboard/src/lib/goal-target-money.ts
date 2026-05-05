@@ -108,7 +108,7 @@ export function inflationPlanningNote(
     return "Loan-style cash flows do not have price-level inflation."
   }
   if (resolution.method === "cpi_general_ema") {
-    return `Using headline India CPI - ${resolution.annual_pct}% per year.`
+    return `Using India headline CPI — about ${resolution.annual_pct}% per year.`
   }
   if (resolution.method === "category_default") {
     const lab = resolution.label ?? resolution.category ?? "category"

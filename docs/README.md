@@ -2,7 +2,7 @@
 
 Reference documentation, product specs, evaluations, and design notes for the Arth project.
 
-> **Personal financial data lives in `docs/personal-data/` which is gitignored and never committed.**
+> **Personal financial data:** `docs/personal-data/` is **your own machine-local folder** (gitignored) for statements and benchmarks — it is not shipped with the repo. Each contributor creates it locally if needed.
 
 ---
 

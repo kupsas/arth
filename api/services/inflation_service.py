@@ -60,12 +60,12 @@ GOAL_INFLATION_MAP: dict[str, str | None] = {
 
 # Short labels for API/UI — not the same as DB category keys
 INFLATION_CATEGORY_LABELS: dict[str, str] = {
-    "CPI_GENERAL": "headline India CPI",
-    "REAL_ESTATE": "real estate / housing",
-    "EDUCATION": "education",
-    "HEALTHCARE": "healthcare",
-    "TRAVEL_INTERNATIONAL": "international travel",
-    "TRAVEL_DOMESTIC": "domestic travel",
+    "CPI_GENERAL": "India headline CPI (all items)",
+    "REAL_ESTATE": "Housing & property costs",
+    "EDUCATION": "Education costs",
+    "HEALTHCARE": "Healthcare costs",
+    "TRAVEL_INTERNATIONAL": "International travel",
+    "TRAVEL_DOMESTIC": "Domestic travel",
 }
 
 CACHE_STALE_DAYS = 30

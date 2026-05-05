@@ -164,7 +164,7 @@ async def scraper_backfill(
     if not GMAIL_TOKEN_PATH.exists():
         raise HTTPException(
             status_code=503,
-            detail="Gmail is not connected on this device. Open the setup flow and use “Connect Gmail” first.",
+            detail="Gmail isn't connected yet. Finish setup and use Connect Gmail first.",
         )
 
     if body.gmail_query and body.sender_emails:
@@ -214,7 +214,7 @@ def start_scraper():
     if not GMAIL_TOKEN_PATH.exists():
         raise HTTPException(
             status_code=503,
-            detail="Gmail is not connected on this device. Use “Connect Gmail” in setup before starting the email reader.",
+            detail="Gmail isn't connected yet. Use Connect Gmail in setup before starting the email reader.",
         )
     resume_scheduler()
     return {"status": "started", **get_status()}
@@ -396,27 +396,27 @@ def oauth_status():
 # Static coverage map — derived from Step 3a real-email discovery.
 # This captures what we confirmed actually works vs. what doesn't.
 _COVERAGE: list[dict] = [
-    # ── HDFC ──────────────────────────────────────────────────────────────────
+    # ── HDFC (sample rows — replace account_id values in your fork with real pipeline keys) ──
     {
-        "account_id": "HDFC_SAL_3703",
+        "account_id": "HDFC_SAVINGS_SAMPLE",
         "bank": "HDFC",
-        "account_type": "Savings",
+        "account_type": "Savings (sample)",
         "has_email_coverage": True,
         "email_sender": "alerts@hdfcbank.net",
         "covered_transaction_types": [
-            "UPI outbound (all payments from savings account)",
+            "UPI outbound (payments from savings)",
             "UPI inbound (peer-to-peer credits)",
         ],
         "not_covered": [
-            "Net banking transfers outbound — HDFC does not send email alerts for these (by design)",
+            "Net banking transfers outbound — many banks skip email for these",
             "Inbound credits: salary, standing instructions, NEFT/RTGS credits",
         ],
-        "notes": "~70-80% of daily transactions are UPI and are covered in real time.",
+        "notes": "In practice, a large share of day-to-day spend is UPI and shows up in near real time.",
     },
     {
-        "account_id": "HDFC_CC_1905",
+        "account_id": "HDFC_CC_SAMPLE_A",
         "bank": "HDFC",
-        "account_type": "Credit Card (ending 1905)",
+        "account_type": "Credit card (sample A)",
         "has_email_coverage": True,
         "email_sender": "alerts@hdfcbank.net",
         "covered_transaction_types": [
@@ -425,14 +425,14 @@ _COVERAGE: list[dict] = [
         "not_covered": [
             "Refunds and cashback credits",
             "EMI auto-debits (statement only)",
-            "E-mandate / auto-pay alerts contain no amount — cannot be parsed",
+            "E-mandate / auto-pay alerts with no amount — cannot be parsed",
         ],
-        "notes": "All card swipes appear in real time. Refunds surface via statement.",
+        "notes": "Swipes usually arrive in real time; refunds often need the statement.",
     },
     {
-        "account_id": "HDFC_CC_5778",
+        "account_id": "HDFC_CC_SAMPLE_B",
         "bank": "HDFC",
-        "account_type": "Credit Card (ending 5778)",
+        "account_type": "Credit card (sample B)",
         "has_email_coverage": True,
         "email_sender": "alerts@hdfcbank.net",
         "covered_transaction_types": [
@@ -442,27 +442,27 @@ _COVERAGE: list[dict] = [
             "Refunds and cashback credits",
             "EMI auto-debits (statement only)",
         ],
-        "notes": "Same coverage as card 1905.",
+        "notes": "Same pattern as the other sample HDFC card row.",
     },
     # ── ICICI ─────────────────────────────────────────────────────────────────
     {
-        "account_id": "ICICI_SAV_6118",
+        "account_id": "ICICI_SAVINGS_SAMPLE",
         "bank": "ICICI",
-        "account_type": "Savings",
+        "account_type": "Savings (sample)",
         "has_email_coverage": True,
         "email_sender": "customernotification@icici.bank.in",
         "covered_transaction_types": [
-            "IMPS outbound via iMobile (manually initiated transfers)",
-            "NEFT outbound via iMobile (manually initiated transfers)",
+            "IMPS outbound via mobile banking (manually initiated transfers)",
+            "NEFT outbound via mobile banking (manually initiated transfers)",
         ],
         "not_covered": [
             "All inbound credits (salary, NEFT/RTGS credits, interest)",
-            "ICICI Direct / broker transactions (no transactional email; use statement PDFs)",
+            "Broker / demat transactions (often no transactional email — use statements)",
             "Automatic payments and standing instructions",
         ],
         "notes": (
-            "Only manual transfers initiated via iMobile app get email alerts. "
-            "ICICI does not send alerts for inbound transactions."
+            "Only manual transfers initiated in the banking app may get email alerts; "
+            "inbound transactions are often statement-only."
         ),
     },
 ]

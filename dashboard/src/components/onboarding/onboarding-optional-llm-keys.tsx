@@ -62,7 +62,7 @@ async function postKeys(body: {
   const t = await res.text();
   if (!res.ok) {
     throw new Error(
-      userMessageFromApiResponseBody(t) || "Could not save keys. Try again.",
+      userMessageFromApiResponseBody(t) || "Couldn't save keys. Try again.",
     );
   }
 }
@@ -180,7 +180,7 @@ export function OnboardingOptionalLlmKeys() {
         "Saved — keys are encrypted at rest. Use “Remove” if you want to delete one.",
       );
     } catch (e) {
-      setErr(getUserFacingErrorMessage(e) || "Could not save keys. Try again.");
+      setErr(getUserFacingErrorMessage(e) || "Couldn't save keys. Try again.");
     } finally {
       setBusy(false);
     }
@@ -205,7 +205,7 @@ export function OnboardingOptionalLlmKeys() {
       setRemoveConfirm(null);
       setMsg("Removed that saved key.");
     } catch (e) {
-      setErr(getUserFacingErrorMessage(e) || "Could not remove key. Try again.");
+      setErr(getUserFacingErrorMessage(e) || "Couldn't remove that key. Try again?");
     } finally {
       setBusy(false);
     }
@@ -246,7 +246,7 @@ export function OnboardingOptionalLlmKeys() {
         )}
         {statusQ.isError && (
           <p className="text-sm text-destructive" role="alert">
-            Could not load saved-key status. You can still paste keys and save — nothing was blocked.
+            Couldn&apos;t load saved-key status. You can still paste keys and save — nothing was blocked.
           </p>
         )}
         {!loadingStatus && st?.has_any_api_key && (

@@ -146,12 +146,12 @@ def verify_session_token(token: str) -> str:
     except SignatureExpired:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired — please log in again",
+            detail="Your session expired — please sign in again.",
         )
     except BadSignature:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid session token",
+            detail="That sign-in link didn't work. Please sign in again.",
         )
 
 
@@ -183,7 +183,7 @@ def get_current_user(
     if arth_session is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
+            detail="Please sign in to continue.",
         )
     return verify_session_token(arth_session)
 
@@ -200,6 +200,6 @@ def effective_user_id(
     if out != current_user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="user_id must match the authenticated user.",
+            detail="That user id doesn't match who's signed in.",
         )
     return out

@@ -633,7 +633,7 @@ export function GoalTemplateWizard() {
             )}
             {isError && (
               <p className="ml-3 text-sm text-destructive" role="alert">
-                {getUserFacingErrorMessage(error) || "Could not create the goal. Try again."}
+                {getUserFacingErrorMessage(error) || "Couldn't create that goal. Try again."}
               </p>
             )}
           </CardFooter>

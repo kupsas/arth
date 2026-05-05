@@ -40,8 +40,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Arth — Personal Finance Dashboard",
-  description: "Spending insights, transaction management, and review queue.",
+  title: "Arth — Your money, your way",
+  description:
+    "Track spending, goals, and holdings in one place — built for how money works in India.",
 };
 
 export default function RootLayout({

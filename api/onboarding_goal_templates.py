@@ -297,7 +297,7 @@ def build_goal_templates_response(
         infl_cat = _inflation_category_for_subtype(gsubtype)
         infl_pct = _annual_inflation_pct(session, infl_cat)
         lbl = INFLATION_CATEGORY_LABELS.get(
-            infl_cat, "headline India CPI"
+            infl_cat, "India headline CPI (all items)"
         )
         enriched: dict[str, Any] = {
             **row,
@@ -356,7 +356,7 @@ def build_goal_templates_response(
                 "inflation_fv_inr": round(fv, 2),
                 "preview_mechanism": "POINT_IN_TIME",
                 "copy": (
-                    "One-time goals: today's rupees grown with headline India CPI — "
+                    "One-time goals: we grow today's rupees using India headline CPI (all items) — "
                     f"₹{t_amt:,.0f} → about ₹{fv:,.0f} over ~{t_y:.1f}y "
                     f"(display only; pick a template below for category-specific hints)."
                 ),

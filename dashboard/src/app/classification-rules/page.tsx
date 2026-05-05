@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Merchant keyword rules learned from corrections + starter pack rows.
+ * Sorting rules — merchant keyword rules from built-in data and your corrections.
  * CRUD via GET/PATCH/DELETE /api/user/merchant-rules
  */
 
@@ -29,6 +29,20 @@ type MerchantRuleRow = {
   source: string;
   created_at: string | null;
 };
+
+/** Map internal rule source keys to short labels users understand (see copy guidelines). */
+function ruleSourceLabel(source: string): string {
+  const s = source.trim().toUpperCase();
+  if (s === "USER_CORRECTION") return "You fixed this";
+  if (s === "STARTER_PACK") return "Built-in";
+  if (s === "LEARNED" || s.endsWith("_LEARNED")) return "Learned";
+  if (!s) return "—";
+  return source
+    .split("_")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
 
 async function fetchRules(): Promise<MerchantRuleRow[]> {
   const res = await fetch(buildApiUrl("/api/user/merchant-rules"), {
@@ -74,7 +88,7 @@ export default function ClassificationRulesPage() {
     try {
       setRows(await fetchRules());
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to load");
+      setErr(e instanceof Error ? e.message : "Couldn't load your rules. Try again?");
     } finally {
       setLoading(false);
     }
@@ -87,11 +101,12 @@ export default function ClassificationRulesPage() {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold">Classification rules</h1>
+        <h1 className="text-xl font-semibold">Sorting rules</h1>
         <p className="text-sm text-muted-foreground">
-          Keyword matches for card and bank narrations. Starter-pack rows ship with
-          the app; corrections you save from the review queue appear as{" "}
-          <code className="text-xs">USER_CORRECTION</code>.
+          These rules help Arth automatically sort your transactions. We match keywords
+          from your bank descriptions to figure out who you paid and what category it
+          belongs to. Rules you&apos;ve fixed yourself show up as &quot;You fixed this&quot;
+          in the table below.
         </p>
       </div>
 
@@ -99,8 +114,8 @@ export default function ClassificationRulesPage() {
         <CardHeader>
           <CardTitle>Add rule</CardTitle>
           <CardDescription>
-            Keyword is matched as a substring (uppercased). First match wins in the
-            pipeline.
+            Enter a keyword that appears in your bank transactions. Arth will use the
+            first matching rule it finds.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
@@ -155,7 +170,7 @@ export default function ClassificationRulesPage() {
                 setCat("");
                 await load();
               } catch (e) {
-                setErr(e instanceof Error ? e.message : "Create failed");
+                setErr(e instanceof Error ? e.message : "Couldn't save that rule. Try again?");
               }
             }}
           >
@@ -191,7 +206,7 @@ export default function ClassificationRulesPage() {
                     <th className="p-2 font-medium">Keyword</th>
                     <th className="p-2 font-medium">Display</th>
                     <th className="p-2 font-medium">Category</th>
-                    <th className="p-2 font-medium">Source</th>
+                    <th className="p-2 font-medium">Where it came from</th>
                     <th className="w-12 p-2" />
                   </tr>
                 </thead>
@@ -204,7 +219,7 @@ export default function ClassificationRulesPage() {
                         {r.counterparty_category}
                       </td>
                       <td className="p-2 text-xs text-muted-foreground">
-                        {r.source}
+                        {ruleSourceLabel(r.source)}
                       </td>
                       <td className="p-2">
                         <Button
@@ -216,7 +231,7 @@ export default function ClassificationRulesPage() {
                           onClick={async () => {
                             if (
                               !confirm(
-                                `Delete rule for keyword ${r.keyword}?`,
+                                `Remove the rule for "${r.display_name}" (${r.keyword})? Existing transactions stay as they are, but new ones won't use this rule.`,
                               )
                             )
                               return;
@@ -228,7 +243,7 @@ export default function ClassificationRulesPage() {
                               setErr(
                                 e instanceof Error
                                   ? e.message
-                                  : "Delete failed",
+                                  : "Couldn't remove that rule. Try again?",
                               );
                             }
                           }}

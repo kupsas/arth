@@ -22,7 +22,7 @@ The prompts have had three homes:
 
 | File | Purpose |
 |---|---|
-| `classify_single_pass.yaml` | **Active prompt.** Classifies all fields in one LLM call. |
+| `classify_single_pass.yaml` | **Active prompt.** Sorts all fields in one model call. |
 | `enums.yaml` | Canonical enum values (`TxnType`, `Channel`, `UPIType`, `CounterpartyCategory`). Imported by the classifier prompt. |
 | `few_shot_examples.yaml` | Labeled example transactions for few-shot guidance. Shared across prompts. |
 | `classify_two_pass_fields.yaml` | Archived. Two-pass strategy — Step 1: fields. Kept for reference only. |

@@ -181,7 +181,7 @@ export function SaveSimulationDialog({
       await onSuccess();
       onOpenChange(false);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Save failed");
+      setErr(e instanceof Error ? e.message : "Couldn't save. Try again?");
     } finally {
       setSaving(false);
     }

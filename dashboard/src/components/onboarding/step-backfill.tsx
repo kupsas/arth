@@ -78,7 +78,7 @@ function statusLabel(status: string | undefined): string {
     case "complete":
       return "Finished this account"
     case "error":
-      return "Something went wrong"
+      return "That didn't go as planned"
     default:
       return status ? status.replace(/_/g, " ") : "Starting…"
   }

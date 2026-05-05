@@ -379,7 +379,7 @@ def _process_email(
 
             # ── Step 8: write to DB ──────────────────────────────────────────────
             # source_type="email" means:
-            #   - is_reviewed=False (transaction surfaces in the Review Queue)
+            #   - is_reviewed=False (transaction surfaces on Review)
             #   - gmail_message_id is stamped on each row for audit trail
             #   - reconciliation logic is SKIPPED for this write (we ARE the email row,
             #     not the statement row — the statement pipeline will reconcile against us)

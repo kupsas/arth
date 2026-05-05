@@ -6,7 +6,7 @@ Find the best LLM model for transaction classification (counterparty, counterpar
 
 ## Setup
 
-- **Test fixture:** 20 hand-picked transactions from the HDFC savings statement, covering easy/medium/hard classification difficulty
+- **Test fixture:** 20 hand-picked transactions from a sample savings statement, covering easy/medium/hard classification difficulty
 - **Ground truth:** Manually classified values from the GSheet (GSheet_Transactions.csv)
 - **Prompt strategies tested:** Single-pass (all fields in one call) vs Two-pass (fields first, then category separately using "txn_type + counterparty")
 - **Models tested:** 9 models across 3 providers (10th, gemini-3-flash, timed out consistently)

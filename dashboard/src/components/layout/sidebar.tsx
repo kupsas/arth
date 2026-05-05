@@ -39,7 +39,7 @@ import { cn } from "@/lib/utils";
 /** Each entry defines one navigation item in the sidebar. */
 const NAV_ITEMS = [
   {
-    label: "Expense Tracker",
+    label: "Home",
     href: "/",
     icon: LayoutDashboard,
   },
@@ -69,12 +69,12 @@ const NAV_ITEMS = [
     icon: PieChart,
   },
   {
-    label: "Review Queue",
+    label: "Review",
     href: "/review",
     icon: ClipboardList,
   },
   {
-    label: "Classification",
+    label: "Sorting rules",
     href: "/classification-rules",
     icon: Tags,
   },
@@ -134,7 +134,7 @@ export function Sidebar() {
 
       {/* ── Footer (version) ──────────────────────────────────────── */}
       <div className="border-t border-sidebar-border px-4 py-3">
-        <p className="text-xs text-muted-foreground">Arth v0.5 · Dashboard V2</p>
+        <p className="text-xs text-muted-foreground">Arth v0.5</p>
       </div>
     </aside>
   );

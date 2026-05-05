@@ -2,7 +2,7 @@
  * TransactionEditSheet — a slide-in panel for editing a single transaction.
  *
  * Opens from the right side when the user clicks a row in the table.
- * Also used by the Review Queue ("Edit & Approve" button).
+ * Also used by Review ("Edit & Approve" button).
  *
  * Read-only display fields:
  *   - Date, amount, direction, account, channel, raw description

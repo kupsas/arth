@@ -11,6 +11,7 @@ import { ChatInput } from "./chat-input";
 import { MessageList } from "./message-list";
 
 const STARTERS = [
+  "Kuch poocho — kitna kharcha food pe is month?",
   "How much did I spend on food this month?",
   "What's my net worth right now?",
   "What's my savings rate for the last 3 months?",
@@ -57,7 +58,7 @@ export function ChatPanel({
       {messages.length === 0 && ready && (
         <div className="rounded-xl border border-dashed border-border bg-muted/10 p-6">
           <p className="mb-3 text-sm font-medium text-foreground">
-            Ask Arth anything about your finances
+            Ask Arth anything about your money
           </p>
           <p className="mb-3 text-xs text-muted-foreground">
             Try one of these to get started:

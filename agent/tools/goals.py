@@ -221,6 +221,7 @@ def format_surplus_allocation_for_agent(data: dict[str, Any]) -> dict[str, Any]:
         "surplus_path_b": float(data.get("surplus_path_b") or 0),
         "months_analyzed": int(data.get("months_analyzed") or 0),
         "computation_method": data.get("computation_method"),
+        "computation_method_label": data.get("computation_method_label"),
         "month_details": slim_months,
         "warnings": data.get("warnings") or [],
         "currency": "INR",

@@ -24,9 +24,9 @@ export type GoalUiKind =
   | "EXPENSE_LIMIT"
 
 export const GOAL_UI_KIND_LABELS: Record<GoalUiKind, string> = {
-  POINT_IN_TIME: "One-time or investment target (lump sum)",
-  RECURRING_CASH_FLOW: "Recurring cash flow (EMI, rent…)",
-  EXPENSE_LIMIT: "Spending cap (budget)",
+  POINT_IN_TIME: "Big one-time target (home, corpus, etc.)",
+  RECURRING_CASH_FLOW: "Repeating cash flow (EMI, rent…)",
+  EXPENSE_LIMIT: "Spend cap (budget)",
 }
 
 /** Form state for Add Goal — keeps UI fields separate from API until submit. */

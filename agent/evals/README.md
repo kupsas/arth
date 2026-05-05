@@ -1,6 +1,6 @@
 # Arth agent — evals & benchmarking
 
-This package runs the **33-question** suite from the product plan against your **local** API + SQLite (same path as the CLI).
+This package runs the **33-question** evaluation suite against your **local** API + SQLite (same path as the CLI).
 
 ## Quick start
 

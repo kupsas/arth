@@ -246,9 +246,10 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Classification mix</CardTitle>
+          <CardTitle className="text-base">Sorting mix</CardTitle>
           <p className="text-sm text-muted-foreground font-normal">
-            Share of transactions by automation provenance (rules vs LLM vs your edits vs still blank).
+            How your transactions were labelled: built-in rules, smart auto-labels, your
+            own fixes, and what&apos;s still open.
           </p>
         </CardHeader>
         <CardContent className="text-sm space-y-2">
@@ -257,7 +258,7 @@ export default function SettingsPage() {
           )}
           {classificationStats.isError && (
             <p className="text-destructive" role="alert">
-              Could not load classification stats.
+              Couldn&apos;t load your sorting stats. Try refreshing?
             </p>
           )}
           {classificationStats.data && classificationStats.data.total_transactions === 0 && (
@@ -266,21 +267,21 @@ export default function SettingsPage() {
           {classificationStats.data && classificationStats.data.total_transactions > 0 && (
             <ul className="space-y-1.5 list-none pl-0">
               <li>
-                <span className="text-muted-foreground">Rules</span>{" "}
+                <span className="text-muted-foreground">Built-in rules</span>{" "}
                 <span className="font-medium tabular-nums">{classificationStats.data.rules_pct}%</span>
               </li>
               <li>
-                <span className="text-muted-foreground">LLM</span>{" "}
+                <span className="text-muted-foreground">Smart labels</span>{" "}
                 <span className="font-medium tabular-nums">{classificationStats.data.llm_pct}%</span>
               </li>
               <li>
-                <span className="text-muted-foreground">User-confirmed</span>{" "}
+                <span className="text-muted-foreground">Your corrections</span>{" "}
                 <span className="font-medium tabular-nums">
                   {classificationStats.data.user_confirmed_pct}%
                 </span>
               </li>
               <li>
-                <span className="text-muted-foreground">Unclassified</span>{" "}
+                <span className="text-muted-foreground">Still open</span>{" "}
                 <span className="font-medium tabular-nums">
                   {classificationStats.data.unclassified_pct}%
                 </span>
@@ -303,7 +304,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">Statement upload</CardTitle>
           <p className="text-sm text-muted-foreground font-normal">
-            Run the pipeline on a new bank export.
+            Run the import on a new bank export.
           </p>
         </CardHeader>
         <CardContent>

@@ -1,7 +1,6 @@
 /**
  * ReviewQueueBanner — amber call-to-action when bank and/or investment ledger
- * rows still have is_reviewed=false. Shown on the main dashboard and Holdings
- * so you don’t miss work on either surface.
+ * rows still need a quick check. Shown on Home and Holdings so you don't miss work.
  */
 
 "use client";
@@ -102,7 +101,7 @@ export function ReviewQueueBanner() {
         />
       </span>
       <span className="shrink-0 text-xs font-medium text-amber-600 dark:text-amber-400 underline underline-offset-2">
-        Review Queue →
+        Review →
       </span>
     </Link>
   );

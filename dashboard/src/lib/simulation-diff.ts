@@ -52,7 +52,11 @@ export function diffGoalRow(
     changes.push({ label: "Name", from: base.name, to: draft.name });
   }
   if (base.goal_class !== draft.goal_class) {
-    changes.push({ label: "Goal class", from: String(base.goal_class), to: String(draft.goal_class) });
+    changes.push({
+      label: "Goal shape",
+      from: String(base.goal_class),
+      to: String(draft.goal_class),
+    });
   }
   if ((base.target_amount ?? null) !== (draft.target_amount ?? null)) {
     changes.push({
@@ -93,14 +97,14 @@ export function diffGoalRow(
   const di = draft.inflation_rate ?? null;
   if (bi !== di) {
     changes.push({
-      label: "Inflation (goal)",
-      from: bi == null ? "(headline)" : fmtPct(bi),
-      to: di == null ? "(headline)" : fmtPct(di),
+      label: "Inflation (this goal)",
+      from: bi == null ? "(broad CPI)" : fmtPct(bi),
+      to: di == null ? "(broad CPI)" : fmtPct(di),
     });
   }
   if ((base.goal_subtype ?? null) !== (draft.goal_subtype ?? null)) {
     changes.push({
-      label: "Subtype",
+      label: "Goal category",
       from: base.goal_subtype ?? "—",
       to: draft.goal_subtype ?? "—",
     });

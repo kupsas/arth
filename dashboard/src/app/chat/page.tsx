@@ -83,8 +83,8 @@ function ChatPageInner() {
       <div>
         <h2 className="text-lg font-semibold">Ask Arth</h2>
         <p className="text-sm text-muted-foreground">
-          Read-only Q&amp;A over your local data. Arth may call tools to fetch
-          numbers from your Arth database.
+          Poocho! Ask me anything about your money — spending, goals, investments,
+          whatever&apos;s on your mind.
         </p>
       </div>
       <ChatLayout

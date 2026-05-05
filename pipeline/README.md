@@ -71,9 +71,9 @@ Accuracy after rules only (no LLM):
 
 | Source | channel | txn_type | counterparty | counterparty_category |
 |---|---|---|---|---|
-| HDFC CC 1905 | 100% | 100% | 89.7% | 97.4% |
-| HDFC CC 5778 | 100% | 100% | 100% | 100% |
-| ICICI Savings | 100% | 96.2% | 97.2% | 97.2% |
+| Sample credit card A | 100% | 100% | 89.7% | 97.4% |
+| Sample credit card B | 100% | 100% | 100% | 100% |
+| Sample savings account | 100% | 96.2% | 97.2% | 97.2% |
 
 ### Stage 4: LLM for the Long Tail
 
@@ -90,7 +90,7 @@ Set `LLM_MODEL=auto` in `.env` to use the full chain. Set `LLM_MODEL=none` to sk
 
 Benchmark methodology and full results: [`docs/evaluations/llm-benchmark-2026-03/README.md`](../docs/evaluations/llm-benchmark-2026-03/README.md)
 
-### Final accuracy (rules + LLM, full HDFC savings dataset, March 2026)
+### Final accuracy (rules + LLM, large real-world savings sample, March 2026)
 
 | Field | Accuracy |
 |---|---|
@@ -147,6 +147,8 @@ You can seed the legacy snapshot with:
 ```bash
 python3 scripts/migrate_sashank_config_to_db.py --user-id yourname
 ```
+
+(`migrate_sashank_config_to_db.py` is a legacy filename — it seeds **any** `user_id` you pass.)
 
 Or insert manually (example shape):
 
