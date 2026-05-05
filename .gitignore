@@ -106,6 +106,9 @@ data/email_fixture_redactions.json
 # Committed HTML under tests/fixtures/email_samples/ is synthetic / scrubbed for CI.
 # After `scripts/sync_email_parser_fixtures.py` with --no-redact, re-review before commit.
 
+# Local clones of external repos for study / comparison (never commit)
+research/
+
 # Next.js dashboard build artifacts and nested git repo
 dashboard/node_modules/
 dashboard/.next/
