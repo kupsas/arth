@@ -71,8 +71,8 @@ export function GoalTargetMoneyHint({
     return (
       <p className={className ?? "text-xs text-muted-foreground leading-relaxed"}>
         Enter the target in <span className="font-medium text-foreground">today&apos;s rupees</span>{" "}
-        (today&apos;s purchasing power). Plans and simulations inflate this to a nominal future amount
-        for contributions.
+        — what that money buys <span className="font-medium text-foreground">today</span>. Plans and
+        simulations then grow it toward a nominal future number for contributions.
       </p>
     )
   }
@@ -101,7 +101,7 @@ export function GoalTargetMoneyHint({
               <span className="font-medium text-foreground">
                 {formatCurrency(expl.nominalAtDate)}
               </span>{" "}
-              to match today&apos;s purchasing power.
+              to match roughly the same lifestyle in rupee terms.
             </>
           ) : (
             <>
@@ -145,9 +145,8 @@ export function SimulationGoalTargetMoneyHint({
   if (!expl?.showTodaysMoneyLine) {
     return (
       <p className="text-[11px] text-muted-foreground leading-relaxed">
-        Target is in <span className="font-medium text-foreground">today&apos;s rupees</span>.
-        Inflation follows goal subtype when the field is empty (or the general inflation slider for
-        headline CPI).
+        Target uses <span className="font-medium text-foreground">today&apos;s rupees</span>. Leave
+        inflation blank to follow your goal type (or the general inflation slider for broad CPI).
       </p>
     )
   }
@@ -155,8 +154,8 @@ export function SimulationGoalTargetMoneyHint({
   return (
     <div className="space-y-2 text-[11px] text-muted-foreground leading-relaxed">
       <p>
-        Target is in <span className="font-medium text-foreground">today&apos;s rupees</span> (today&apos;s
-        purchasing power).
+        Target is in <span className="font-medium text-foreground">today&apos;s rupees</span> (what
+        things roughly cost right now).
       </p>
       {expl.planningNote ? (
         <p className="rounded-md border border-dashed border-border/80 bg-muted/30 px-2 py-1.5">
@@ -172,7 +171,7 @@ export function SimulationGoalTargetMoneyHint({
               <span className="font-medium text-foreground">
                 {formatCurrency(expl.nominalAtDate)}
               </span>{" "}
-              nominal to match that purchasing power.
+              nominal to match that lifestyle in rupee terms.
             </>
           ) : (
             <>

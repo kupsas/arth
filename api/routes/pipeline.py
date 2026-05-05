@@ -83,14 +83,15 @@ def trigger_pipeline_run(
     if body.source_key not in allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid source_key: {body.source_key!r}. "
-                   f"Valid options for this user: {sorted(allowed)}",
+            detail=(
+                "That bank source isn't set up for your account yet. "
+                f"Configured sources: {', '.join(sorted(allowed))}."
+            ),
         )
     if body.source_key == "all" and not valid_keys:
         raise HTTPException(
             status_code=400,
-            detail="No pipeline sources configured for this user "
-                   "(user_pipeline_sources is empty).",
+            detail="No bank sources are set up for your account yet. Add one under Settings.",
         )
 
     # Determine which sources to run
@@ -123,8 +124,8 @@ def trigger_pipeline_run(
 
     return PipelineRunResponse(
         run_ids=run_ids,
-        message=f"Pipeline started for {body.source_key} ({len(source_keys)} source(s)). "
-                f"Poll GET /api/pipeline/runs/{{id}} for status.",
+        message=f"Import started for {body.source_key} ({len(source_keys)} source(s)). "
+        "You can leave this page — we'll keep working in the background.",
     )
 
 
@@ -159,7 +160,7 @@ def get_pipeline_run(run_id: int, *, session: Session = Depends(get_session)):
     """Get details of a single pipeline run (useful for polling status)."""
     run = session.get(PipelineRun, run_id)
     if not run:
-        raise HTTPException(status_code=404, detail=f"Pipeline run {run_id} not found")
+        raise HTTPException(status_code=404, detail="Couldn't find that import run.")
     return _run_to_detail(run)
 
 
@@ -444,7 +445,10 @@ async def upload_statement(
             if sk not in user_sources:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid source_key {sk!r}. Configured: {valid_keys}",
+                    detail=(
+                        f"That bank source isn't set up for your account. "
+                        f"Configured: {valid_keys}"
+                    ),
                 )
             run = PipelineRun(source_key=sk, llm_model=llm_model, status="running")
             session.add(run)

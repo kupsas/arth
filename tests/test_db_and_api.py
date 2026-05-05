@@ -490,7 +490,7 @@ class TestPipelineTrigger:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["run_ids"]) == 1
-        assert "Pipeline started" in data["message"]
+        assert "Import started" in data["message"]
 
 
 # ───────────────────────────────────────────────────────────────────────────

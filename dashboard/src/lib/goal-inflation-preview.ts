@@ -29,12 +29,12 @@ export const CATEGORY_INFLATION_DEFAULTS_PCT: Record<string, number> = {
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
-  CPI_GENERAL: "headline India CPI",
-  REAL_ESTATE: "real estate / housing",
-  EDUCATION: "education",
-  HEALTHCARE: "healthcare",
-  TRAVEL_INTERNATIONAL: "international travel",
-  TRAVEL_DOMESTIC: "domestic travel",
+  CPI_GENERAL: "India headline CPI (all items)",
+  REAL_ESTATE: "Housing & property costs",
+  EDUCATION: "Education costs",
+  HEALTHCARE: "Healthcare costs",
+  TRAVEL_INTERNATIONAL: "International travel",
+  TRAVEL_DOMESTIC: "Domestic travel",
 }
 
 /**

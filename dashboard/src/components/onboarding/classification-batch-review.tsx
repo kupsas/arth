@@ -273,7 +273,7 @@ export function ClassificationBatchReview({
         pi -= 1;
       }
     } catch (e) {
-      setError(getUserFacingErrorMessage(e) || "Could not reload the list.");
+      setError(getUserFacingErrorMessage(e) || "Couldn't refresh the list.");
     } finally {
       setLoading(false);
     }
@@ -315,7 +315,7 @@ export function ClassificationBatchReview({
         }
       } catch (e) {
         if (!cancelled) {
-          setError(getUserFacingErrorMessage(e) || "Could not load transactions to review.");
+          setError(getUserFacingErrorMessage(e) || "Couldn't load transactions to review.");
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -405,7 +405,7 @@ export function ClassificationBatchReview({
       onSubmitted?.();
       await reloadQueueAfterMutation();
     } catch (e) {
-      setError(getUserFacingErrorMessage(e) || "Could not save your changes.");
+      setError(getUserFacingErrorMessage(e) || "Couldn't save your changes.");
     } finally {
       setBusy(false);
     }
@@ -446,7 +446,7 @@ export function ClassificationBatchReview({
       onSubmitted?.();
       await reloadQueueAfterMutation();
     } catch (e) {
-      setError(getUserFacingErrorMessage(e) || "Could not mark the queue as Uber.");
+      setError(getUserFacingErrorMessage(e) || "Couldn't apply that bulk change.");
     } finally {
       setBusy(false);
     }

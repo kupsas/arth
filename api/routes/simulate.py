@@ -129,6 +129,7 @@ def build_simulation_params_from_db(
     meta: dict[str, Any] = {
         "user_id": user_id,
         "monthly_surplus_source": surplus_res.computation_method,
+        "monthly_surplus_source_label": surplus_res.computation_method_label,
         "priority_computed_at": pri.computed_at.isoformat(),
         "simulation_inflation_ema_pct": general_ema,
         "active_goals_loaded": len(sim_goals),

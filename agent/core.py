@@ -38,8 +38,7 @@ logger = logging.getLogger(__name__)
 # Shown when the user has sent the maximum number of user turns for this session.
 # Kept in one place so the CLI pre-check and ``run_agent_turn`` stay in sync.
 CONVERSATION_LIMIT_REPLY = (
-    "This session has reached its conversation limit. "
-    "Please start a new session to continue."
+    "You've hit the limit for this chat — start a fresh one and we can keep going."
 )
 
 

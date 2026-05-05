@@ -94,7 +94,17 @@ class SurplusResult(BaseModel):
         ...,
         description="Median of monthly Path B surplus values (NEED + median WANT)",
     )
-    computation_method: str = Field(default="conservative_min_of_dual_path_median")
+    computation_method: str = Field(
+        default="conservative_min_of_dual_path_median",
+        description="Stable internal id for how monthly_surplus was derived.",
+    )
+    computation_method_label: str = Field(
+        default=(
+            "We compare two spending estimates each month, take the lower one (cautious), "
+            "then smooth with a median — a conservative read on your surplus."
+        ),
+        description="Human-readable explanation of computation_method for dashboards and tools.",
+    )
     months_analyzed: int
     month_details: list[MonthDetail]
     recurring_income_patterns: list[dict]
@@ -220,18 +230,24 @@ def compute_surplus(
     """
     warnings: list[str] = []
     if months < 3:
-        warnings.append("months < 3 requested; using minimum of 3 for stable median")
+        warnings.append(
+            "You asked for fewer than 3 months — we use at least 3 so the rolling median stays stable."
+        )
         months = 3
     elif months > 12:
         months = 12
 
     allowed = _allowed_account_ids(session, user_id)
     if not allowed:
-        warnings.append("No transactions on accounts mapped to this user; expense baseline is zero")
+        warnings.append(
+            "We didn't find any transactions on accounts linked to you yet — spending is treated as zero here."
+        )
 
     monthly_income, recurring_income_patterns = _recurring_monthly_income(session, user_id)
     if monthly_income <= 0:
-        warnings.append("No active recurring INFLOW patterns; income baseline is zero")
+        warnings.append(
+            "No active recurring income patterns yet — we're treating monthly income as zero for this check."
+        )
 
     labels = _generate_month_labels(months)
     month_details: list[MonthDetail] = []
@@ -279,6 +295,10 @@ def compute_surplus(
         surplus_path_a=med_a,
         surplus_path_b=med_b,
         computation_method="conservative_min_of_dual_path_median",
+        computation_method_label=(
+            "We compare two spending estimates each month, take the lower one (cautious), "
+            "then smooth with a median — a conservative read on your surplus."
+        ),
         months_analyzed=len(labels),
         month_details=month_details,
         recurring_income_patterns=recurring_income_patterns,

@@ -195,7 +195,7 @@ function SingleGoalBar({ goal }: { goal: Goal }) {
     return (
       <div className="rounded-lg border border-border/80 p-3">
         <p className="text-sm text-muted-foreground">
-          Could not load progress for this goal.
+          Couldn&apos;t load this goal&apos;s progress. Try refreshing?
         </p>
       </div>
     )

@@ -46,7 +46,10 @@ export default function LoginPage() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body.detail ?? "Login failed — check your credentials.");
+        setError(
+          body.detail ??
+            "Hmm, wrong username or password. Give it another shot.",
+        );
         return;
       }
 
@@ -54,7 +57,9 @@ export default function LoginPage() {
       router.push(redirectTo);
       router.refresh();  // flush the Next.js client-side router cache
     } catch {
-      setError("Could not reach the API server. Is it running on port 8000?");
+      setError(
+        "Can't connect to Arth right now. Make sure the app is running and try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -73,7 +78,7 @@ export default function LoginPage() {
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-semibold tracking-tight">Arth</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Personal Finance Dashboard
+            Your money. Your way.
           </p>
         </div>
 
@@ -100,7 +105,7 @@ export default function LoginPage() {
                 className="w-full rounded-md border bg-background px-3 py-2 text-sm
                            placeholder:text-muted-foreground
                            focus:outline-none focus:ring-2 focus:ring-ring"
-                placeholder="sashank"
+                placeholder="username"
               />
             </div>
 
@@ -139,7 +144,7 @@ export default function LoginPage() {
                          text-primary-foreground transition-opacity
                          hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {loading ? "Signing in…" : "Sign in"}
+              {loading ? "Logging you in…" : "Sign in"}
             </button>
           </form>
         </div>

@@ -62,7 +62,7 @@ def login(body: LoginRequest, response: Response) -> AuthStatusResponse:
         logger.warning("Failed login attempt for username: %r", body.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
+            detail="Hmm, wrong username or password. Give it another shot.",
         )
 
     token = create_session_token(body.username)

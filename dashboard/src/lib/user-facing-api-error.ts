@@ -19,7 +19,7 @@ function looksLikeJsonObject(s: string): boolean {
 function formatDetailValue(detail: unknown): string {
   if (typeof detail === "string") {
     const m = detail.trim();
-    if (!m) return "Something went wrong. Please try again.";
+    if (!m) return "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
     if (m.length > 800) return `${m.slice(0, 797)}…`;
     return m;
   }
@@ -42,14 +42,14 @@ function formatDetailValue(detail: unknown): string {
         return String(item);
       }
     });
-    return parts.join(" — ") || "Something went wrong. Please check your input.";
+    return parts.join(" — ") || "That didn't work. Double-check your input and try again?";
   }
 
   if (detail && typeof detail === "object" && "message" in detail) {
     const o = detail as { message?: unknown; hint?: unknown };
     const msg = typeof o.message === "string" ? o.message.trim() : "";
     const hint = typeof o.hint === "string" ? o.hint.trim() : "";
-    if (!msg && !hint) return "Something went wrong. Please try again.";
+    if (!msg && !hint) return "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
     if (!hint) return msg;
     if (!msg) return hint;
     if (msg.toLowerCase().includes(hint.toLowerCase().slice(0, 24))) return msg;
@@ -59,7 +59,7 @@ function formatDetailValue(detail: unknown): string {
   try {
     return JSON.stringify(detail);
   } catch {
-    return "Something went wrong. Please try again.";
+    return "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
   }
 }
 
@@ -68,7 +68,7 @@ function formatDetailValue(detail: unknown): string {
  */
 export function userMessageFromApiResponseBody(text: string): string {
   const t = text.trim();
-  if (!t) return "Something went wrong. Please try again.";
+  if (!t) return "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
 
   if (!looksLikeJsonObject(t)) {
     if (t.length > 800) return `${t.slice(0, 797)}…`;
@@ -96,7 +96,7 @@ export function userMessageFromApiResponseBody(text: string): string {
  * a JSON string, or unknown.
  */
 export function getUserFacingErrorMessage(err: unknown): string {
-  if (err == null) return "Something went wrong. Please try again.";
+  if (err == null) return "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
 
   if (typeof err === "string") {
     return userMessageFromApiResponseBody(err);
@@ -107,7 +107,7 @@ export function getUserFacingErrorMessage(err: unknown): string {
     if (m.trim() && (looksLikeJsonObject(m) || m.trim().startsWith("["))) {
       return userMessageFromApiResponseBody(m);
     }
-    if (!m.trim()) return "Something went wrong. Please try again.";
+    if (!m.trim()) return "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
     return m;
   }
 

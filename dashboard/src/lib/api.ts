@@ -389,7 +389,7 @@ export async function login(username: string, password: string): Promise<void> {
   });
   if (!res.ok) {
     const raw = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, userMessageFromApiResponseBody(raw) || "Login failed");
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw) || "That didn't work. Double-check your username and password?");
   }
 }
 

@@ -85,9 +85,9 @@ The interactive **Swagger UI** at `/docs` cannot easily use cookie auth for try-
 |---|---|---|
 | `date_from` | date | Start date (inclusive) |
 | `date_to` | date | End date (inclusive) |
-| `account_id` | string | Filter by account (e.g. `HDFC_SAL_3703`) |
+| `account_id` | string | Filter by account (e.g. `YOUR_BANK_SAV`) |
 | `direction` | string | `INFLOW` or `OUTFLOW` |
-| `category` | string | Filter by `counterparty_category` |
+| `category` | string | Filter by category label |
 | `txn_type` | string | Filter by `txn_type` |
 | `is_reviewed` | bool | Filter by review status |
 | `search` | string | Full-text search on `raw_description` and `counterparty` |
@@ -114,7 +114,7 @@ The interactive **Swagger UI** at `/docs` cannot easily use cookie auth for try-
 
 All metrics endpoints accept `date_from` and `date_to` query params (both default to the current calendar month).
 
-**Double-counting note:** `CARD_PAYMENT` (paying the CC bill from savings) and `SELF_TRANSFER` (moving money between own accounts) are excluded from all expense totals. Individual CC swipes are captured as `CARD_EXPENSE` on the credit card statement — counting both would double-count every credit card purchase.
+**Double-counting note:** paying your credit card bill from savings and moving money between your own accounts are excluded from expense totals so you don't double-count card purchases.
 
 | Method | Path | Description | Key params |
 |---|---|---|---|

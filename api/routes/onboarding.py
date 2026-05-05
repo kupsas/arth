@@ -137,9 +137,8 @@ def _gmail_client_connected() -> GmailClient:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Gmail is not set up on this device yet. If you are installing Arth yourself, "
-                "add a Google API credentials file as described in the project documentation, "
-                "then use “Connect Gmail” again."
+                "Gmail is not set up on this device yet. If you are self-hosting Arth, add Google API "
+                "credentials as described in the docs, then use “Connect Gmail” again."
             ),
         ) from None
     except GmailReauthRequiredError:
@@ -573,7 +572,7 @@ def onboarding_persist_sources(
     if not isinstance(sources, list) or not sources:
         raise HTTPException(
             status_code=400,
-            detail="Run “Find accounts” (discovery) first so we have senders to configure.",
+            detail="Run account discovery first so we know which email senders to configure.",
         )
 
     try:
@@ -751,8 +750,8 @@ def onboarding_backfill(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Another backfill request ({held_by}) is already processing "
-                f"{source_key}. Wait for it to finish before sending another."
+                "Another import is already running for this account. "
+                "Give it a minute to finish, then try again."
             ),
         )
 
@@ -930,8 +929,8 @@ def onboarding_backfill_stream(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Another backfill request ({held_by}) is already processing "
-                f"{source_key}. Wait for it to finish before starting another stream."
+                "Another import is already running for this account. "
+                "Give it a minute to finish, then start the stream again."
             ),
         )
 
@@ -1595,16 +1594,19 @@ def onboarding_classify(
             for item in body.items:
                 txn = session.get(Transaction, item.txn_id)
                 if not txn or txn.user_id != current_user:
-                    raise HTTPException(status_code=404, detail=f"Transaction {item.txn_id} not found")
+                    raise HTTPException(
+                        status_code=404,
+                        detail="We couldn't find that transaction — it may have been removed. Try refreshing?",
+                    )
                 if txn.source_type != "email":
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Transaction {item.txn_id} is not an email-sourced row",
+                        detail="That line isn't from email alerts — only email-sourced rows can be updated here.",
                     )
                 if source_key is not None and txn.source_statement != source_key:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Transaction {item.txn_id} is not an email row for source {source_key!r}",
+                        detail="That transaction belongs to a different import source than the one you're fixing.",
                     )
                 # Keep the pre-edit label so we can store it on UserContact aliases when the user
                 # renames a friend — the next Gmail chunk may still classify that person with the

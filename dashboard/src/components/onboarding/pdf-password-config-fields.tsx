@@ -111,7 +111,7 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
         }
         if (reqR.status === "rejected" || prevR.status === "rejected") {
           const e = reqR.status === "rejected" ? reqR.reason : (prevR as PromiseRejectedResult).reason;
-          setLoadError(getUserFacingErrorMessage(e) ?? "Could not load password hints.");
+          setLoadError(getUserFacingErrorMessage(e) ?? "Couldn't load password hints.");
         }
       })();
       return () => {
@@ -164,7 +164,7 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
         });
         await onSubmitSuccess?.();
       } catch (e) {
-        setSaveError(getUserFacingErrorMessage(e) ?? "Could not save.");
+        setSaveError(getUserFacingErrorMessage(e) ?? "Couldn't save.");
       } finally {
         setBusy(false);
       }

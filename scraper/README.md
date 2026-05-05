@@ -60,19 +60,21 @@ curl -X POST http://localhost:8000/api/scraper/trigger
 
 ---
 
-## Email Alert Coverage
+## Email alert coverage (examples)
 
-| Bank / Account      | What email captures                       | What needs a statement            |
-| ------------------- | ----------------------------------------- | --------------------------------- |
-| HDFC CC (1905/5778) | All CC swipes (real-time)                 | Refunds, cashback, auto-pay       |
-| HDFC Savings 3703   | UPI outbound + inbound                    | Net banking transfers, salary     |
-| ICICI Savings 6118  | IMPS + NEFT via iMobile (manual triggers) | All inbound, ICICI Direct trades  |
+What you get in the inbox depends on your banks. The built-in parsers target common **HDFC** and **ICICI** alert formats; extend `scraper/email_parsers/` for more.
 
-Email scraping covers ~70-80% of day-to-day spending. Monthly statement uploads fill the remaining gaps.
+| Pattern (examples) | What email often captures | What usually still needs a statement |
+| ------------------ | --------------------------- | ------------------------------------- |
+| Credit card alerts | Card swipes in near real time | Refunds, cashback, auto-pay |
+| Savings UPI / IMPS | Many day-to-day debits and credits | Salary, some net-banking transfers |
+| Broker / MF mail   | Some contract notes | Trades with no mail trail |
+
+Email scraping covers a large share of day-to-day spending for many users; monthly statement uploads fill the gaps.
 
 ### Statement PDFs and broker emails (Phase 0+)
 
-Beyond **alert** emails, the scraper can process **attached PDFs** and structured broker mail (HDFC combined statements, HDFC CC statement PDFs, ICICI statement PDFs, ICICI Direct trade notifications). These flow through dedicated parsers in `scraper/email_parsers/` (`hdfc_statement.py`, `hdfc_cc_statement.py`, `icici_statement.py`, `icici_direct_trade.py`, etc.) and may enqueue rows for the **review queue** or investment pipeline depending on content. For **large one-off archives** already on disk, the API/dashboard upload path can be easier — email remains the primary path for ongoing months.
+Beyond **alert** emails, the scraper can process **attached PDFs** and structured broker mail (HDFC combined statements, HDFC CC statement PDFs, ICICI statement PDFs, ICICI Direct trade notifications). These flow through dedicated parsers in `scraper/email_parsers/` (`hdfc_statement.py`, `hdfc_cc_statement.py`, `icici_statement.py`, `icici_direct_trade.py`, etc.) and may enqueue rows for **Review** or the investment pipeline depending on content. For **large one-off archives** already on disk, the API/dashboard upload path can be easier — email remains the primary path for ongoing months.
 
 **What email does NOT capture (by design):**
 - HDFC net banking outbound — HDFC intentionally sends no alert; you initiated it from their platform

@@ -179,7 +179,7 @@ export function useChat(
       ws.onerror = () => {
         setConnection("error");
         setLastError(
-          "Could not connect to the chat server. Is the API running, and does your WebSocket URL match the API (see NEXT_PUBLIC_API_URL)?",
+          "Can't connect to Arth right now. Make sure the app is running and try again.",
         );
       };
 
@@ -489,7 +489,7 @@ export function useChat(
         .catch(() => {
           if (!cancelled) {
             setConnection("error");
-            setLastError("Failed to obtain WebSocket auth ticket. Are you logged in?");
+            setLastError("Couldn't start the chat. Try refreshing the page.");
           }
         });
     } else {

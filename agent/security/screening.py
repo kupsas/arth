@@ -43,8 +43,8 @@ _GOV_ID_REQUEST_RE = re.compile(
 )
 
 REJECTION_MESSAGES: dict[str, str] = {
-    "harmful": "I'm here to help with your finances. Let's keep things on track.",
-    "injection": "I can only help with questions about your financial data.",
+    "harmful": "I'm built for everyday money questions — let's keep things kind and on-topic so I can help.",
+    "injection": "I can only answer questions about your Arth data — try rephrasing as a finance question?",
     "off_topic": (
         "That's a bit outside my wheelhouse! I'm best at crunching your spending, "
         "portfolio, goals, and projections. What would you like to know about your money?"

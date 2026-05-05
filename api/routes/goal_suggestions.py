@@ -32,7 +32,7 @@ def list_goal_suggestions(
         # Single-user product: do not leak other users' pattern-derived suggestions.
         raise HTTPException(
             status_code=403,
-            detail="user_id must match the authenticated user.",
+            detail="That user id doesn't match who's signed in.",
         )
     rows = suggest_goals_from_patterns(session, uid)
     return [r.model_dump(mode="json") for r in rows]

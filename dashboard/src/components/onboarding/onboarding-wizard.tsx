@@ -222,7 +222,7 @@ export function OnboardingWizard({
       await queryClient.invalidateQueries({ queryKey: [...onboardingBackfillSourcesKey] })
       await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
     } catch (e) {
-      setBfError(getUserFacingErrorMessage(e) || "Could not finish setting up sources.")
+      setBfError(getUserFacingErrorMessage(e) || "Couldn't finish setting up sources.")
     } finally {
       setPersistRetryBusy(false)
     }
@@ -500,7 +500,7 @@ export function OnboardingWizard({
       setBfTick((t) => t + 1)
       void queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
     } catch (e) {
-      setBfError(getUserFacingErrorMessage(e) || "Could not retry import.")
+      setBfError(getUserFacingErrorMessage(e) || "Couldn't retry that import.")
     } finally {
       setBfChunkPosting(false)
     }
@@ -628,7 +628,7 @@ export function OnboardingWizard({
           <div className="space-y-4">
             {persistSourcesFailed && (
               <OnboardingErrorCallout
-                title="Could not finish setting up email sources"
+                title="Couldn't finish setting up email"
                 hint="Check Gmail is still connected, then try again."
               >
                 <div className="mt-3 flex flex-wrap gap-2">

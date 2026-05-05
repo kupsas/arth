@@ -102,15 +102,15 @@ export const discoveryCategoryMeta: Record<
 > = {
   bank: {
     title: "Banks found",
-    emptyHint: "No savings or statement senders matched yet.",
+    emptyHint: "No savings or statement senders yet — try discovery again after new mail arrives.",
   },
   demat: {
     title: "Demat accounts found",
-    emptyHint: "No broker / trade-confirmation senders matched yet.",
+    emptyHint: "No broker or trade-confirmation senders yet — some brokers only show up in PDF statements.",
   },
   credit: {
     title: "Credit cards found",
-    emptyHint: "No credit card statement senders matched yet.",
+    emptyHint: "No credit card alert senders yet — check that the right Gmail inbox is connected.",
   },
 }
 

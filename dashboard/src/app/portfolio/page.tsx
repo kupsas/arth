@@ -40,7 +40,7 @@ export default function PortfolioPage() {
   if (isError || !userId) {
     return (
       <div className="mx-auto max-w-lg rounded-lg border border-destructive/40 bg-destructive/5 p-6 text-sm">
-        <p className="font-medium text-destructive">Could not resolve your session user.</p>
+        <p className="font-medium text-destructive">Couldn&apos;t load your session. Try refreshing the page.</p>
         <p className="text-muted-foreground mt-2">
           Try logging in again. Portfolio data is keyed by username — without it we
           cannot safely load holdings.

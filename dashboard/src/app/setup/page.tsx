@@ -74,7 +74,7 @@ export default function SetupPage() {
           setStep(3);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load setup status");
+        setError(e instanceof Error ? e.message : "Couldn't load setup. Try refreshing?");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -126,7 +126,7 @@ export default function SetupPage() {
       await registerFirstUser(regUser.trim(), regPw);
       setStep(1);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Registration failed");
+      setError(err instanceof Error ? err.message : "Couldn't create that account. Try again?");
     }
   }
 
@@ -139,7 +139,7 @@ export default function SetupPage() {
       router.replace("/");
       router.refresh();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not finalize setup flags");
+      setError(err instanceof Error ? err.message : "Couldn't finish setup. Try again?");
     }
   }
 

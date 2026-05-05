@@ -1,5 +1,5 @@
 /**
- * Review Queue page — the human-in-the-loop feedback screen.
+ * Review page — the human-in-the-loop feedback screen.
  *
  * Two tabs:
  *   1. **Transactions** — bank rows (existing behaviour).
@@ -88,9 +88,9 @@ export default function ReviewPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold">Review Queue</h1>
+          <h1 className="text-xl font-semibold">Review</h1>
           <p className="text-sm text-muted-foreground">
-            Approve or correct classifications before they fully feed your dashboards.
+            Approve or tweak labels before they shape your Home charts and trends.
           </p>
         </div>
       </div>
@@ -425,9 +425,9 @@ function InvestmentTransactionReviewTab({ userId }: { userId: string | null }) {
           <div>
             <h2 className="text-lg font-semibold">Nothing to review</h2>
             <p className="mt-1 text-sm text-muted-foreground max-w-md">
-              Email-sourced investment lines (e.g. PPF from annual statements) show up
-              here as <code className="text-xs bg-muted px-1 rounded">is_reviewed=false</code>.
-              CSV imports stay reviewed by default.
+              Lines we pulled from your email (for example PPF from annual statements)
+              show up here until you&apos;ve checked them. Imports from CSV are marked
+              reviewed by default.
             </p>
           </div>
         </div>

@@ -1,6 +1,6 @@
 # Arth Dashboard
 
-Next.js + shadcn/ui dashboard for the Arth personal finance pipeline. You log in once (session cookie against the FastAPI backend), then use the home dashboard (trends, charts, drill-downs), transactions, review queue, **portfolio**, **goals** (including hierarchy and simulation entry points), **simulate**, and settings (reminders + statement upload).
+Next.js + shadcn/ui app for Arth. You log in once (session cookie against the FastAPI backend), then use **Home** (trends, charts, drill-downs), **Ask Arth**, **Transactions**, **Review**, **Holdings**, **Goals**, **Simulate**, and **Settings** (reminders + statement upload).
 
 ## Stack
 
@@ -51,10 +51,10 @@ python3 -m uvicorn api.main:app --port 8000 --reload
 | Route | Description |
 |-------|-------------|
 | `/login` | Household login — posts to `POST /api/auth/login`; API sets httpOnly `arth_session` (configure `AUTH_*` in the **repo root** `.env`) |
-| `/` | Dashboard — “V2” layout: this-month focus, trend charts, category grids, bar drill-down, goals/reminders snippets, statement upload entry points |
+| `/` | Home — this month, trend charts, category grids, bar drill-down, goals/reminders snippets, upload entry points |
 | `/transactions` | Full transaction table with filters, sorting, pagination, slide-out edit (including spend tags and exclude-from-analytics) |
-| `/review` | Review queue — card-based view of unreviewed transactions with approve/edit/skip actions |
-| `/goals` | Goals CRUD, hierarchy / priorities, progress (metrics + simulation hooks) |
+| `/review` | Review — card view of lines that still need a quick check; approve, edit-and-approve, or skip |
+| `/goals` | Goals CRUD, hierarchy / priorities, progress (metrics + Simulate hooks) |
 | `/portfolio` | Holdings, net worth, trends, investment activity, price-backed valuations |
 | `/simulate` | Surplus / goal funding scenarios (calls `/api/simulate` and related goal APIs) |
 | `/settings` | Reminders (monthly due dates) and statement upload UI (calls API pipeline upload) |
@@ -95,14 +95,14 @@ dashboard/src/
   proxy.ts                  # Middleware: auth gate + redirects (see file for matchers)
   app/
     layout.tsx                # Root shell: Providers + Sidebar + Header
-    page.tsx                  # Dashboard V2 (this month + trends + drill-down)
+    page.tsx                  # Home (this month + trends + drill-down)
     globals.css               # Tailwind v4 + shadcn oklch theme vars
     transactions/page.tsx     # Transactions table page
     goals/page.tsx            # Goals + hierarchy / simulation entry
     portfolio/page.tsx        # Portfolio / holdings / net worth
     simulate/page.tsx         # Goal funding & surplus simulation UI
     settings/page.tsx         # Reminders + statement upload
-    review/page.tsx           # Review queue page
+    review/page.tsx           # Review page
   components/
     layout/
       sidebar.tsx             # Fixed left nav
@@ -110,7 +110,7 @@ dashboard/src/
       mobile-blocker.tsx      # Viewport < 1024px → desktop-only message
       theme-toggle.tsx        # Dark/light mode button
     providers.tsx             # QueryClient + ThemeProvider + TooltipProvider
-    dashboard/                # Dashboard V2 components (charts, reminders, uploads, …)
+    dashboard/                # Home widgets (charts, reminders, uploads, …)
     portfolio/                # Holdings tables, net worth charts, grouping toggles
     simulation/               # Surplus waterfall, goal timeline, explorer UI
     transactions/             # Transaction table + filters + edit sheet
@@ -137,6 +137,6 @@ dashboard/src/
 - **Date range presets** — "This Month", "Last Month", "Last 3M", "Last 6M" or custom via calendar popover.
 - **Server-side pagination + sorting** — TanStack Table is used for column definitions and row selection only; the actual data operations happen on the backend.
 - **Optimistic cache updates** — `useUpdateTransaction` writes the updated transaction into the React Query cache immediately, then invalidates list queries in the background.
-- **Review queue skip** — "Skip" is local state only (no PATCH). Cards reappear on refresh. This is intentional: skip means "deal with later", not "reviewed".
+- **Review skip** — "Skip" is local state only (no PATCH). Cards reappear on refresh. Skip means "deal with later", not "reviewed".
 - **Currency formatting** — Indian number system (lakhs/crores) using `Intl.NumberFormat("en-IN")`.
 - **CC double-counting** — `CARD_EXPENSE` is included in expense totals; `CARD_PAYMENT` (the CC bill payment) is excluded (it's a self-transfer between your own accounts).

@@ -688,6 +688,8 @@ export interface SurplusResult {
   surplus_path_a: number;
   surplus_path_b: number;
   computation_method: string;
+  /** Plain-language companion to ``computation_method`` from the API. */
+  computation_method_label: string;
   months_analyzed: number;
   month_details: SurplusMonthDetail[];
   recurring_income_patterns: Record<string, unknown>[];

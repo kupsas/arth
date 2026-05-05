@@ -75,7 +75,7 @@ async function pollRunStatus(
         return
       }
       if (data.status === "failed") {
-        onError(data.error_message ?? "Pipeline run failed")
+        onError(data.error_message ?? "That import didn't finish. Try again?")
         return
       }
     } catch {
@@ -268,7 +268,7 @@ function UploadDialog({
         message: result.message || "Unexpected response from the server.",
       })
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Upload failed. Please try again."
+      const msg = err instanceof ApiError ? err.message : "Couldn't upload that file. Try again?"
       setState({ phase: "error", message: msg })
     }
   }
@@ -325,9 +325,9 @@ function UploadDialog({
         })
         return
       }
-      setState({ phase: "error", message: result.message || "Import failed." })
+      setState({ phase: "error", message: result.message || "That import didn't go through." })
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Upload failed. Please try again."
+      const msg = err instanceof ApiError ? err.message : "Couldn't upload that file. Try again?"
       setState({ phase: "error", message: msg })
     }
   }
@@ -510,7 +510,7 @@ function UploadDialog({
           <div className="flex size-14 items-center justify-center rounded-full bg-red-500/10 text-red-600 text-2xl">
             ✕
           </div>
-          <p className="text-sm font-semibold text-red-600">Something went wrong</p>
+          <p className="text-sm font-semibold text-red-600">That didn&apos;t work</p>
           <p className="text-xs text-muted-foreground max-w-xs">{state.message}</p>
           <Button size="sm" variant="outline" className="mt-2" onClick={goIdle}>
             Try again

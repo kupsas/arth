@@ -37,8 +37,7 @@ export function MobileBlocker({ children }: { children: React.ReactNode }) {
           Arth works best on a larger screen
         </p>
         <p className="max-w-md text-muted-foreground text-base leading-relaxed">
-          Please open this dashboard on a desktop or laptop (or any display at least{" "}
-          {BREAKPOINT_PX}px wide). Charts and drill-downs aren&apos;t practical on phones.
+          Open this on a laptop or desktop — the charts and details need a bit more room!
         </p>
       </div>
     )
