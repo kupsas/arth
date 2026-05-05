@@ -27,6 +27,9 @@ htmlcov/
 # Environment secrets (API keys — never commit)
 .env
 
+# Security disclosure policy — maintain locally until we’re ready to publish it
+SECURITY.md
+
 # OS / editor files
 .DS_Store
 .idea/

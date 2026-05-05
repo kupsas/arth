@@ -100,9 +100,6 @@ jobs:
           APP_ENV: test
           # Deterministic cookie / WS ticket signing for tests (see api/auth.py).
           AUTH_SECRET_KEY: ci-only-not-a-secret-fixed-for-deterministic-tests
-          # Legacy env names still read by some tooling; login does not gate the API.
-          AUTH_USERNAME: sashank
-          AUTH_PASSWORD: arth2026
 
       # ── 7. Upload coverage report ─────────────────────────────────────────
       # Stored as a build artifact so you can download and inspect it.

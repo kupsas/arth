@@ -337,8 +337,8 @@ def oauth_init():
         raise HTTPException(
             status_code=503,
             detail=(
-                "Gmail credentials file is missing. Add data/gmail_credentials.json "
-                "(Desktop OAuth client JSON from Google Cloud Console)."
+                "Gmail OAuth client file is missing at data/gmail_credentials.json. "
+                "Restore it from the repo or add your own Desktop OAuth client JSON."
             ),
         )
 

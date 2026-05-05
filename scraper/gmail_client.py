@@ -187,8 +187,8 @@ def start_gmail_oauth_return_auth_url() -> tuple[str, threading.Thread]:
     if not GMAIL_CREDENTIALS_PATH.exists():
         raise FileNotFoundError(
             f"Gmail credentials not found at {GMAIL_CREDENTIALS_PATH}.\n"
-            "Download credentials.json from GCP Console → APIs & Services → "
-            "Credentials and save it to data/gmail_credentials.json."
+            "The repo normally ships this file; if you deleted it, restore it from Git "
+            "or add your own Desktop OAuth client JSON from Google Cloud Console."
         )
 
     flow = InstalledAppFlow.from_client_secrets_file(
@@ -306,8 +306,8 @@ class GmailClient:
         if not GMAIL_CREDENTIALS_PATH.exists():
             raise FileNotFoundError(
                 f"Gmail credentials not found at {GMAIL_CREDENTIALS_PATH}.\n"
-                "Download credentials.json from GCP Console → APIs & Services → "
-                "Credentials and save it to data/gmail_credentials.json."
+                "The repo normally ships this file; if you deleted it, restore it from Git "
+                "or add your own Desktop OAuth client JSON from Google Cloud Console."
             )
 
         creds: Credentials | None = None

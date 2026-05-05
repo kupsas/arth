@@ -3,9 +3,8 @@
 # prompt YAML, pytest+cov; optional dashboard block if npm is available).
 # Use from repo root: ./scripts/ci_local.sh
 #
-# If AUTH_* are unset, we set values that match TestAuth in tests/test_db_and_api.py
-# so login tests pass without a .env. Your real .env is still used if you already
-# exported AUTH_PASSWORD etc. in the shell (we only default empty vars).
+# Default AUTH_SECRET_KEY matches CI so cookie/session behaviour is deterministic
+# without a .env. Override by exporting AUTH_SECRET_KEY before running this script.
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,8 +12,6 @@ cd "$ROOT"
 
 python3 -m pip install --upgrade pip
 
-export AUTH_USERNAME="${AUTH_USERNAME:-sashank}"
-export AUTH_PASSWORD="${AUTH_PASSWORD:-arth2026}"
 export AUTH_SECRET_KEY="${AUTH_SECRET_KEY:-local-ci-not-for-production-secret-key}"
 export OPENAI_API_KEY_FOR_CLASSIFIER="${OPENAI_API_KEY_FOR_CLASSIFIER:-dummy}"
 export ANTHROPIC_API_KEY_FOR_CLASSIFIER="${ANTHROPIC_API_KEY_FOR_CLASSIFIER:-dummy}"

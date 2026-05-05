@@ -67,7 +67,7 @@ def _resolve_user_id(explicit: str | None) -> str:
     u = (explicit or "").strip() or (os.environ.get("ARTH_RESET_ONBOARDING_EMAIL_IMPORT_USER") or "").strip()
     if not u:
         print(
-            "Error: pass --user YOUR_AUTH_USERNAME or set ARTH_RESET_ONBOARDING_EMAIL_IMPORT_USER in .env",
+            "Error: pass --user YOUR_ARTH_USER_ID or set ARTH_RESET_ONBOARDING_EMAIL_IMPORT_USER in .env",
             file=sys.stderr,
         )
         sys.exit(2)

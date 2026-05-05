@@ -440,9 +440,7 @@ def _default_scraper_user_id() -> str:
     from api.constants import DEFAULT_LOCAL_USER
 
     return (
-        os.environ.get("ARTH_SCRAPER_USER_ID")
-        or os.environ.get("AUTH_USERNAME")
-        or DEFAULT_LOCAL_USER
+        os.environ.get("ARTH_SCRAPER_USER_ID") or DEFAULT_LOCAL_USER
     ).strip() or DEFAULT_LOCAL_USER
 
 

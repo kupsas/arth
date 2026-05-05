@@ -18,8 +18,8 @@ import os
 REPO_ROOT = Path(__file__).parent.parent
 
 # ─── OAuth credential file paths ───────────────────────────────────────────────
-# credentials.json is downloaded once from GCP console (never committed to git).
-# token.json is created automatically on first run after OAuth consent.
+# gmail_credentials.json — OAuth desktop client (shipped with the repo for convenience).
+# gmail_token.json — created on first Google sign-in per machine (gitignored).
 GMAIL_CREDENTIALS_PATH = REPO_ROOT / "data" / "gmail_credentials.json"
 GMAIL_TOKEN_PATH       = REPO_ROOT / "data" / "gmail_token.json"
 
