@@ -28,6 +28,7 @@ from sqlmodel import Session, col, select
 from agent import config as agent_cfg
 from api.auth import get_current_user
 from api.database import get_session
+from api.errors import arth_validation_error
 from api.models import Reminder, Transaction, UserSecrets
 from api.services.agent_runtime import (
     effective_agent_fallback_chain,
@@ -235,7 +236,7 @@ def reminders_status(
     try:
         month_date_range(month)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise arth_validation_error(str(e)) from e
     items = compute_all_reminder_statuses(
         session, user, month, active_only=active_only
     )

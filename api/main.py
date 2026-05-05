@@ -14,9 +14,16 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from api.auth import get_current_user
 from api.database import SQLiteSerializingSession, get_engine, init_db
@@ -42,6 +49,8 @@ from api.routes.scraper import router as scraper_router
 from api.routes.scraper_config import router as scraper_config_router
 from api.routes.onboarding import router as onboarding_router
 from api.routes.setup import router as setup_router
+from api.errors import ArthError, arth_internal_error
+from api.middleware import RequestLoggingMiddleware
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
 
@@ -136,12 +145,53 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(ArthError)
+async def arth_error_handler(request: Request, exc: ArthError) -> Response:
+    """Log structured client/server errors; response shape matches OpenAPI ``HTTPException``."""
+    rid = getattr(request.state, "request_id", None)
+    if exc.status_code >= 500:
+        logger.error(
+            "%s %s %s status=%s request_id=%s",
+            exc.error_code,
+            request.method,
+            request.url.path,
+            exc.status_code,
+            rid,
+        )
+    else:
+        logger.warning(
+            "%s %s %s status=%s request_id=%s",
+            exc.error_code,
+            request.method,
+            request.url.path,
+            exc.status_code,
+            rid,
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> Response:
+    """Delegate validation and HTTP errors; log and wrap unknown failures."""
+    if isinstance(exc, RequestValidationError):
+        return await request_validation_exception_handler(request, exc)
+    if isinstance(exc, HTTPException):
+        return await http_exception_handler(request, exc)
+
+    rid = getattr(request.state, "request_id", None)
+    logger.exception(
+        "Unhandled exception %s %s request_id=%s",
+        request.method,
+        request.url.path,
+        rid,
+    )
+    ie = arth_internal_error()
+    return JSONResponse(status_code=500, content={"detail": ie.detail})
+
+
 # ---------------------------------------------------------------------------
-# CORS — allow the Next.js dashboard and Swagger UI.
-# allow_credentials=True is required for cookies to be sent cross-port.
-#
-# For Cloudflare Tunnel (or any non-localhost dashboard URL), add origins via
-# .env: CORS_EXTRA_ORIGINS=https://your-app.trycloudflare.com,https://other...
+# Middleware — CORS next to the app; request logging outermost (registered last).
 # ---------------------------------------------------------------------------
 _cors_extra = os.getenv("CORS_EXTRA_ORIGINS", "")
 _cors_extra_list = [o.strip() for o in _cors_extra.split(",") if o.strip()]
@@ -157,6 +207,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(RequestLoggingMiddleware)
 
 # ---------------------------------------------------------------------------
 # Auth routes — public (no session required for login/logout)

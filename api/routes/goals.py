@@ -32,6 +32,7 @@ from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import get_session
+from api.errors import arth_goal_allocation_failed, arth_validation_error
 from api.models import Goal
 from api.services.goal_decomposer import (
     LoanParams,
@@ -327,7 +328,7 @@ def _validate_activation_condition_or_400(raw: str | None) -> None:
     try:
         validate_condition(raw)
     except ConditionParseError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise arth_validation_error(str(e)) from e
 
 
 def _goal_owned(goal: Goal | None, current_user: str) -> TypeGuard[Goal]:
@@ -377,7 +378,7 @@ def create_goal(
     try:
         validate_chart_key_for_goal(body.goal_type, resolved_ck)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise arth_validation_error(str(e)) from e
     _ensure_chart_key_unique(session, current_user, resolved_ck)
 
     pc = _validate_progress_cadence(body.goal_type, body.progress_cadence)
@@ -620,7 +621,7 @@ def decompose_goal(
                 "detail": res_inf.get("detail"),
             }
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise arth_validation_error(str(e)) from e
 
     out: dict = {
         "decomposition": result.model_dump(mode="json"),
@@ -645,7 +646,9 @@ def decompose_goal(
                 detail="Could not persist decomposition child goal.",
             ) from e
         if child.id is None:
-            raise HTTPException(status_code=500, detail="Failed to allocate child goal id")
+            raise arth_goal_allocation_failed(
+                "Could not save the new sub-goal. Try again.",
+            )
         created_ids.append(child.id)
 
     session.commit()
@@ -769,7 +772,7 @@ def update_goal(
         try:
             validate_chart_key_for_goal(goal.goal_type, ck)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            raise arth_validation_error(str(e)) from e
         _ensure_chart_key_unique(session, goal.user_id, ck, exclude_goal_id=goal.id)
 
     if "progress_cadence" in update_data:

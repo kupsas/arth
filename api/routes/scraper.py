@@ -22,13 +22,22 @@ import datetime
 import logging
 import threading
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import SQLiteSerializingSession, get_engine, get_session
+from api.errors import (
+    ArthError,
+    ErrorCodes,
+    arth_gmail_not_connected,
+    arth_gmail_oauth_in_progress,
+    arth_internal_error,
+    arth_scraper_credentials_missing,
+    arth_validation_error,
+)
 from api.models import ProcessedEmail
 from scraper.config import GMAIL_CREDENTIALS_PATH, GMAIL_TOKEN_PATH
 from scraper.config_loader import all_sender_emails, get_bank_senders_config
@@ -137,8 +146,10 @@ async def trigger_scrape():
     """
     try:
         result = await run_in_threadpool(trigger_now)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+    except RuntimeError:
+        raise arth_gmail_not_connected(
+            hint="Use Connect Gmail in Settings or complete OAuth first.",
+        ) from None
 
     return {
         "emails_found":     result.emails_found,
@@ -164,15 +175,13 @@ async def scraper_backfill(
     duplicates. Can be long-running — uses a thread pool like POST /trigger.
     """
     if not GMAIL_TOKEN_PATH.exists():
-        raise HTTPException(
-            status_code=503,
-            detail="Gmail isn't connected yet. Finish setup and use Connect Gmail first.",
+        raise arth_gmail_not_connected(
+            hint="Finish setup and use Connect Gmail first.",
         )
 
     if body.gmail_query and body.sender_emails:
-        raise HTTPException(
-            status_code=400,
-            detail="Use either gmail_query or sender_emails, not both.",
+        raise arth_validation_error(
+            "Use either gmail_query or sender_emails, not both.",
         )
 
     def _run() -> dict:
@@ -198,8 +207,11 @@ async def scraper_backfill(
 
     try:
         return await run_in_threadpool(_run)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("Historical Gmail backfill failed")
+        raise arth_internal_error(
+            hint="Download logs from Settings and share them if this keeps happening.",
+        ) from None
 
 
 # ─── POST /start ───────────────────────────────────────────────────────────────
@@ -214,9 +226,8 @@ def start_scraper():
     - Returns 503 if Gmail is not authenticated.
     """
     if not GMAIL_TOKEN_PATH.exists():
-        raise HTTPException(
-            status_code=503,
-            detail="Gmail isn't connected yet. Use Connect Gmail in setup before starting the email reader.",
+        raise arth_gmail_not_connected(
+            hint="Use Connect Gmail in setup before starting the email reader.",
         )
     resume_scheduler()
     return {"status": "started", **get_status()}
@@ -250,7 +261,7 @@ def update_scraper_config(body: ScraperConfigUpdate):
     try:
         reschedule(body.interval_minutes)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise arth_validation_error(str(exc)) from exc
     return {"interval_minutes": body.interval_minutes, **get_status()}
 
 
@@ -334,36 +345,39 @@ def oauth_init():
         }
 
     if not GMAIL_CREDENTIALS_PATH.exists():
-        raise HTTPException(
+        raise ArthError(
+            code=ErrorCodes.SCRAPER_CREDENTIALS_MISSING,
             status_code=503,
-            detail=(
-                "Gmail OAuth client file is missing at data/gmail_credentials.json. "
-                "Restore it from the repo or add your own Desktop OAuth client JSON."
-            ),
+            message="The Gmail OAuth client file is missing (data/gmail_credentials.json).",
+            hint="Restore it from the repo or add your own Desktop OAuth client JSON.",
         )
 
     if _oauth_flow_busy.is_set():
-        raise HTTPException(
-            status_code=409,
-            detail="Another Gmail sign-in is already in progress. Finish or close that window first.",
-        )
+        raise arth_gmail_oauth_in_progress()
 
     try:
         from scraper.gmail_client import start_gmail_oauth_return_auth_url
 
         _oauth_flow_busy.set()
         auth_url, worker = start_gmail_oauth_return_auth_url()
-    except FileNotFoundError as exc:
+    except FileNotFoundError:
         _oauth_flow_busy.clear()
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise arth_scraper_credentials_missing(
+            hint="Restore data/gmail_credentials.json or add your OAuth client JSON.",
+        ) from None
     except OSError as exc:
         _oauth_flow_busy.clear()
         logger.warning("Gmail OAuth bind failed: %s", exc)
-        raise HTTPException(
+        raise ArthError(
+            code=ErrorCodes.GMAIL_NOT_CONNECTED,
             status_code=503,
-            detail=(
-                "Could not start the local sign-in helper — often the OAuth callback port is "
-                f"already in use. Stop the other process or set ARTH_GMAIL_OAUTH_CALLBACK_PORT. ({exc})"
+            message=(
+                "Could not start the local sign-in helper — the OAuth callback port may "
+                "be in use."
+            ),
+            hint=(
+                "Stop the other process using that port, or set "
+                "ARTH_GMAIL_OAUTH_CALLBACK_PORT in your environment."
             ),
         ) from exc
 

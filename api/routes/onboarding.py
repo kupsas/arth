@@ -25,6 +25,7 @@ from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import SQLiteSerializingSession, get_session
+from api.errors import arth_validation_error
 from api.models import AppUser, Holding, OnboardingState, PasswordTemplate, Transaction, UserContact, UserSecrets
 from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
@@ -588,7 +589,7 @@ def onboarding_persist_sources(
             envelope if isinstance(envelope, dict) else {},
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise arth_validation_error(str(e)) from e
 
     row.persist_sources_status = "done"
     row.updated_at = datetime.datetime.now(datetime.UTC)
@@ -816,7 +817,7 @@ def _run_backfill_locked(
         )
     except ValueError as e:
         flow.write("validation_error", str(e))
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise arth_validation_error(str(e)) from e
 
     merged_progress = result.progress
     _merge_and_save_backfill(session, current_user, source_key, merged_progress)
