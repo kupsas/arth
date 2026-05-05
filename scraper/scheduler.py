@@ -149,13 +149,13 @@ def _run_scrape_job() -> ScrapeResult:
     # ── Concurrency guard ─────────────────────────────────────────────────────
     with _scraping_lock:
         if _is_scraping:
-            logger.info("Scrape already in progress — skipping this trigger")
+            logger.info("Another email check is still running — this trigger was skipped.")
             # Return the in-progress status rather than erroring out
             return _last_result or ScrapeResult()
         _is_scraping = True
 
     try:
-        logger.info("Starting scrape cycle...")
+        logger.debug("Scrape cycle started")
 
         # ── Ensure authenticated Gmail client ─────────────────────────────────
         # Reuse the existing client if it's already authenticated.
@@ -179,7 +179,12 @@ def _run_scrape_job() -> ScrapeResult:
             _gmail_reauth_required = False
 
         logger.info(
-            "Scrape cycle complete — processed: %d, skipped: %d, failed: %d, txns: %d",
+            "Email check finished — %d transaction(s) added · %d email(s) checked.",
+            result.txns_created,
+            result.emails_processed,
+        )
+        logger.debug(
+            "Scrape detail — processed=%d skipped=%d failed=%d txns=%d",
             result.emails_processed,
             result.emails_skipped,
             result.emails_failed,
@@ -230,12 +235,12 @@ def _run_daily_price_job() -> None:
 
     with _price_status_lock:
         if _is_price_job_running:
-            logger.info("Daily price job skipped — previous run still in progress")
+            logger.info("Daily price update skipped — the previous run is still finishing.")
             return
         _is_price_job_running = True
 
     try:
-        logger.info("Daily price job starting...")
+        logger.debug("Daily price job started")
         with SQLiteSerializingSession(get_engine()) as session:
             backfill_summary = backfill_nse_portfolio_gaps(session)
             refresh_summary = refresh_all_prices(session)
@@ -246,8 +251,8 @@ def _run_daily_price_job() -> None:
             with SQLiteSerializingSession(get_engine()) as liq_session:
                 liq_result = refresh_all_users_liquidity_dates(liq_session)
                 liq_session.commit()
-            logger.info(
-                "Daily liquidity refresh — users=%d, updated_rows=%d, unchanged_rows=%d",
+            logger.debug(
+                "Liquidity dates — users=%d updated=%d unchanged=%d",
                 liq_result.user_count,
                 liq_result.total_updated,
                 liq_result.total_unchanged,
@@ -260,16 +265,21 @@ def _run_daily_price_job() -> None:
             _price_last_run_at = now
             _price_last_success_at = now
             _price_last_error = None
-        # One-line outcome: download+parse live inside refresh/backfill; DB writes commit above.
         _details = backfill_summary.get("details")
         n_bf = len(_details) if isinstance(_details, list) else 0
+        holdings_n = refresh_summary.get("holdings_updated")
+        as_of = refresh_summary.get("as_of")
         logger.info(
-            "Daily price job finished — backfill symbols touched: %d, "
-            "price rows upserted: %s, holdings mark updated: %s, as_of=%s",
+            "Prices updated — %s holding(s) refreshed%s.",
+            holdings_n,
+            f" (as of {as_of})" if as_of else "",
+        )
+        logger.debug(
+            "Daily price detail — backfill_symbols=%d price_rows=%s holdings=%s as_of=%s",
             n_bf,
             refresh_summary.get("price_rows_upserted"),
-            refresh_summary.get("holdings_updated"),
-            refresh_summary.get("as_of"),
+            holdings_n,
+            as_of,
         )
     except Exception as exc:
         err = str(exc)
@@ -293,22 +303,25 @@ def _run_weekly_market_data_job() -> None:
 
     with _weekly_market_status_lock:
         if _is_weekly_market_job_running:
-            logger.info("Weekly market data job skipped — previous run still in progress")
+            logger.info("Weekly markets refresh skipped — the previous run is still finishing.")
             return
         _is_weekly_market_job_running = True
 
     try:
-        logger.info("Weekly market data job starting...")
+        logger.debug("Weekly market data job started")
         summary = run_weekly_market_data_refresh(user_id=None)
         now = datetime.datetime.now(datetime.timezone.utc)
         with _weekly_market_status_lock:
             _weekly_market_last_run_at = now
             _weekly_market_last_success_at = now
             _weekly_market_last_error = None
-        logger.info(
-            "Weekly market data job finished — nse_ref symbols_total=%s enrich cap_updates=%s",
-            (summary.get("nse_equity_reference") or {}).get("symbols_total"),
-            (summary.get("enrich_holdings") or {}).get("equities_cap_updated"),
+        nse_n = (summary.get("nse_equity_reference") or {}).get("symbols_total")
+        cap_n = (summary.get("enrich_holdings") or {}).get("equities_cap_updated")
+        logger.info("Weekly markets refresh done — reference data and holdings extras updated.")
+        logger.debug(
+            "Weekly market detail — nse_ref_symbols_total=%s enrich_cap_updates=%s",
+            nse_n,
+            cap_n,
         )
     except Exception as exc:
         err = str(exc)
@@ -331,8 +344,9 @@ def _run_inflation_sync_job() -> None:
         with SQLiteSerializingSession(get_engine()) as session:
             summary = sync_imf_cpi_history(session)
         if summary.get("ok"):
-            logger.info(
-                "Scheduled inflation sync OK — months_written=%s latest_period=%s",
+            # User-facing line is logged inside :func:`sync_imf_cpi_history`.
+            logger.debug(
+                "Weekly inflation job finished — months_written=%s latest_period=%s",
                 summary.get("months_written"),
                 summary.get("latest_period"),
             )
@@ -386,7 +400,7 @@ def _ensure_email_scrape_job() -> None:
         next_run_time=datetime.datetime.now(datetime.timezone.utc)
         + datetime.timedelta(seconds=10),
     )
-    logger.info("Email scraper job registered after Gmail became available")
+    logger.info("Gmail connected — email checks will run on schedule.")
 
 
 # ─── Public scheduler controls ────────────────────────────────────────────────
@@ -449,15 +463,18 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
             + datetime.timedelta(seconds=10),
         )
     else:
-        logger.info(
-            "Email scraper job omitted — %s; daily/weekly price jobs still active.",
+        logger.debug(
+            "Email scraper job not scheduled yet — %s (daily and weekly jobs still run).",
             email_skip,
         )
 
     _scheduler.start()
     logger.info(
-        "Scheduler started — daily prices 18:30 IST; weekly inflation Sun 07:00 IST; "
-        "weekly market cache Sun 19:15 IST; email poll every %d min (%s)",
+        "Background scheduler is running — daily price updates, weekly inflation and markets refresh%s.",
+        ", plus email import" if email_skip is None else " (email import when you're ready)",
+    )
+    logger.debug(
+        "Scheduler config — email poll every %d min, email=%s",
         interval_minutes,
         "on" if email_skip is None else f"off ({email_skip})",
     )
@@ -471,7 +488,7 @@ def stop_scheduler() -> None:
     global _scheduler
     if _scheduler is not None and _scheduler.running:
         _scheduler.pause()
-        logger.info("Email scraper scheduler paused")
+        logger.info("Background tasks paused.")
     else:
         logger.debug("stop_scheduler() called but scheduler was not running")
 
@@ -486,7 +503,7 @@ def resume_scheduler() -> None:
     if _scheduler is not None and _scheduler.running:
         _scheduler.resume()
         _ensure_email_scrape_job()
-        logger.info("Scheduler resumed (email job added if Gmail token present)")
+        logger.info("Background scheduler resumed.")
     else:
         # Scheduler was never started (e.g. shutdown); normal start path
         start_scheduler(_interval_minutes)
@@ -498,7 +515,7 @@ def shutdown_scheduler() -> None:
     if _scheduler is not None:
         if _scheduler.running:
             _scheduler.shutdown(wait=False)
-            logger.info("Email scraper scheduler shut down")
+            logger.info("Background scheduler stopped.")
         _scheduler = None
 
 
@@ -543,7 +560,7 @@ def reschedule(interval_minutes: int) -> None:
         # Scheduler isn't active — just update the stored interval so the
         # next start_scheduler() call uses the new value.
         logger.info(
-            "Scheduler not running — interval updated to %d min (takes effect on next start)",
+            "Email check interval saved — next run will use %d minute(s).",
             interval_minutes,
         )
         return
@@ -553,7 +570,7 @@ def reschedule(interval_minutes: int) -> None:
         trigger="interval",
         minutes=interval_minutes,
     )
-    logger.info("Email scraper polling interval updated to %d minute(s)", interval_minutes)
+    logger.info("Email check frequency updated to every %d minute(s).", interval_minutes)
 
 
 def get_status() -> dict:

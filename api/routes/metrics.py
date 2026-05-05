@@ -21,6 +21,7 @@ GET /api/metrics/classification-stats — rules vs LLM vs user vs unclassified (
 from __future__ import annotations
 
 import datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -46,6 +47,7 @@ from api.services.query_helpers import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -998,6 +1000,7 @@ def get_category_trend(
     try:
         cond = category_trend_condition(series)
     except ValueError as e:
+        logger.warning("Metrics category-trend: unknown series=%s", series)
         raise arth_validation_error(str(e)) from e
 
     today = datetime.date.today()
@@ -1111,6 +1114,7 @@ def get_bar_drilldown(
         try:
             cond = category_trend_condition(series)
         except ValueError as e:
+            logger.warning("Metrics bar-drilldown: unknown category series=%s", series)
             raise arth_validation_error(str(e)) from e
         q = _expense_where(q).where(cond)
     else:

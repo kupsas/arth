@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,6 +26,8 @@ from api.services.user_classification import (
     load_user_classification_config,
     merge_starter_pack_for_user,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -121,6 +124,7 @@ def create_contact(
     session.add(row)
     session.commit()
     session.refresh(row)
+    logger.info("People & merchants contact saved — id=%s", row.id)
     return {"id": row.id}
 
 

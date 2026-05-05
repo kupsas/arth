@@ -10,6 +10,8 @@ POST /api/liquidity/mismatch-check    — claimed amount vs accessible holdings
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session
@@ -28,6 +30,8 @@ from api.services.liquidity_service import (
     refresh_all_liquidity_dates,
     suggest_starting_balances,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -58,6 +62,12 @@ def post_liquidity_refresh(
     """Batch-update stored ``earliest_liquidity_date`` (run daily; callable manually)."""
     r = refresh_all_liquidity_dates(session, user_id)
     session.commit()
+    logger.info(
+        "Liquidity dates refreshed — checked %s holdings · updated %s · unchanged %s",
+        r.holdings_examined,
+        r.updated,
+        r.unchanged,
+    )
     return r
 
 
@@ -73,6 +83,7 @@ def get_goal_holding_match(
         return match_holdings_to_goal(session, goal_id, user_id)
     except ValueError as e:
         if str(e) == "goal_not_found":
+            logger.warning("Liquidity goal-match: goal %s not found for user", goal_id)
             raise HTTPException(status_code=404, detail="Goal not found") from e
         raise
 

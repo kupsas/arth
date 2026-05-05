@@ -56,6 +56,11 @@ def expense_limit_spent_for_goal(
 
 def compute_progress(goal: Goal, session: Session) -> dict:
     """Return a progress snapshot for the given goal (no categorical labels)."""
+    logger.debug(
+        "compute_progress: goal_id=%s goal_type=%s",
+        goal.id,
+        goal.goal_type,
+    )
     if goal.goal_type == "EXPENSE_LIMIT":
         return _compute_expense_limit_progress(goal, session)
     return progress_from_cache_or_naive(goal, session)

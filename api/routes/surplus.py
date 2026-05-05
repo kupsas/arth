@@ -7,6 +7,8 @@ GET /api/surplus/monthly — per-month rows only (for charts)
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlmodel import Session
@@ -14,6 +16,8 @@ from sqlmodel import Session
 from api.auth import effective_user_id
 from api.database import get_session
 from api.services.surplus_calculator import MonthDetail, SurplusResult, compute_surplus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -39,7 +43,13 @@ def get_surplus(
     user_id: str = Depends(effective_user_id),
 ) -> SurplusResult:
     """Compute monthly surplus from recurring income + category-filtered spend."""
-    return compute_surplus(session, user_id, months)
+    result = compute_surplus(session, user_id, months)
+    logger.debug(
+        "Surplus API computed months=%s method=%s",
+        months,
+        result.computation_method,
+    )
+    return result
 
 
 @router.get("/monthly", response_model=MonthlyOnlyResponse)

@@ -134,7 +134,7 @@ def run_onboarding_portfolio_derivation(session: Session, user_id: str) -> dict[
 
     session.commit()
 
-    return {
+    out = {
         "link_stats": stats,
         "derived_equity_positions": len(ph_eq),
         "derived_mf_positions": len(ph_mf),
@@ -142,6 +142,21 @@ def run_onboarding_portfolio_derivation(session: Session, user_id: str) -> dict[
         "ingest_updated": ingest_stats.get("updated", 0),
         "snapshots_upserted": n_snap,
     }
+    logger.info(
+        "Setup: Holdings snapshot updated from your imported statements.",
+    )
+    logger.debug(
+        "Onboarding portfolio derivation detail — user_id=%s equity=%s mf=%s "
+        "ingest_inserted=%s ingest_updated=%s snapshots=%s link_stats=%s",
+        user_id,
+        out["derived_equity_positions"],
+        out["derived_mf_positions"],
+        out["ingest_inserted"],
+        out["ingest_updated"],
+        out["snapshots_upserted"],
+        stats,
+    )
+    return out
 
 
 def portfolio_snapshot_summary(session: Session, user_id: str) -> dict[str, Any]:

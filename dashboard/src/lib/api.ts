@@ -1568,6 +1568,47 @@ export function fetchClassificationStats(): Promise<ClassificationStatsResponse>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Diagnostics  →  /api/diagnostics
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/diagnostics/logs
+ *
+ * Downloads a ZIP of local diagnostic logs (requires sign-in). Uses fetch + blob +
+ * a temporary ``<a download>`` link — same cookie rules as ``get()``, but we cannot
+ * reuse ``get()`` because it expects JSON, not binary.
+ */
+export async function downloadDiagnosticsLogsArchive(): Promise<void> {
+  const url = buildApiUrl("/api/diagnostics/logs");
+  const res = await fetch(url, { method: "GET", credentials: "include" });
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
+
+  if (!res.ok) {
+    const raw = await res.text().catch(() => res.statusText);
+    throwApiHttpError(res.status, raw);
+  }
+
+  const blob = await res.blob();
+
+  // Prefer the server-provided name (ASCII ``filename=`` from Content-Disposition).
+  let filename = "arth-logs.zip";
+  const cd = res.headers.get("Content-Disposition");
+  const m = cd?.match(/filename="([^"]+)"/i) ?? cd?.match(/filename=([^;\s]+)/i);
+  if (m?.[1]) filename = m[1].trim();
+
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.rel = "noopener";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Agent chat  →  /api/chat
 // ─────────────────────────────────────────────────────────────────────────────
 

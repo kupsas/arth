@@ -9,6 +9,7 @@ flip to ACTIVE in the same transaction.
 from __future__ import annotations
 
 import datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -18,6 +19,8 @@ from api.auth import get_current_user
 from api.database import get_session
 from api.models import LifeEvent
 from api.services.activation_engine import check_and_update_activations
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -90,6 +93,7 @@ def create_life_event(
     session.add(row)
     session.commit()
     session.refresh(row)
+    logger.info("Life event created id=%s", row.id)
     return _event_to_dict(row)
 
 
@@ -125,4 +129,9 @@ def patch_life_event(
 
     session.commit()
     session.refresh(row)
+    logger.debug(
+        "Life event patched id=%s activation_checked=%s",
+        event_id,
+        data.get("occurred") is True and not prev_occurred,
+    )
     return _event_to_dict(row)

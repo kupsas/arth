@@ -10,6 +10,7 @@ PATCH /api/transactions/bulk — bulk update (e.g. mark multiple as reviewed)
 from __future__ import annotations
 
 import datetime
+import logging
 from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,6 +21,8 @@ from api.auth import get_current_user
 from api.database import get_session
 from api.models import Transaction, UserMerchantRule
 from api.services.query_helpers import _for_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -181,6 +184,11 @@ def bulk_update_transactions(
         updated.append(txn_id)
 
     session.commit()
+    logger.info(
+        "Bulk edit applied — updated=%s · not found=%s",
+        len(updated),
+        len(not_found),
+    )
     return {"updated": updated, "not_found": not_found}
 
 
@@ -229,6 +237,7 @@ def update_transaction(
         _upsert_learned_merchant_rule(session, current_user, txn)
     session.commit()
     session.refresh(txn)
+    logger.debug("Transaction patched id=%s apply_future_rules=%s", txn_id, apply_future)
     return _txn_to_dict(txn)
 
 

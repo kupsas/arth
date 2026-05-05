@@ -8,6 +8,8 @@ POST /api/inflation/refresh — full IMF history sync + snapshot
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 
 from api.auth import get_current_user
@@ -19,6 +21,8 @@ from api.services.inflation_service import (
     sync_imf_cpi_history,
 )
 from sqlmodel import Session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -52,6 +56,7 @@ def refresh_inflation(
 ) -> dict:
     """Run full IMF monthly history sync (no API key) and return snapshot + sync summary."""
     summary = sync_imf_cpi_history(session)
+    logger.debug("Inflation refresh — sync summary=%s", summary)
     snap = all_current_rates_with_meta(session)
     snap["sync"] = summary
     snap["refreshed_headline"] = merge_rates_from_db(session)

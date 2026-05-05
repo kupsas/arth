@@ -417,6 +417,10 @@ def suggest_goals_from_patterns(session: Session, user_id: str) -> list[GoalSugg
         .order_by(col(RecurringPattern.id))
     )
     rows = list(session.exec(q).all())
+    logger.debug(
+        "suggest_goals_from_patterns: user has %d active OUTFLOW patterns to score",
+        len(rows),
+    )
     out: list[GoalSuggestion] = []
 
     for p in rows:

@@ -86,6 +86,40 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Terminal INFO lines follow copy guidelines (warm, no internal jargon). DEBUG carries ids for logs/diagnostics.
+_ONBOARDING_STEP_INFO: dict[str, str] = {
+    "welcome": "Setup: Gmail — connect your inbox.",
+    "discovery": "Setup: Finding your accounts from email.",
+    "preclass": "Setup: Saving your details and statement hints.",
+    "apikey": "Setup: Smart labels (optional).",
+    "backfill": "Setup: Importing mail from Gmail.",
+    "portfolio_summary": "Setup: Reviewing your holdings.",
+    "gaps": "Setup: Making sure we didn't miss anything.",
+    "goals": "Setup: Your goals.",
+    "summary": "Setup: Almost done.",
+    "classification": "Setup: Sorting new transactions from mail.",
+    "completed": "Setup: First-time setup finished.",
+    "passwords": "Setup: Saving your details and statement hints.",
+}
+
+
+def _log_onboarding_step_transition(*, user_id: str, from_step: str, to_step: str) -> None:
+    """Log wizard progress: INFO for the operator console, DEBUG with raw step ids + user (file-friendly)."""
+    if from_step == to_step:
+        return
+    msg = _ONBOARDING_STEP_INFO.get(to_step)
+    if msg:
+        logger.info("%s", msg)
+    else:
+        logger.info("Setup: Continuing to the next step.")
+    logger.debug(
+        "Onboarding step transition from_step=%r to_step=%r user_id=%r",
+        from_step,
+        to_step,
+        user_id,
+    )
+
+
 # Order for chunk backfill: savings first, then credit cards, then brokers (Track 2 wizard).
 _SOURCE_TYPE_RANK: dict[str, int] = {"savings": 0, "credit_card": 1, "broker": 2}
 
@@ -213,7 +247,14 @@ def patch_onboarding_state(
     row = _get_or_create_state(session, current_user)
     data = body.model_dump(exclude_unset=True)
     if "current_step" in data and data["current_step"] is not None:
-        row.current_step = data["current_step"].strip() or row.current_step
+        prev_step = row.current_step
+        new_step = data["current_step"].strip() or row.current_step
+        _log_onboarding_step_transition(
+            user_id=current_user,
+            from_step=prev_step,
+            to_step=new_step,
+        )
+        row.current_step = new_step
     if "completed_steps" in data and data["completed_steps"] is not None:
         row.completed_steps_json = json.dumps(data["completed_steps"])
     if "discovery_results" in data and data["discovery_results"] is not None:
@@ -1779,7 +1820,13 @@ def onboarding_complete(
 ) -> dict[str, Any]:
     """Mark wizard finished and align with first-run ``setup_completed`` when applicable."""
     row = _get_or_create_state(session, current_user)
+    prev_step = row.current_step
     row.current_step = "completed"
+    _log_onboarding_step_transition(
+        user_id=current_user,
+        from_step=prev_step,
+        to_step="completed",
+    )
     row.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(row)
 

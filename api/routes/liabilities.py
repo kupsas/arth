@@ -7,6 +7,7 @@ CRUD plus debt summary (ties into ``api.services.net_worth.liability_summary``).
 from __future__ import annotations
 
 import datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +18,8 @@ from api.database import get_session
 from api.models import Liability
 from api.services.net_worth import liability_summary
 from pipeline.models import LiabilityType
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -154,6 +157,7 @@ def create_liability(
     session.add(li)
     session.commit()
     session.refresh(li)
+    logger.info("Liability saved — id=%s type=%s", li.id, body.liability_type)
     return li
 
 
@@ -181,6 +185,7 @@ def patch_liability(
     session.add(row)
     session.commit()
     session.refresh(row)
+    logger.debug("Liability patched id=%s", liability_id)
     return row
 
 
@@ -196,4 +201,5 @@ def delete_liability(
         raise HTTPException(status_code=404, detail="Liability not found")
     session.delete(row)
     session.commit()
+    logger.info("Liability deleted id=%s", liability_id)
     return None

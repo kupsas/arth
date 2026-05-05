@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import time
 from datetime import date
 from typing import Any
@@ -232,6 +233,47 @@ def test_gaps_and_complete_round_trip(
             select(OnboardingState).where(OnboardingState.user_id == "flow_user")
         ).one()
         assert st.current_step == "completed"
+
+
+def test_patch_onboarding_state_logs_step_transition(
+    flow_client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """PATCH /state emits INFO on real step changes and DEBUG with raw ids; idempotent PATCH is quiet."""
+    caplog.set_level(logging.DEBUG, logger="api.routes.onboarding")
+    init = flow_client.get("/api/onboarding/state")
+    assert init.status_code == 200
+    assert init.json()["current_step"] == "welcome"
+
+    caplog.clear()
+    r = flow_client.patch("/api/onboarding/state", json={"current_step": "discovery"})
+    assert r.status_code == 200, r.text
+    infos = [rec.message for rec in caplog.records if rec.levelno == logging.INFO]
+    assert any("Finding your accounts from email" in m for m in infos)
+    debugs = [rec.message for rec in caplog.records if rec.levelno == logging.DEBUG]
+    assert any("'welcome'" in m and "'discovery'" in m for m in debugs)
+
+    caplog.clear()
+    again = flow_client.patch("/api/onboarding/state", json={"current_step": "discovery"})
+    assert again.status_code == 200
+    assert not [rec for rec in caplog.records if rec.levelno == logging.INFO]
+
+
+def test_onboarding_complete_logs_finished_step(
+    engine: object,
+    flow_client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """POST /complete logs transition into the finished state."""
+    caplog.set_level(logging.DEBUG, logger="api.routes.onboarding")
+    with Session(engine) as session:  # type: ignore[call-arg]
+        session.merge(OnboardingState(user_id="flow_user", current_step="summary"))
+        session.commit()
+
+    r = flow_client.post("/api/onboarding/complete")
+    assert r.status_code == 200, r.text
+    infos = [rec.message for rec in caplog.records if rec.levelno == logging.INFO]
+    assert any("First-time setup finished" in m for m in infos)
 
 
 def test_classifier_status_and_stored_api_key(

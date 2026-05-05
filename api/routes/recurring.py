@@ -78,8 +78,14 @@ def run_detection(*, session: Session = Depends(get_session)) -> dict:
     Safe to call multiple times — fully idempotent.
     """
     result = recurring_detector.detect_and_upsert(session)
+    logger.info(
+        "Fixed bills scan finished — added=%s updated=%s turned off=%s",
+        result.get("created", 0),
+        result.get("updated", 0),
+        result.get("deactivated", 0),
+    )
     return {
-        "message": "Detection complete",
+        "message": "Your recurring bills list is up to date.",
         **result,
     }
 
@@ -230,6 +236,7 @@ def update_pattern(
     session.add(pattern)
     session.commit()
     session.refresh(pattern)
+    logger.debug("Recurring pattern %s updated", pattern_id)
     return _pattern_out(pattern)
 
 

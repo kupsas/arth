@@ -24,6 +24,7 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 
 from pipeline import config
 from pipeline.llm_classifier import classify_llm
@@ -35,6 +36,23 @@ from pipeline.transformer import transform
 from pipeline.writer import write_csv
 
 logger = logging.getLogger(__name__)
+
+
+def _labelling_counts(canonical: list[CanonicalTransaction]) -> tuple[int, int]:
+    """Return (labelled_count, may_need_review_count).
+
+    A row counts as *labelled* when both transaction type and category are filled —
+    anything else is worth a glance on the Review screen.
+    """
+    n = len(canonical)
+    if n == 0:
+        return 0, 0
+    labelled = sum(
+        1
+        for t in canonical
+        if t.txn_type is not None and t.counterparty_category is not None
+    )
+    return labelled, n - labelled
 
 
 def _pipeline_cli_user_id() -> str:
@@ -85,27 +103,33 @@ def _run_single_source(
     parser = parser_cls()
 
     resolved_input = input_file or config.DATA_DIR / source_cfg["source_statement"]
-    logger.info("Pipeline start — source=%s  llm=%s  file=%s", source_key, config.LLM_MODEL, resolved_input)
+    # Technical context for debugging imports — default console stays on INFO summaries below.
+    logger.debug(
+        "Pipeline run — source=%s model=%s path=%s",
+        source_key,
+        config.LLM_MODEL,
+        resolved_input,
+    )
 
     t0 = time.time()
 
     # ── Stage 1: Parse ──────────────────────────────────────────────
-    logger.info("[1/5] Parsing...")
+    logger.debug("[1/5] Parsing…")
     parsed = parser.parse(resolved_input)
-    logger.info("[1/5] Done — %d rows parsed", len(parsed))
+    logger.debug("[1/5] Parsed %d row(s)", len(parsed))
 
     # ── Stage 2: Transform ──────────────────────────────────────────
-    logger.info("[2/5] Transforming...")
+    logger.debug("[2/5] Transforming…")
     canonical = transform(
         parsed,
         account_id=source_cfg["account_id"],
         currency=source_cfg.get("currency", "INR"),
         source_statement=source_cfg["source_statement"],
     )
-    logger.info("[2/5] Done — %d canonical rows", len(canonical))
+    logger.debug("[2/5] Normalised %d transaction(s)", len(canonical))
 
     # ── Stage 3: Rules classify ─────────────────────────────────────
-    logger.info("[3/5] Rules classifier...")
+    logger.debug("[3/5] Applying sorting rules…")
     if write_to_csv:
         from pipeline.user_config import default_user_classification_config
 
@@ -120,25 +144,39 @@ def _run_single_source(
     classify_rules(canonical, _ucfg)
     filled_type = sum(1 for t in canonical if t.txn_type)
     filled_ch = sum(1 for t in canonical if t.channel)
-    logger.info("[3/5] Done — txn_type filled: %d/%d  channel filled: %d/%d",
-                filled_type, len(canonical), filled_ch, len(canonical))
+    logger.debug(
+        "[3/5] Rules pass — type filled %d/%d · channel %d/%d",
+        filled_type,
+        len(canonical),
+        filled_ch,
+        len(canonical),
+    )
 
-    # ── Stage 4: LLM classify ──────────────────────────────────────
-    logger.info("[4/5] LLM classifier (model=%s)...", config.LLM_MODEL)
+    # ── Stage 4: Smart labels (optional model) ──────────────────────
+    logger.debug("[4/5] Auto-labelling (model=%s)…", config.LLM_MODEL)
     classify_llm(canonical)
     filled_type = sum(1 for t in canonical if t.txn_type)
     filled_cp = sum(1 for t in canonical if t.counterparty)
     filled_cat = sum(1 for t in canonical if t.counterparty_category)
-    logger.info("[4/5] Done — txn_type: %d/%d  counterparty: %d/%d  category: %d/%d",
-                filled_type, len(canonical), filled_cp, len(canonical), filled_cat, len(canonical))
+    logger.debug(
+        "[4/5] Labels — type %d/%d · named %d/%d · category %d/%d",
+        filled_type,
+        len(canonical),
+        filled_cp,
+        len(canonical),
+        filled_cat,
+        len(canonical),
+    )
 
     # ── Stage 5: Write ──────────────────────────────────────────────
+    run = None
+    csv_path: Path | None = None
     if write_to_csv:
-        csv_path = output_file or config.OUTPUT_DIR / f"transactions_{source_key}.csv"
-        logger.info("[5/5] Writing CSV → %s", csv_path)
+        csv_path = Path(output_file or config.OUTPUT_DIR / f"transactions_{source_key}.csv")
+        logger.debug("[5/5] Writing CSV → %s", csv_path)
         write_csv(canonical, csv_path)
     else:
-        logger.info("[5/5] Writing to SQLite DB...")
+        logger.debug("[5/5] Saving to your Arth database…")
         from api.database import get_engine
         from pipeline.db_writer import write_to_db
         from sqlmodel import Session
@@ -150,11 +188,39 @@ def _run_single_source(
                 llm_model=config.LLM_MODEL,
                 session=session,
             )
-        logger.info("[5/5] Done — %d new rows, %d backfilled (%d total)  pipeline_run id=%d",
-                    run.new_count, run.updated_count, run.txn_count, run.id)
+        logger.debug(
+            "[5/5] DB write — %d new · %d updated · %d total · run id=%s",
+            run.new_count,
+            run.updated_count,
+            run.txn_count,
+            run.id,
+        )
 
     elapsed = time.time() - t0
-    logger.info("Pipeline complete in %.1fs", elapsed)
+    labelled, needs_review = _labelling_counts(canonical)
+
+    if write_to_csv:
+        assert csv_path is not None
+        logger.info(
+            "Statement import finished — %d transactions in %.1fs (%d labelled · %d may need a quick look in Review) · saved %s",
+            len(canonical),
+            elapsed,
+            labelled,
+            needs_review,
+            csv_path.name,
+        )
+    else:
+        assert run is not None
+        logger.info(
+            "Statement import finished — %d transactions saved in %.1fs (%d new · %d updated · %d labelled · %d may need a quick look in Review)",
+            run.txn_count,
+            elapsed,
+            run.new_count,
+            run.updated_count,
+            labelled,
+            needs_review,
+        )
+
     return canonical
 
 
@@ -178,11 +244,12 @@ def main(argv: list[str] | None = None) -> None:
         init_db()
         with Session(get_engine()) as _s:
             all_keys = sorted(config.get_source_configs(user_id, _s).keys())
-        logger.info("Running all %d sources...", len(all_keys))
+        logger.info(
+            "Importing every configured statement source — %d in this run.",
+            len(all_keys),
+        )
         for i, source_key in enumerate(all_keys, 1):
-            logger.info("=" * 60)
-            logger.info("Source %d/%d: %s", i, len(all_keys), source_key)
-            logger.info("=" * 60)
+            logger.debug("Source %d/%d: %s", i, len(all_keys), source_key)
             _run_single_source(source_key, write_to_csv=write_to_csv)
     else:
         canonical = _run_single_source(
@@ -196,7 +263,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.validate:
             from pipeline.validator import print_report, validate
             benchmark = args.benchmark or config.GSHEET_BENCHMARK_FILE
-            logger.info("Validating against %s...", benchmark)
+            logger.debug("Validating output against benchmark file %s", benchmark)
             result = validate(canonical, benchmark)
             print_report(result)
 

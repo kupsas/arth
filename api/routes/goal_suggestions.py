@@ -6,12 +6,16 @@ GET /api/goal-suggestions — inferred goals from RecurringPattern rows.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.auth import get_current_user
 from api.database import get_session
 from api.services.goal_decomposer import suggest_goals_from_patterns
 from sqlmodel import Session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -35,4 +39,5 @@ def list_goal_suggestions(
             detail="That user id doesn't match who's signed in.",
         )
     rows = suggest_goals_from_patterns(session, uid)
+    logger.debug("Goal suggestions served — count=%s", len(rows))
     return [r.model_dump(mode="json") for r in rows]

@@ -564,8 +564,9 @@ def scrape_new_emails(
                 except Exception:
                     pass
 
-    logger.info(
-        "Scrape cycle complete — processed: %d, skipped: %d, failed: %d, new txns: %d",
+    # One friendly summary line is logged by :mod:`scraper.scheduler` after each cycle.
+    logger.debug(
+        "Scrape cycle counts — processed=%d skipped=%d failed=%d txns=%d",
         result.emails_processed,
         result.emails_skipped,
         result.emails_failed,
@@ -681,7 +682,11 @@ def run_historical_backfill(
                     pass
 
         logger.info(
-            "Historical backfill (custom query) complete — processed: %d, skipped: %d, failed: %d, new txns: %d",
+            "Historical import finished — %d transaction(s) added from your email archive.",
+            result.txns_created,
+        )
+        logger.debug(
+            "Historical backfill (custom query) counts — processed=%d skipped=%d failed=%d txns=%d",
             result.emails_processed,
             result.emails_skipped,
             result.emails_failed,
@@ -752,7 +757,11 @@ def run_historical_backfill(
                     pass
 
     logger.info(
-        "Historical backfill (per-sender) complete — processed: %d, skipped: %d, failed: %d, new txns: %d",
+        "Historical import finished — %d transaction(s) added from your email archive.",
+        result.txns_created,
+    )
+    logger.debug(
+        "Historical backfill (per-sender) counts — processed=%d skipped=%d failed=%d txns=%d",
         result.emails_processed,
         result.emails_skipped,
         result.emails_failed,

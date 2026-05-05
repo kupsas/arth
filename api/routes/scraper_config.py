@@ -5,6 +5,7 @@ CRUD for DB-backed Gmail scraper config (DESKTOP_PREREQS item 1 / wizard item 3)
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -15,6 +16,8 @@ from api.database import get_session
 from api.models import FamilyMember, ScraperAccountMapping, ScraperBankSender
 from api.services.family_member_utils import self_member_id
 from scraper.email_router import _normalise_sender
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -111,6 +114,7 @@ def upsert_sender(
             )
         )
     session.commit()
+    logger.info("Bank sender saved — we'll recognise alerts from this address.")
     return {"ok": True, "sender_email": key}
 
 
@@ -178,6 +182,7 @@ def upsert_mapping(
             )
         )
     session.commit()
+    logger.info("Bank mapping saved.")
     return {"ok": True}
 
 
@@ -192,4 +197,5 @@ def delete_mapping(
         raise HTTPException(status_code=404, detail="Mapping not found")
     session.delete(row)
     session.commit()
+    logger.info("Bank mapping removed id=%s", mapping_id)
     return {"ok": True}

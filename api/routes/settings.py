@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -50,6 +51,8 @@ from api.reminder_matching import (
     encode_example_transaction_ids,
     month_date_range,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -288,6 +291,7 @@ def create_reminder(
     session.add(r)
     session.commit()
     session.refresh(r)
+    logger.info("Reminder created id=%s", r.id)
     return _reminder_to_dict(session, r)
 
 
@@ -327,6 +331,7 @@ def update_reminder(
     session.add(r)
     session.commit()
     session.refresh(r)
+    logger.debug("Reminder updated id=%s", reminder_id)
     return _reminder_to_dict(session, r)
 
 
@@ -342,6 +347,7 @@ def delete_reminder(
         raise HTTPException(status_code=404, detail="Reminder not found")
     session.delete(r)
     session.commit()
+    logger.info("Reminder deleted id=%s", reminder_id)
 
 
 # ── Agent chat — LLM keys + optional model overrides (``UserSecrets``) ───────
@@ -430,6 +436,10 @@ def agent_keys_save(
         row.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(row)
     session.commit()
+    logger.info(
+        "Ask Arth key preferences updated (%s)",
+        ", ".join(touched) if touched else "cleared",
+    )
     return {"ok": True, "keys_updated": touched}
 
 
@@ -488,4 +498,5 @@ def agent_config_save(
         row.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(row)
     session.commit()
+    logger.info("Ask Arth model preferences saved.")
     return {"ok": True}

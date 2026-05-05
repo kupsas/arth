@@ -9,6 +9,7 @@ user's goals + surplus + inflation.
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -29,6 +30,8 @@ from api.services.simulation import (
     simulate,
 )
 from api.services.surplus_calculator import compute_surplus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -195,6 +198,11 @@ def post_simulate_from_current(
         as_of_date=opts.as_of_date,
     )
     result = simulate(params)
+    logger.debug(
+        "Simulation from-current finished goals=%s horizon_months=%s",
+        len(params.goals),
+        opts.simulation_months,
+    )
     return {
         "params": params.model_dump(),
         "meta": meta,

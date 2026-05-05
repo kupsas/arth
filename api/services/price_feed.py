@@ -663,7 +663,7 @@ def run_startup_price_sync(session: Session) -> dict[str, object]:
     """
     if not has_market_priced_holdings(session):
         logger.info(
-            "Startup price sync skipped — no market-priced holdings (no NSE/AMFI/yfinance calls)"
+            "No holdings need live prices yet — skipped startup price refresh."
         )
         return {"skipped": True, "reason": "no_market_holdings"}
 
@@ -671,10 +671,15 @@ def run_startup_price_sync(session: Session) -> dict[str, object]:
     refreshed = refresh_all_prices(session)
     details_raw = bf.get("details", [])
     n_detail_rows = len(details_raw) if isinstance(details_raw, list) else 0
+    _as_of = refreshed.get("as_of")
     logger.info(
-        "Startup price sync done — NSE backfill detail rows: %d, refresh as_of=%s",
+        "Prices refreshed for your holdings%s.",
+        f" (as of {_as_of})" if _as_of else "",
+    )
+    logger.debug(
+        "Startup price detail — backfill_detail_rows=%d refresh=%s",
         n_detail_rows,
-        refreshed.get("as_of"),
+        refreshed,
     )
     return {"backfill": bf, "refresh": refreshed}
 
@@ -717,8 +722,8 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
     preferred = latest_bhav_target_date()
     session_d, full_bhav_map = resolve_nse_bhav_session_and_map(preferred)
     if full_bhav_map and session_d < preferred:
-        logger.info(
-            "NSE bhav: using session %s (preferred %s not available yet)",
+        logger.debug(
+            "NSE bhav session — using %s (preferred %s not published yet)",
             session_d,
             preferred,
         )
@@ -771,7 +776,7 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
             if fb is not None:
                 close, row_date = fb
                 source = "nse_cached"
-                logger.info(
+                logger.debug(
                     "NSE bhav missing for %s on %s — using cached close %.4f from %s",
                     sym,
                     d,

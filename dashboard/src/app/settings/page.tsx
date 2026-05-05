@@ -10,7 +10,7 @@
 
 import * as React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { Link2, Pencil, Trash2 } from "lucide-react"
+import { Download, Link2, Pencil, Trash2 } from "lucide-react"
 
 import { UploadButton } from "@/components/dashboard/upload-button"
 import { OnboardingOptionalLlmKeys } from "@/components/onboarding/onboarding-optional-llm-keys"
@@ -56,7 +56,7 @@ import {
   useReminders,
   useUpdateReminder,
 } from "@/hooks/use-settings"
-import { deriveReminderAnchors } from "@/lib/api"
+import { ApiError, deriveReminderAnchors, downloadDiagnosticsLogsArchive } from "@/lib/api"
 import { COUNTERPARTY_CATEGORY_OPTIONS } from "@/lib/counterparty-categories"
 import type { Reminder } from "@/lib/types"
 import { formatCurrency } from "@/lib/utils"
@@ -96,6 +96,10 @@ export default function SettingsPage() {
   const editExampleIdsSyncRef = React.useRef<string | null>(null)
   /** Gmail / backfill wizard launched from **Connect account** (Track 2 Phase 5c). */
   const [connectOpen, setConnectOpen] = React.useState(false)
+  /** User tapped “Download logs” — show spinner until the ZIP save completes or fails. */
+  const [logDownloadPending, setLogDownloadPending] = React.useState(false)
+  /** Set when the diagnostics download fails so we show a calm inline message (no toast lib yet). */
+  const [logDownloadError, setLogDownloadError] = React.useState<string | null>(null)
   const classificationStats = useClassificationStats()
 
   React.useEffect(() => {
@@ -249,6 +253,45 @@ export default function SettingsPage() {
       <OnboardingOptionalLlmKeys />
 
       <AgentChatLlmSettings />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">If something&apos;s off</CardTitle>
+          <p className="text-sm text-muted-foreground font-normal">
+            If you&apos;re talking to support and they ask for logs, download this — it&apos;s a
+            small zip from this device so they can see what the app was doing.
+          </p>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <Button
+            type="button"
+            variant="secondary"
+            className="gap-2 w-fit"
+            disabled={logDownloadPending}
+            onClick={() => {
+              setLogDownloadError(null)
+              setLogDownloadPending(true)
+              void downloadDiagnosticsLogsArchive()
+                .catch((e: unknown) => {
+                  const msg =
+                    e instanceof ApiError
+                      ? e.message
+                      : "Couldn't download logs — check that Arth is running, then try again."
+                  setLogDownloadError(msg)
+                })
+                .finally(() => setLogDownloadPending(false))
+            }}
+          >
+            <Download className="size-4" aria-hidden />
+            {logDownloadPending ? "Preparing…" : "Download logs"}
+          </Button>
+          {logDownloadError && (
+            <p className="text-sm text-destructive" role="alert">
+              {logDownloadError}
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

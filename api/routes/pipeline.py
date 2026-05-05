@@ -287,6 +287,12 @@ def _run_pipeline_background(
                 session.commit()
 
             except Exception:
+                # Full traceback also stored on the run row for UI polling; logger captures it for arth.log.
+                logger.exception(
+                    "Background statement import failed (run_id=%s source=%s)",
+                    run_id,
+                    source_key,
+                )
                 run.status = "failed"
                 run.error_message = traceback.format_exc()
                 run.completed_at = datetime.datetime.now(datetime.UTC)
@@ -817,6 +823,11 @@ def _run_upload_background(
             session.commit()
 
         except Exception:
+            logger.exception(
+                "Background upload import failed (run_id=%s source=%s)",
+                run_id,
+                source_key,
+            )
             run.status = "failed"
             run.error_message = traceback.format_exc()
             run.completed_at = datetime.datetime.now(datetime.UTC)

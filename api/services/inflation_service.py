@@ -103,10 +103,30 @@ def _imf_period_to_yyyy_mm(time_period: str) -> str:
     return time_period[:7] if len(time_period) >= 7 else time_period
 
 
+def format_inflation_month_label(yyyy_mm: str) -> str:
+    """Render ``YYYY-MM`` as ``Mar 2026`` for log lines (plain language, not raw column values)."""
+    parts = (yyyy_mm or "").strip().split("-", 1)
+    if len(parts) != 2:
+        return yyyy_mm
+    y_s, m_s = parts[0], parts[1]
+    try:
+        y, m = int(y_s), int(m_s)
+    except ValueError:
+        return yyyy_mm
+    if not 1 <= m <= 12:
+        return yyyy_mm
+    _names = (
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    )
+    return f"{_names[m - 1]} {y}"
+
+
 def _fetch_imf_cpi_index_series() -> pd.Series | None:
     """Download India monthly CPI index from IMF. Returns None on skip/failure."""
     if os.getenv("INFLATION_DISABLE_IMF", "").strip().lower() in ("1", "true", "yes"):
-        logger.info("INFLATION_DISABLE_IMF set — skipping IMF CPI fetch.")
+        # Dev/CI opt-out — not something an end user toggles in the app.
+        logger.debug("Inflation data fetch is off (INFLATION_DISABLE_IMF is set).")
         return None
 
     try:
@@ -233,10 +253,15 @@ def sync_imf_cpi_history(session: Session) -> dict[str, Any]:
         logger.warning("Could not persist inflation history: %s", e)
         return {"ok": False, "months_written": 0, "error": str(e)}
 
+    _latest = pairs[-1][0]
     logger.info(
-        "IMF CPI history synced — months=%d, latest_period=%s",
+        "Inflation data updated — stored through %s.",
+        format_inflation_month_label(_latest),
+    )
+    logger.debug(
+        "IMF CPI sync detail — months_written=%d latest_period=%s",
         len(pairs),
-        pairs[-1][0],
+        _latest,
     )
     return {
         "ok": True,

@@ -7,6 +7,7 @@ Trigger a refresh (NSE / AMFI / yfinance per ``price_feed`` rules) and read hist
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +17,8 @@ from sqlmodel import Session, col, select
 from api.database import get_session
 from api.models import Price
 from api.services.price_feed import canonical_nse_symbol, normalize_equity_symbol, refresh_all_prices
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -62,6 +65,11 @@ def post_refresh_prices(
     uid = user_id.strip() if user_id and user_id.strip() else None
     result = refresh_all_prices(session, user_id=uid)
     session.commit()
+    logger.info(
+        "Prices refreshed — saved %s price points · updated %s holdings",
+        int(cast(Any, result["price_rows_upserted"])),
+        int(cast(Any, result["holdings_updated"])),
+    )
     # Normalise typed return for response_model
     return RefreshPricesOut(
         as_of=str(result["as_of"]),
