@@ -14,14 +14,20 @@ Wraps the same parse → classify → DB path as :mod:`scraper.orchestrator`, bu
 
   * **HDFC Savings onboarding** can skip InstaAlerts entirely via
     ``ONBOARDING_SKIP_INSTAALERT_SOURCES`` (empty by default — use for emergency kill-switch).
+
+  * **HDFC Credit Card** (``hdfc_cc_XXXX``): Gmail discovery often maps InstaAlerts to the
+    card ``source_key`` without also persisting ``emailstatements.cards@…`` mappings.  We
+    merge those statement senders in-memory so statement-first queueing still runs.
 """
 
 from __future__ import annotations
 
+import copy
 import datetime
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -34,6 +40,7 @@ from pipeline.models import CounterpartyCategory
 
 from api.services.classifier_runtime import effective_onboarding_unknown_threshold
 from api.services.email_import_flow_log import EmailImportFlowLog
+from scraper.config import BANK_SENDERS
 from scraper.config_loader import BankSendersConfig, get_bank_senders_config
 from scraper.email_router import _normalise_sender
 from scraper.email_parsers import build_email_parser_registry
@@ -133,6 +140,63 @@ def _partition_senders_for_source(
     stmt_rows.sort(key=lambda row: _statement_cadence_sort_key(row[1]))
     stmt = [s for s, _ in stmt_rows]
     return stmt, sorted(set(alert))
+
+
+# Onboarding ``source_key`` for a single HDFC card (last 4 in the suffix).
+_HDFC_CC_ONBOARDING_SOURCE_RE = re.compile(r"^hdfc_cc_(\d{4})$")
+
+
+def merge_hdfc_cc_statement_sender_accounts(
+    bank: BankSendersConfig, source_key: str
+) -> BankSendersConfig:
+    """Attach HDFC CC PDF statement senders to this card for queue + parser routing.
+
+    ``sender_emails_for_source_key`` only lists senders that already have a
+    ``ScraperAccountMapping`` row for the ``source_key``.  Users frequently get
+    InstaAlerts mapped to ``hdfc_cc_XXXX`` during discovery but omit the separate
+    ``emailstatements.cards@hdfcbank.{net,bank.in}`` rows — then ``statement_senders=0``,
+    ``defer_alert_listing=False``, and onboarding hits InstaAlerts first (bad for CC:
+    monthly PDFs should seed history before noisy alerts).
+
+    This returns a **deep copy** of ``bank`` with template entries from
+    :data:`~scraper.config.BANK_SENDERS` for ``parser_key == "hdfc_cc_statement"``,
+    merging ``{last4: {account_id, source_key}}`` when missing.
+    """
+    m = _HDFC_CC_ONBOARDING_SOURCE_RE.match((source_key or "").strip())
+    if not m:
+        return bank
+    last4 = m.group(1)
+    account_id = f"HDFC_CC_{last4}"
+    acct_entry = {"account_id": account_id, "source_key": source_key}
+    out: BankSendersConfig = copy.deepcopy(bank)
+    for sender_email, tmpl in BANK_SENDERS.items():
+        if str(tmpl.get("parser_key") or "") != "hdfc_cc_statement":
+            continue
+        norm = _normalise_sender(sender_email)
+        if norm not in out:
+            entry: dict[str, Any] = {
+                k: copy.deepcopy(v) for k, v in tmpl.items() if k != "accounts"
+            }
+            entry["accounts"] = {last4: copy.deepcopy(acct_entry)}
+            out[norm] = entry
+            continue
+        base = out[norm]
+        acc = base.get("accounts")
+        if not isinstance(acc, dict):
+            base["accounts"] = {}
+            acc = base["accounts"]
+        if last4 not in acc:
+            acc[last4] = copy.deepcopy(acct_entry)
+        for meta_key in (
+            "parser_key",
+            "expected_cadence",
+            "display_name",
+            "source_type",
+            "first_run_lookback_days",
+        ):
+            if meta_key in tmpl and not base.get(meta_key):
+                base[meta_key] = copy.deepcopy(tmpl[meta_key])
+    return out
 
 
 # Categories where the LLM is often wrong (P2P merchants, services mis-tagged as people).
@@ -297,6 +361,29 @@ class CollectedQueue:
         return len(self.statement_ids) + len(self.alert_items_full)
 
 
+def _gmail_queries_for_sender_date_window(
+    bank: BankSendersConfig,
+    raw_sender: str,
+    after_s: str,
+    before_s: str,
+) -> list[str]:
+    """Return Gmail query strings for one sender (subject-filtered or broad ``from:`` only).
+
+    When ``gmail_subject_filter_keywords`` is set on the sender row (see
+    :data:`scraper.config.BANK_SENDERS`), emit one query per keyword so noisy
+    mailboxes (e.g. ICICI Securities ``service@…``) do not match thousands of
+    portfolio/KYC emails during onboarding listing.
+    """
+    sender_cfg = bank.get(_normalise_sender(raw_sender)) or {}
+    kws = sender_cfg.get("gmail_subject_filter_keywords") or []
+    if not kws:
+        return [f"from:{raw_sender} after:{after_s} before:{before_s}"]
+    return [
+        f'from:{raw_sender} subject:"{kw}" after:{after_s} before:{before_s}'
+        for kw in kws
+    ]
+
+
 def _gather_alert_message_items(
     client: GmailClient,
     bank: BankSendersConfig,
@@ -332,21 +419,21 @@ def _gather_alert_message_items(
         )
 
     for raw_sender in alert_senders:
-        query = f"from:{raw_sender} after:{after_s} before:{before_s}"
-        batch = client.search_messages(
-            query,
-            paginate=True,
-            max_results_per_page=100,
-            max_total=None,
-        )
-        if import_flow_log:
-            import_flow_log.write(
-                "gmail_search_done",
-                f"phase={'alert'!r} sender={raw_sender!r} messages_in_date_range={len(batch)} "
-                f"query={query!r}",
+        for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
+            batch = client.search_messages(
+                query,
+                paginate=True,
+                max_results_per_page=100,
+                max_total=None,
             )
-        for m in batch:
-            alert_msgs[m.id] = m
+            if import_flow_log:
+                import_flow_log.write(
+                    "gmail_search_done",
+                    f"phase={'alert'!r} sender={raw_sender!r} messages_in_date_range={len(batch)} "
+                    f"query={query!r}",
+                )
+            for m in batch:
+                alert_msgs[m.id] = m
 
     alert_pending = sorted(alert_msgs.values(), key=lambda m: m.received_at)
     return [
@@ -407,25 +494,7 @@ def _collect_pending_queue(
         )
 
     for raw_sender in stmt_senders:
-        query = f"from:{raw_sender} after:{after_s} before:{before_s}"
-        batch = client.search_messages(
-            query,
-            paginate=True,
-            max_results_per_page=100,
-            max_total=None,
-        )
-        if import_flow_log:
-            import_flow_log.write(
-                "gmail_search_done",
-                f"phase='statement' sender={raw_sender!r} messages_in_date_range={len(batch)} "
-                f"query={query!r}",
-            )
-        for m in batch:
-            stmt_msgs[m.id] = m
-
-    if not defer_alerts:
-        for raw_sender in alert_senders:
-            query = f"from:{raw_sender} after:{after_s} before:{before_s}"
+        for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
             batch = client.search_messages(
                 query,
                 paginate=True,
@@ -435,11 +504,29 @@ def _collect_pending_queue(
             if import_flow_log:
                 import_flow_log.write(
                     "gmail_search_done",
-                    f"phase='alert' sender={raw_sender!r} messages_in_date_range={len(batch)} "
+                    f"phase='statement' sender={raw_sender!r} messages_in_date_range={len(batch)} "
                     f"query={query!r}",
                 )
             for m in batch:
-                alert_msgs[m.id] = m
+                stmt_msgs[m.id] = m
+
+    if not defer_alerts:
+        for raw_sender in alert_senders:
+            for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
+                batch = client.search_messages(
+                    query,
+                    paginate=True,
+                    max_results_per_page=100,
+                    max_total=None,
+                )
+                if import_flow_log:
+                    import_flow_log.write(
+                        "gmail_search_done",
+                        f"phase='alert' sender={raw_sender!r} messages_in_date_range={len(batch)} "
+                        f"query={query!r}",
+                    )
+                for m in batch:
+                    alert_msgs[m.id] = m
 
     stmt_pending = sorted(stmt_msgs.values(), key=lambda m: m.received_at)
     alert_pending = sorted(alert_msgs.values(), key=lambda m: m.received_at)
@@ -925,6 +1012,7 @@ def run_onboarding_backfill(
     else:
         thresh = effective_onboarding_unknown_threshold(session, user_id)
     bank = get_bank_senders_config(session, user_id)
+    bank = merge_hdfc_cc_statement_sender_accounts(bank, source_key)
     parser_registry = build_email_parser_registry(bank)
 
     after_date = after

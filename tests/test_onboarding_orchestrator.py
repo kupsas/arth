@@ -7,7 +7,7 @@ network. This mirrors the strategy in ``test_orchestrator.py``.
 from __future__ import annotations
 
 import datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -23,6 +23,7 @@ from scraper.onboarding_orchestrator import (
     sender_emails_for_source_key,
     pause_backfill_state,
     resume_backfill_state,
+    _collect_pending_queue,
 )
 
 # Minimal static config shaped like ``BANK_SENDERS`` (one savings source).
@@ -242,6 +243,73 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
         )
     assert r.progress.get("status") == "needs_classification"
     assert int(r.progress.get("unknowns_pending") or 0) >= 3
+
+
+def test_merge_hdfc_cc_statement_senders_enables_statement_first_partition() -> None:
+    """InstaAlerts-only DB mapping for hdfc_cc_XXXX still yields CC statement senders."""
+    from scraper.onboarding_orchestrator import (
+        _partition_senders_for_source,
+        merge_hdfc_cc_statement_sender_accounts,
+        sender_emails_for_source_key,
+    )
+
+    bank: BankSendersConfig = {
+        "alerts@hdfcbank.bank.in": {
+            "parser_key": "hdfc_bank",
+            "accounts": {
+                "3703": {
+                    "account_id": "HDFC_CC_3703",
+                    "source_key": "hdfc_cc_3703",
+                },
+            },
+            "expected_cadence": "per_transaction",
+        },
+    }
+    merged = merge_hdfc_cc_statement_sender_accounts(bank, "hdfc_cc_3703")
+    senders = sender_emails_for_source_key(merged, "hdfc_cc_3703")
+    assert "emailstatements.cards@hdfcbank.net" in senders
+    assert "emailstatements.cards@hdfcbank.bank.in" in senders
+    stmt, alert = _partition_senders_for_source(merged, "hdfc_cc_3703")
+    assert "emailstatements.cards@hdfcbank.net" in stmt
+    assert "emailstatements.cards@hdfcbank.bank.in" in stmt
+    assert "alerts@hdfcbank.bank.in" in alert
+
+
+def test_collect_pending_queue_uses_gmail_subject_keywords_for_icici_direct() -> None:
+    """Broker mailbox queries use subject:\"…\" clauses instead of bare ``from:`` only."""
+    client = MagicMock()
+    client.search_messages.return_value = []
+
+    bank: BankSendersConfig = {
+        "service@icicisecurities.com": {
+            "parser_key": "icici_direct_statement",
+            "expected_cadence": "quarterly",
+            "accounts": {
+                "0000": {
+                    "account_id": "ICICI_DIRECT",
+                    "source_key": "icici_direct_equity",
+                },
+            },
+            "gmail_subject_filter_keywords": [
+                "Equity Transaction Statement",
+                "Mutual Fund Account Statement",
+            ],
+        },
+    }
+    with patch("scraper.onboarding_orchestrator._get_processed_ids", return_value=set()):
+        _collect_pending_queue(
+            client,
+            bank,
+            "icici_direct_equity",
+            after=datetime.date(2020, 1, 1),
+            before=datetime.date(2026, 1, 1),
+            session=MagicMock(),
+        )
+
+    queries = [c[0][0] for c in client.search_messages.call_args_list]
+    assert len(queries) == 2
+    assert any('subject:"Equity Transaction Statement"' in q for q in queries)
+    assert any('subject:"Mutual Fund Account Statement"' in q for q in queries)
 
 
 def test_partition_statement_senders_annual_before_monthly() -> None:

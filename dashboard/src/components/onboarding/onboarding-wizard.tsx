@@ -11,12 +11,14 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query"
+import { Loader2 } from "lucide-react"
 import * as React from "react"
 
 import { GoalTemplateWizard } from "@/components/onboarding/goal-template-wizard"
 import { OnboardingOptionalLlmKeys } from "@/components/onboarding/onboarding-optional-llm-keys"
 import { PreClassificationForm } from "@/components/onboarding/pre-classification-form"
 import { ClassificationBatchReview } from "@/components/onboarding/classification-batch-review"
+import { OnboardingErrorCallout } from "@/components/onboarding/onboarding-error-callout"
 import { StepBackfill, type BackfillProgressSnapshot } from "@/components/onboarding/step-backfill"
 import { StepDiscovery } from "@/components/onboarding/step-discovery"
 import { StepGapDetection } from "@/components/onboarding/step-gap-detection"
@@ -170,29 +172,42 @@ export function OnboardingWizard({
   const [bfChunkPosting, setBfChunkPosting] = React.useState(false)
   const [bfError, setBfError] = React.useState<string | null>(null)
   const [resumeBusy, setResumeBusy] = React.useState(false)
+  const [persistRetryBusy, setPersistRetryBusy] = React.useState(false)
 
   const queryClient = useQueryClient()
-  const [discPersistBusy, setDiscPersistBusy] = React.useState(false)
-  const [discPersistError, setDiscPersistError] = React.useState<string | null>(null)
 
-  const handleDiscoveryContinue = React.useCallback(async () => {
-    setDiscPersistError(null)
-    setDiscPersistBusy(true)
+  const handleDiscoveryContinue = React.useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: [...onboardingBackfillSourcesKey] })
+    void queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+    setUserPanel("preclass")
+  }, [queryClient])
+
+  /** When background persist-sources finishes, refresh pipeline source list for Import mail. */
+  React.useEffect(() => {
+    if (stateQ.data?.persist_sources_status !== "done") return
+    void queryClient.invalidateQueries({ queryKey: [...onboardingBackfillSourcesKey] })
+  }, [stateQ.data?.persist_sources_status, queryClient])
+
+  const handlePersistSourcesRetry = React.useCallback(async () => {
+    setPersistRetryBusy(true)
     try {
       await postOnboardingPersistSources()
       await queryClient.invalidateQueries({ queryKey: [...onboardingBackfillSourcesKey] })
       await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
-      setUserPanel("preclass")
     } catch (e) {
-      setDiscPersistError(getUserFacingErrorMessage(e))
+      setBfError(getUserFacingErrorMessage(e) || "Could not finish setting up sources.")
     } finally {
-      setDiscPersistBusy(false)
+      setPersistRetryBusy(false)
     }
   }, [queryClient])
 
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
   const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
   const activeSourceType = sourcesQ.data?.[bfSourceIdx]?.source_type ?? null
+
+  const persistSourcesStatus = stateQ.data?.persist_sources_status ?? "idle"
+  const persistSourcesWait = persistSourcesStatus === "running"
+  const persistSourcesFailed = persistSourcesStatus === "error"
 
   /** Coarse section label for the import pipeline (bank cash vs broker portfolio). */
   const importSectionPhase = React.useMemo((): "banking" | "portfolio" | null => {
@@ -454,13 +469,7 @@ export function OnboardingWizard({
           <StepWelcome onContinue={() => setUserPanel("discovery")} />
         )}
         {panel === "discovery" && (
-          <StepDiscovery
-            onContinue={() => {
-              void handleDiscoveryContinue()
-            }}
-            persistBusy={discPersistBusy}
-            persistError={discPersistError}
-          />
+          <StepDiscovery onContinue={handleDiscoveryContinue} />
         )}
         {panel === "preclass" && (
           <div className="space-y-4">
@@ -474,10 +483,34 @@ export function OnboardingWizard({
         )}
         {panel === "backfill" && (
           <div className="space-y-4">
+            {persistSourcesFailed && (
+              <OnboardingErrorCallout
+                title="Could not finish setting up email sources"
+                hint="Check Gmail is still connected, then try again."
+              >
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void handlePersistSourcesRetry()}
+                    disabled={persistRetryBusy}
+                  >
+                    {persistRetryBusy ? "Retrying…" : "Retry setup"}
+                  </Button>
+                </div>
+              </OnboardingErrorCallout>
+            )}
+            {persistSourcesWait && (
+              <p className="text-sm text-muted-foreground flex items-center gap-2" aria-live="polite">
+                <Loader2 className="size-4 animate-spin shrink-0" aria-hidden />
+                Setting up your accounts from Gmail… This usually finishes in a few seconds (under
+                about 10 seconds).
+              </p>
+            )}
             {sourcesQ.isLoading && (
               <p className="text-sm text-muted-foreground">Loading your email sources…</p>
             )}
-            {!sourcesQ.data?.length && !sourcesQ.isLoading && (
+            {!sourcesQ.data?.length && !sourcesQ.isLoading && !persistSourcesWait && (
               <p className="text-sm text-muted-foreground">
                 No bank email sources were found yet. Go back to <strong>Connect Gmail</strong> and
                 make sure your inbox is linked, then try <strong>Find accounts</strong> again. If you
@@ -534,7 +567,7 @@ export function OnboardingWizard({
                 </Button>
               </>
             )}
-            {!sourcesQ.data?.length && (
+            {!sourcesQ.data?.length && !persistSourcesWait && (
               <Button
                 type="button"
                 variant="secondary"

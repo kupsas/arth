@@ -1,7 +1,7 @@
 """
 Build per-user ``ScraperBankSender`` + ``ScraperAccountMapping`` rows from Gmail discovery.
 
-Onboarding runs :func:`discover_sources_iter` first (cheap header probes).  This module
+Onboarding runs :func:`discover_sources_iter` first (cheap ``messages.list`` ID probes).  This module
 fills the SQLite tables that :func:`scraper.config_loader.get_bank_senders_config` reads
 by sampling a few full messages per discovered sender and inferring last-4 digits from
 subjects/HTML (heuristic — same idea as the parsers, without duplicating every bank regex).
@@ -306,7 +306,14 @@ def _infer_account_for_last4(
         return (f"ICICI_SAV_{last4}", "icici_savings")
 
     if pk in ("hdfc_bank",):
-        if "credit card" in blob or "payment was made using your credit card" in blob:
+        # Do **not** use a blob-wide "credit card" substring — InstaAlert footers and UPI
+        # payment lines often mention cards while the masked digits are still savings.
+        # Only treat as CC when this specific last-4 appears in an explicit CC context.
+        cc_pattern = re.compile(
+            rf"(?i)(credit\s+card\s+ending\s+{re.escape(last4)}"
+            rf"|payment\s+was\s+made\s+using\s+your\s+credit\s+card\s+\S*{re.escape(last4)})",
+        )
+        if cc_pattern.search(blob):
             return (f"HDFC_CC_{last4}", f"hdfc_cc_{last4}")
         return (f"HDFC_SAL_{last4}", "hdfc_savings")
 

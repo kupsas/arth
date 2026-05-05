@@ -43,6 +43,9 @@ export function useOnboardingState(
     queryKey: [...onboardingStateKey],
     queryFn: () => fetchOnboardingState(),
     staleTime: 10_000,
+    /** While persist-sources runs after discovery, poll so Import mail can unblock quickly. */
+    refetchInterval: (query) =>
+      query.state.data?.persist_sources_status === "running" ? 1000 : false,
     ...options,
   })
 }
@@ -101,9 +104,7 @@ function isPersistedDiscoveryRow(x: unknown): x is OnboardingDiscoveryStreamRow 
     typeof o.sender_email === "string" &&
     typeof o.display_name === "string" &&
     typeof o.source_type === "string" &&
-    typeof o.email_count_estimate === "number" &&
-    (o.earliest_email_date === null || typeof o.earliest_email_date === "string") &&
-    (o.latest_email_date === null || typeof o.latest_email_date === "string")
+    typeof o.email_count_estimate === "number"
   )
 }
 
@@ -127,8 +128,6 @@ export function parsePersistedDiscoveryResults(
       display_name: item.display_name,
       source_type: item.source_type,
       email_count_estimate: item.email_count_estimate,
-      earliest_email_date: item.earliest_email_date,
-      latest_email_date: item.latest_email_date,
     })
   }
   return { rows, discoveredAt: discoveredAt.trim() }

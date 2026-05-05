@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import threading
 import uuid
 from typing import Any
 
@@ -166,6 +167,7 @@ class OnboardingStateResponse(BaseModel):
     completed_steps: list[Any]
     discovery_results: dict[str, Any]
     backfill_progress: dict[str, Any]
+    persist_sources_status: str
     created_at: str | None
     updated_at: str | None
 
@@ -192,6 +194,7 @@ def get_onboarding_state(
         completed_steps=_parse_json_object(row.completed_steps_json, []),
         discovery_results=_parse_json_object(row.discovery_results_json, {}),
         backfill_progress=_parse_json_object(row.backfill_progress_json, {}),
+        persist_sources_status=row.persist_sources_status,
         created_at=row.created_at.isoformat() if row.created_at else None,
         updated_at=row.updated_at.isoformat() if row.updated_at else None,
     )
@@ -223,6 +226,7 @@ def patch_onboarding_state(
         completed_steps=_parse_json_object(row.completed_steps_json, []),
         discovery_results=_parse_json_object(row.discovery_results_json, {}),
         backfill_progress=_parse_json_object(row.backfill_progress_json, {}),
+        persist_sources_status=row.persist_sources_status,
         created_at=row.created_at.isoformat() if row.created_at else None,
         updated_at=row.updated_at.isoformat() if row.updated_at else None,
     )
@@ -498,9 +502,40 @@ def onboarding_discover(
         with Session(write_bind) as write_session:
             row = _get_or_create_state(write_session, current_user)
             row.discovery_results_json = json.dumps(envelope)
+            row.persist_sources_status = "running"
             row.updated_at = datetime.datetime.now(datetime.UTC)
             write_session.add(row)
             write_session.commit()
+
+        uid = current_user
+        bind = write_bind
+
+        def _run_persist_sources_bg() -> None:
+            status = "done"
+            try:
+                client = _gmail_client_connected()
+                with Session(bind) as bg_session:
+                    persist_scraper_sources_from_discovery(
+                        bg_session,
+                        uid,
+                        client,
+                        envelope,
+                    )
+                    bg_session.commit()
+            except Exception:
+                logger.exception("Background persist-sources failed for user=%r", uid)
+                status = "error"
+            try:
+                with Session(bind) as s2:
+                    r = _get_or_create_state(s2, uid)
+                    r.persist_sources_status = status
+                    r.updated_at = datetime.datetime.now(datetime.UTC)
+                    s2.add(r)
+                    s2.commit()
+            except Exception:
+                logger.exception("Could not write persist_sources_status for user=%r", uid)
+
+        threading.Thread(target=_run_persist_sources_bg, daemon=True).start()
 
         yield _ndjson_line({"type": "done", "discovered_at": discovered_at})
 
@@ -548,6 +583,9 @@ def onboarding_persist_sources(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    row.persist_sources_status = "done"
+    row.updated_at = datetime.datetime.now(datetime.UTC)
+    session.add(row)
     session.commit()
     return {"ok": True, **summary}
 

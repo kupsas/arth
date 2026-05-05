@@ -60,6 +60,19 @@ def test_hdfc_bank_credit_card_ending_plain_digits(infer_session: tuple[Session,
     assert acct["1905"]["source_key"] == "hdfc_cc_1905"
 
 
+def test_hdfc_bank_savings_last4_not_cc_when_generic_credit_card_mention_in_blob(
+    infer_session: tuple[Session, str],
+) -> None:
+    """Regression: blob-wide "credit card" substring used to mis-tag savings tails as ``hdfc_cc_*``."""
+    session, uid = infer_session
+    html = _read_fixture("alerts_hdfcbank_net_01.html")
+    marketing = " Earn more rewards on every credit card spend. Visit us today. "
+    cfg = {"parser_key": "hdfc_bank"}
+    acct = _infer_accounts_dict(cfg, ["InstaAlert", html + marketing], session=session, user_id=uid)
+    assert "3703" in acct
+    assert acct["3703"]["source_key"] == "hdfc_savings"
+
+
 def test_icici_bank_imps_body_finds_xxxx_last4(infer_session: tuple[Session, str]) -> None:
     session, uid = infer_session
     body = (

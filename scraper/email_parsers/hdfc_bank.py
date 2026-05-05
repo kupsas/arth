@@ -181,13 +181,24 @@ class HDFCUPIAlertParser(BaseEmailParser):
         Your UPI transaction reference number is 120080887305.
     """
 
-    # Regex groups: (amount, acct_last4, vpa, merchant, date_str)
+    # Regex groups: (amount, acct_last4, vpa, merchant|None, date_str)
+    # Legacy (~2023) bodies mask savings as ``account **3703``; some omit the merchant
+    # fragment between VPA and ``on`` (only ``… to VPA handle@ybl on DD-MM-YY``).
     _PATTERN = re.compile(
         r"Rs\.(\d[\d,]*(?:\.\d+)?)"
-        r"\s+has been debited from account\s+(\d{4})"
-        r"\s+to VPA\s+(\S+)"        # VPA has no internal spaces
-        r"\s+(.+?)"                  # merchant name (non-greedy)
-        r"\s+on\s+(\d{2}-\d{2}-\d{2})",   # "15-03-26"
+        r"\s+has been debited from account\s+\**(\d{4})"
+        r"\s+to VPA\s+(\S+)"
+        r"(?:\s+(.+?))?"  # merchant — absent in some legacy templates
+        r"\s+on\s+(\d{2}-\d{2}-\d{2})",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    # Account-to-account (no VPA), e.g. "to account **4875" on 17-09-23.
+    _ACCT_TRANSFER_PATTERN = re.compile(
+        r"Rs\.(\d[\d,]*(?:\.\d+)?)"
+        r"\s+has been debited from account\s+\**(\d{4})"
+        r"\s+to account\s+\**(\d{4})"
+        r"\s+on\s+(\d{2}-\d{2}-\d{2})",
         re.IGNORECASE | re.DOTALL,
     )
 
@@ -202,52 +213,95 @@ class HDFCUPIAlertParser(BaseEmailParser):
     def parse(self, html_body: str, received_date: datetime.date) -> list[ParsedTransaction]:
         text = _extract_hdfc_body_text(html_body)
         m = self._PATTERN.search(text)
-        if not m:
-            logger.warning(
-                "HDFCUPIAlertParser: regex did not match — body text was:\n%s",
-                text[:300],
+        if m:
+            amount_str, acct_last4, vpa, merchant, date_str = m.groups()
+            amount = Decimal(amount_str.replace(",", ""))
+
+            txn_date = _parse_ddmmyy(date_str)
+            if txn_date is None:
+                logger.warning(
+                    "HDFCUPIAlertParser: unrecognised date '%s', falling back to %s",
+                    date_str,
+                    received_date,
+                )
+                txn_date = received_date
+
+            account_info = self._lookup_account(acct_last4)
+            if account_info is None:
+                return []
+            account_id, source_key = account_info
+
+            ref_m = self._REF_PATTERN.search(text)
+            ref_number = ref_m.group(1) if ref_m else None
+
+            merchant_clean = " ".join(merchant.split()) if merchant else ""
+            raw_desc = (
+                f"UPI: {vpa} {merchant_clean}".strip()
+                if merchant_clean
+                else f"UPI: {vpa}"
             )
-            return []
 
-        amount_str, acct_last4, vpa, merchant, date_str = m.groups()
-        amount = Decimal(amount_str.replace(",", ""))
+            return [
+                ParsedTransaction(
+                    txn_date=txn_date,
+                    raw_description=raw_desc,
+                    debit_amount=amount,
+                    credit_amount=Decimal("0"),
+                    ref_number=ref_number,
+                    metadata={
+                        "account_id": account_id,
+                        "source_key": source_key,
+                        "channel_hint": "UPI",
+                        "vpa": vpa,
+                        "email_source": "hdfc_upi_outbound",
+                    },
+                )
+            ]
 
-        txn_date = _parse_ddmmyy(date_str)
-        if txn_date is None:
-            logger.warning(
-                "HDFCUPIAlertParser: unrecognised date '%s', falling back to %s",
-                date_str,
-                received_date,
-            )
-            txn_date = received_date
+        m2 = self._ACCT_TRANSFER_PATTERN.search(text)
+        if m2:
+            amount_str, acct_last4, dest_last4, date_str = m2.groups()
+            amount = Decimal(amount_str.replace(",", ""))
+            txn_date = _parse_ddmmyy(date_str)
+            if txn_date is None:
+                logger.warning(
+                    "HDFCUPIAlertParser: unrecognised date '%s', falling back to %s",
+                    date_str,
+                    received_date,
+                )
+                txn_date = received_date
 
-        account_info = self._lookup_account(acct_last4)
-        if account_info is None:
-            return []
-        account_id, source_key = account_info
+            account_info = self._lookup_account(acct_last4)
+            if account_info is None:
+                return []
+            account_id, source_key = account_info
 
-        # Extract ref number if present (it's on the next sentence)
-        ref_m = self._REF_PATTERN.search(text)
-        ref_number = ref_m.group(1) if ref_m else None
+            ref_m = self._REF_PATTERN.search(text)
+            ref_number = ref_m.group(1) if ref_m else None
+            vpa_meta = f"account-{dest_last4}"
 
-        merchant = " ".join(merchant.split())
+            return [
+                ParsedTransaction(
+                    txn_date=txn_date,
+                    raw_description=f"UPI: to-acct **{dest_last4}",
+                    debit_amount=amount,
+                    credit_amount=Decimal("0"),
+                    ref_number=ref_number,
+                    metadata={
+                        "account_id": account_id,
+                        "source_key": source_key,
+                        "channel_hint": "UPI",
+                        "vpa": vpa_meta,
+                        "email_source": "hdfc_upi_outbound",
+                    },
+                )
+            ]
 
-        return [
-            ParsedTransaction(
-                txn_date=txn_date,
-                raw_description=f"UPI: {vpa} {merchant}",
-                debit_amount=amount,
-                credit_amount=Decimal("0"),
-                ref_number=ref_number,
-                metadata={
-                    "account_id": account_id,
-                    "source_key": source_key,
-                    "channel_hint": "UPI",
-                    "vpa": vpa,
-                    "email_source": "hdfc_upi_outbound",
-                },
-            )
-        ]
+        logger.warning(
+            "HDFCUPIAlertParser: regex did not match — body text was:\n%s",
+            text[:300],
+        )
+        return []
 
 
 # ─── Parser 3: HDFC Account Update (UPI inbound + skippables) ───────────────────

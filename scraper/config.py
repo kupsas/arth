@@ -43,6 +43,8 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 #       "source_type": str,        # savings | credit_card | broker (coarse bucket for wizard)
 #       "discovery_subject_patterns": list[str],  # regexes matched against Subject during Gmail discovery
 #       "expected_cadence": str,   # annual | yearly | quarterly | monthly | per_transaction
+#       "gmail_subject_filter_keywords": list[str],  # optional — onboarding Gmail queries use
+#                                   # one ``subject:"keyword"`` search per entry (noisy senders)
 #   }
 #
 # The "last_4_digits" key is what appears in the email body (card/account number).
@@ -226,6 +228,12 @@ BANK_SENDERS: dict[str, dict] = {
         "source_type": "broker",
         "discovery_subject_patterns": _PAT_ICICI_DIRECT_STMT,
         "expected_cadence": "quarterly",
+        # Narrow Gmail searches — this sender also pushes portfolio/KYC/scheme noise.
+        # See onboarding ``_collect_pending_queue`` / ``gmail_subject_filter_keywords``.
+        "gmail_subject_filter_keywords": [
+            "Equity Transaction Statement",
+            "Mutual Fund Account Statement",
+        ],
     },
 }
 

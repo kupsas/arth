@@ -928,6 +928,11 @@ class OnboardingState(SQLModel, table=True):
     completed_steps_json: str = Field(default="[]", sa_column=Column(Text))
     discovery_results_json: str = Field(default="{}", sa_column=Column(Text))
     backfill_progress_json: str = Field(default="{}", sa_column=Column(Text))
+    # idle | running | done | error — background persist-sources after POST /discover.
+    persist_sources_status: str = Field(
+        default="idle",
+        sa_column=Column(String(16), nullable=False, server_default="idle"),
+    )
     # Raw pre-classification form inputs (first/last/aliases/hints) for wizard resume — see GET /preclassification.
     preclassification_raw_json: str = Field(default="{}", sa_column=Column(Text))
     created_at: datetime.datetime = Field(

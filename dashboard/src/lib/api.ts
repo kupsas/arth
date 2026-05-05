@@ -936,8 +936,6 @@ export type OnboardingDiscoveryStreamRow = {
   display_name: string
   source_type: string
   email_count_estimate: number
-  earliest_email_date: string | null
-  latest_email_date: string | null
 }
 
 /** Parsed NDJSON events from streaming discovery (see ``streamOnboardingDiscover``). */

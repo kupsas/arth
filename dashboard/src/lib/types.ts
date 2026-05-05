@@ -1319,6 +1319,8 @@ export interface OnboardingStateResponse {
   completed_steps: unknown[];
   discovery_results: Record<string, unknown>;
   backfill_progress: Record<string, unknown>;
+  /** idle | running | done | error — background persist-sources after discovery */
+  persist_sources_status: string;
   created_at: string | null;
   updated_at: string | null;
 }

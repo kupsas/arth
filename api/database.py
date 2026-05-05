@@ -544,6 +544,16 @@ def _apply_sqlite_patches() -> None:
                 )
             )
 
+        if _table_exists(conn, "onboarding_states") and not _column_exists(
+            conn, "onboarding_states", "persist_sources_status"
+        ):
+            conn.execute(
+                text(
+                    "ALTER TABLE onboarding_states ADD COLUMN persist_sources_status TEXT "
+                    "NOT NULL DEFAULT 'idle'"
+                )
+            )
+
         # User contacts: distinguish wizard-seeded rows (replace on re-save) from Settings-created rows.
         if _table_exists(conn, "user_contacts") and not _column_exists(
             conn, "user_contacts", "contact_source"

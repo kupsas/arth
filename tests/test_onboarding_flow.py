@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import time
 from datetime import date
 from typing import Any
 from unittest.mock import patch
@@ -100,8 +101,7 @@ def test_discover_saves_to_onboarding_state(
                 display_name="T",
                 source_type="savings",
                 email_count_estimate=2,
-                earliest_email_date=date(2020, 1, 1),
-                latest_email_date=date(2020, 6, 1),
+                sample_message_ids=["mid1", "mid2"],
             )
         ]
     )
@@ -114,10 +114,12 @@ def test_discover_saves_to_onboarding_state(
     assert lines[1]["type"] == "found"
     assert lines[1]["index"] == 0
     assert lines[2]["type"] == "done"
+    time.sleep(0.25)
     with Session(engine) as session:  # type: ignore[call-arg]
         row = session.exec(select(OnboardingState).where(OnboardingState.user_id == "flow_user")).first()
         assert row is not None
         assert "a@test.in" in (row.discovery_results_json or "")
+        assert getattr(row, "persist_sources_status", None) == "done"
 
 
 @patch("api.routes.onboarding._gmail_client_connected", return_value=object())
