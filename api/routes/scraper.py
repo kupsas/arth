@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
-from api.database import get_engine, get_session
+from api.database import SQLiteSerializingSession, get_engine, get_session
 from api.models import ProcessedEmail
 from scraper.config import GMAIL_TOKEN_PATH
 from scraper.config_loader import all_sender_emails, get_bank_senders_config
@@ -174,7 +174,7 @@ async def scraper_backfill(
         )
 
     def _run() -> dict:
-        with Session(get_engine()) as s:
+        with SQLiteSerializingSession(get_engine()) as s:
             result = run_historical_backfill(
                 session=s,
                 after=body.after,

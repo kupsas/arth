@@ -53,6 +53,7 @@ from typing import Any
 
 import pdfplumber
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.base import BaseParser
 
@@ -192,6 +193,50 @@ class ICICISavingsParser(BaseParser):
     @property
     def source_id(self) -> str:
         return "icici_savings"
+
+    @classmethod
+    def detect(cls, file_path: str | Path) -> DetectionResult | None:
+        """ICICI Bank savings statement PDF (legacy grid or combined email layout)."""
+        path = Path(file_path)
+        if path.suffix.lower() != ".pdf" or not path.is_file():
+            return None
+        try:
+            with pdfplumber.open(path) as pdf:
+                if not pdf.pages:
+                    return None
+                chunk = ""
+                for i in range(min(3, len(pdf.pages))):
+                    chunk += pdf.pages[i].extract_text() or ""
+        except Exception:
+            return None
+        tl = chunk.lower()
+        if "icici" not in tl:
+            return None
+        # Avoid confusing ICICI MF account statement PDFs with bank savings.
+        if (
+            "folio no" in tl
+            and "mutual fund" in tl
+            and "statement of transactions in savings account" not in tl
+        ):
+            return None
+
+        savings_markers = (
+            "statement of transactions in savings account" in tl,
+            "statement of transactions in ppf account" in tl
+            and "statement of transactions in savings account" in tl,
+            "transaction date" in tl and "remarks" in tl and "withdrawal" in tl,
+            "particulars" in tl and "withdrawals" in tl and "deposits" in tl,
+            "savings account" in tl and "withdrawal" in tl and "deposit" in tl,
+        )
+        if not any(savings_markers):
+            return None
+
+        return DetectionResult(
+            source_type="icici_savings",
+            confidence=0.88,
+            account_hint=None,
+            label=PARSER_LABELS["icici_savings"],
+        )
 
     def parse(self, file_path: str | Path) -> list[ParsedTransaction]:
         """Accept either a single .pdf file or a directory of yearly .pdf files.

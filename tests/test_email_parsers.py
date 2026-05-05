@@ -153,6 +153,45 @@ class TestHDFCUPIOutbound:
         assert self._parse()[0].metadata["vpa"] == "eatclub@icici"
 
 
+class TestHDFCUPIOutboundLegacyMaskedAndNoMerchant:
+    """~2023 template: ``account **3703``, VPA immediately before ``on`` (no merchant text)."""
+
+    HTML_MASKED = """<!DOCTYPE html><html><body>
+<table><tr><td class="td esd-text">
+Dear Customer, Rs.4607.00 has been debited from account **3703 to VPA Q652095861@ybl on 09-09-23.
+Your UPI transaction reference number is 325248523604.
+</td></tr></table></body></html>"""
+
+    def test_masked_source_account_parses(self):
+        rows = HDFC_UPI_PARSER.parse(self.HTML_MASKED, RECEIVED)
+        assert len(rows) == 1
+        t = rows[0]
+        assert t.debit_amount == Decimal("4607.00")
+        assert t.txn_date == datetime.date(2023, 9, 9)
+        assert t.raw_description == "UPI: Q652095861@ybl"
+        assert t.metadata["vpa"] == "Q652095861@ybl"
+        assert t.ref_number == "325248523604"
+
+
+class TestHDFCUPIOutboundAccountToAccount:
+    """Legacy transfer to another masked account (no VPA)."""
+
+    HTML = """<!DOCTYPE html><html><body>
+<table><tr><td class="td esd-text">
+Dear Customer, Rs.2000.00 has been debited from account **3703 to account **4875 on 17-09-23.Your UPI transaction reference number is 326006863787.
+</td></tr></table></body></html>"""
+
+    def test_parses(self):
+        rows = HDFC_UPI_PARSER.parse(self.HTML, RECEIVED)
+        assert len(rows) == 1
+        t = rows[0]
+        assert t.debit_amount == Decimal("2000.00")
+        assert t.txn_date == datetime.date(2023, 9, 17)
+        assert t.raw_description == "UPI: to-acct **4875"
+        assert t.metadata["vpa"] == "account-4875"
+        assert t.ref_number == "326006863787"
+
+
 # ─── HDFCCreditCardAlertParser: alerts_hdfcbank_net_02..05.html ───────────────
 
 class TestHDFCCCAlert:

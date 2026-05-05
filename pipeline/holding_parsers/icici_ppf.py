@@ -19,6 +19,7 @@ import csv
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.holding_parsers.base import (
     BaseHoldingParser,
     ParsedHolding,
@@ -175,6 +176,31 @@ class ICICIPPFParser(BaseHoldingParser):
     @property
     def source_id(self) -> str:
         return "icici_ppf"
+
+    @classmethod
+    def detect(cls, path: str | Path) -> DetectionResult | None:
+        """PPF transaction CSV (rows after metadata header)."""
+        p = Path(path)
+        if p.is_dir():
+            for f in sorted(p.glob("*.csv")):
+                hit = cls.detect(f)
+                if hit:
+                    return hit
+            return None
+        if p.suffix.lower() != ".csv":
+            return None
+        raw = strip_bom(p.read_text(encoding="utf-8", errors="replace")[:6000])
+        rl = raw.lower()
+        if "transaction date" in rl and ("deposit" in rl or "withdrawal" in rl) and (
+            "ppf" in rl or "public provident" in rl
+        ):
+            return DetectionResult(
+                source_type="icici_ppf",
+                confidence=0.9,
+                account_hint=None,
+                label=PARSER_LABELS["icici_ppf"],
+            )
+        return None
 
     def parse_path(self, path: str | Path) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
         p = Path(path)

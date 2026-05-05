@@ -16,8 +16,11 @@
  *    friend names are matched&quot; for two-word vs longer names; extra spellings in Settings.
  * 4. Optionally add account/card fragments and UPI IDs — stored as ``account_hints_json``
  *    for rules-based self-transfer detection (substring match on bank narrations).
- * 5. Click **Save identity** — this hits ``POST /api/onboarding/preclassification``.
- * 6. Fine-tune contacts under **Settings → Classification** (optional).
+ * 5. Scroll to **PDF statement passwords** — PAN / DOB / HDFC customer ID fields appear based on
+ *    which banks showed up in discovery (HDFC savings vs CC-only, ICICI Direct for PAN, etc.).
+ * 6. Click **Save config** — saves identity via ``POST /api/onboarding/preclassification`` then
+ *    merges PDF hints via ``POST /api/onboarding/password-ingredients``.
+ * 7. Fine-tune contacts under **Settings → Classification** (optional).
  *
  * **Draft persistence:** In-progress fields are debounced to localStorage; after a
  * successful save we clear that backup. If there is no local draft, we load the
@@ -40,7 +43,15 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useFormDraft } from "@/hooks/use-form-draft";
 import { buildApiUrl } from "@/lib/api-base";
-import { fetchOnboardingPreclassificationSaved } from "@/lib/api";
+import {
+  fetchOnboardingPreclassificationSaved,
+  postOnboardingPasswordIngredients,
+} from "@/lib/api";
+import {
+  PdfPasswordConfigFields,
+  type PdfPasswordConfigFieldsHandle,
+} from "@/components/onboarding/pdf-password-config-fields";
+import { useOnboardingBackfillSources } from "@/hooks/use-onboarding";
 import {
   guardMultilineText,
   guardSingleLineText,
@@ -142,6 +153,10 @@ export function PreClassificationForm() {
     PRECLASS_STORAGE_KEY,
     PRECLASS_DEFAULT,
   );
+
+  /** Used to read PAN / DOB / HDFC customer ID on the same button click as identity save. */
+  const pdfSecretsRef = React.useRef<PdfPasswordConfigFieldsHandle>(null);
+  const sourcesQ = useOnboardingBackfillSources();
 
   const [preview, setPreview] = React.useState<PreviewResponse | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -259,6 +274,7 @@ export function PreClassificationForm() {
     }
     setSaving(true);
     try {
+      // Identity must succeed first so the PDF preview APIs see your saved name strings.
       await savePreclassification({
         first_name: guardSingleLineText(d.firstName.trim(), ONBOARDING_INPUT_LIMITS.preclassFirstLastChars),
         last_name: guardSingleLineText(d.lastName.trim(), ONBOARDING_INPUT_LIMITS.preclassFirstLastChars),
@@ -267,9 +283,23 @@ export function PreClassificationForm() {
         family_names: familyLines,
         friend_names: friendLines,
       });
+      try {
+        const payload = pdfSecretsRef.current?.getPayload() ?? {
+          pan: null,
+          dob_iso: null,
+          hdfc_customer_id: null,
+        };
+        await postOnboardingPasswordIngredients(payload);
+      } catch (e) {
+        setSaveError(
+          getUserFacingErrorMessage(e) ??
+            "Your name was saved, but PDF secrets could not be saved. Fix the error above and click Save config again.",
+        );
+        return;
+      }
       clearDraft();
       setMessage(
-        "Saved — we will use your names and hints for self-transfers, and your family/friend list for labelling people in bank text.",
+        "Saved — names, transfer hints, and PDF password ingredients are stored on this device.",
       );
     } catch (e) {
       setSaveError(getUserFacingErrorMessage(e));
@@ -279,12 +309,13 @@ export function PreClassificationForm() {
   }
 
   return (
-    <Card className="max-w-lg">
+    <Card className="max-w-2xl">
       <CardHeader>
-        <CardTitle>Your name on bank statements</CardTitle>
+        <CardTitle>Config</CardTitle>
         <CardDescription>
-          We use this to label <strong>money you move to yourself</strong> and to recognise your own
-          name in bank text. All fields are case-agnostic.
+          Your <strong>identity</strong> (how banks print your name) drives matching and PDF password
+          guesses. Optional hints below help spot self-transfers. Further down, we ask only for PDF
+          secret fields that match the accounts you linked in discovery.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -528,6 +559,17 @@ export function PreClassificationForm() {
             )}
           </div>
         )}
+
+        <div className="border-t border-border/70 pt-6 mt-2 space-y-4">
+          <PdfPasswordConfigFields
+            ref={pdfSecretsRef}
+            mode="wizard"
+            backfillSources={sourcesQ.data}
+            embeddedInConfigStep
+            hideSubmitButton
+          />
+        </div>
+
         {/* <p className="text-sm text-muted-foreground">
           For family or friends who often appear in your UPI messages, add them under&nbsp;
           <span>Settings &rarr; Classification</span>
@@ -547,7 +589,7 @@ export function PreClassificationForm() {
       </CardContent>
       <CardFooter>
         <Button type="button" onClick={() => void onSave()} disabled={saving || !d.firstName.trim()}>
-          {saving ? "Saving…" : "Save identity"}
+          {saving ? "Saving…" : "Save config"}
         </Button>
       </CardFooter>
     </Card>

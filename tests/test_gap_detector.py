@@ -209,3 +209,66 @@ def test_build_source_key_meta_prefers_monthly_cadence() -> None:
     }
     meta = _build_source_key_meta(cfg)
     assert meta["shared"]["expected_cadence"] == "monthly"
+
+
+def test_compute_alert_backfill_windows_includes_gap_and_pre_statement(session: Session):
+    from scraper.gap_detector import compute_alert_backfill_windows
+
+    user = "u_win"
+    src = "hdfc_sav_win"
+    _add_txn(session, i=1, user=user, source=src, d=dt.date(2022, 1, 5))
+    _add_txn(session, i=2, user=user, source=src, d=dt.date(2022, 3, 2))
+    session.commit()
+
+    cfg = {
+        "stmt@bank.com": {
+            "display_name": "Stmt",
+            "source_type": "savings",
+            "expected_cadence": "monthly",
+            "accounts": {"1": {"source_key": src, "account_id": "a1"}},
+        },
+    }
+    ga = dt.date(2020, 1, 1)
+    gb = dt.date(2023, 1, 1)
+    wins = compute_alert_backfill_windows(
+        session,
+        user,
+        src,
+        cfg,
+        gmail_after_inclusive=ga,
+        gmail_before_exclusive=gb,
+        had_statement_ids_at_init=True,
+    )
+    kinds = [w["kind"] for w in wins]
+    assert "gap" in kinds
+    assert "pre_statement" in kinds
+    assert wins[0]["kind"] == "gap"
+
+
+def test_compute_alert_backfill_windows_uncertain_is_capped(session: Session):
+    from scraper.gap_detector import ALERT_BACKFILL_MAX_UNCERTAIN_WINDOWS, compute_alert_backfill_windows
+
+    user = "u_cap"
+    src = "orphan_src"
+    session.commit()
+    cfg = {
+        "stmt@bank.com": {
+            "display_name": "Stmt",
+            "source_type": "savings",
+            "expected_cadence": "monthly",
+            "accounts": {"1": {"source_key": src, "account_id": "a1"}},
+        },
+    }
+    ga = dt.date(2000, 1, 1)
+    gb = dt.date(2026, 1, 1)
+    wins = compute_alert_backfill_windows(
+        session,
+        user,
+        src,
+        cfg,
+        gmail_after_inclusive=ga,
+        gmail_before_exclusive=gb,
+        had_statement_ids_at_init=True,
+    )
+    uncertain = [w for w in wins if w["kind"] == "coverage_uncertain"]
+    assert len(uncertain) <= ALERT_BACKFILL_MAX_UNCERTAIN_WINDOWS

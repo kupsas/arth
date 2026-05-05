@@ -1,7 +1,7 @@
 """
 Build per-user ``ScraperBankSender`` + ``ScraperAccountMapping`` rows from Gmail discovery.
 
-Onboarding runs :func:`discover_sources_iter` first (cheap header probes).  This module
+Onboarding runs :func:`discover_sources_iter` first (cheap ``messages.list`` ID probes).  This module
 fills the SQLite tables that :func:`scraper.config_loader.get_bank_senders_config` reads
 by sampling a few full messages per discovered sender and inferring last-4 digits from
 subjects/HTML (heuristic — same idea as the parsers, without duplicating every bank regex).
@@ -63,6 +63,72 @@ def _template_for_sender(sender_norm: str) -> dict[str, Any] | None:
         logger.warning("persist-sources: sender %r not in BANK_SENDERS template — skip", sender_norm)
         return None
     return dict(row)
+
+
+def _email_count_estimate_from_raw(raw: dict[str, Any]) -> int:
+    est = raw.get("email_count_estimate")
+    try:
+        return int(est) if est is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_nse_co_in_broker_sender(sender_norm: str) -> bool:
+    """True for configured ``@nse.co.in`` broker senders (trade confirmations).
+
+    These overlap ICICI Direct imports when both are present — we treat NSE as fallback-only.
+    """
+    row = BANK_SENDERS.get(sender_norm)
+    if not row or row.get("source_type") != "broker":
+        return False
+    return "@nse.co.in" in sender_norm.lower()
+
+
+def discovery_has_non_nse_broker_mail(sources: list[Any]) -> bool:
+    """True when discovery found broker mail from a non-NSE sender (e.g. ICICI Direct statements)."""
+    for raw in sources:
+        if not isinstance(raw, dict):
+            continue
+        sender_raw = raw.get("sender_email")
+        if not isinstance(sender_raw, str) or not sender_raw.strip():
+            continue
+        if _email_count_estimate_from_raw(raw) <= 0:
+            continue
+        sender_norm = _normalise_sender(sender_raw)
+        cfg = BANK_SENDERS.get(sender_norm)
+        if not cfg or cfg.get("source_type") != "broker":
+            continue
+        if _is_nse_co_in_broker_sender(sender_norm):
+            continue
+        return True
+    return False
+
+
+def filter_redundant_nse_broker_sources(sources: list[Any]) -> list[Any]:
+    """Remove NSE broker discovery rows when another broker channel already has mail.
+
+    Trade confirmations from ``nse.co.in`` duplicate ICICI Direct ledger rows when both feeds
+    are enabled — persist-sources and password hints should behave as if NSE were absent.
+    """
+    if not discovery_has_non_nse_broker_mail(sources):
+        return sources
+    out: list[Any] = []
+    dropped = 0
+    for raw in sources:
+        if isinstance(raw, dict):
+            sender_raw = raw.get("sender_email")
+            if isinstance(sender_raw, str) and sender_raw.strip():
+                sender_norm = _normalise_sender(sender_raw)
+                if _is_nse_co_in_broker_sender(sender_norm):
+                    dropped += 1
+                    continue
+        out.append(raw)
+    if dropped:
+        logger.info(
+            "discovery: suppressed %d NSE broker sender(s); primary broker mail already present",
+            dropped,
+        )
+    return out
 
 
 def _normalise_sample_chunks(parser_key: str, sample_texts: list[str]) -> str:
@@ -240,7 +306,14 @@ def _infer_account_for_last4(
         return (f"ICICI_SAV_{last4}", "icici_savings")
 
     if pk in ("hdfc_bank",):
-        if "credit card" in blob or "payment was made using your credit card" in blob:
+        # Do **not** use a blob-wide "credit card" substring — InstaAlert footers and UPI
+        # payment lines often mention cards while the masked digits are still savings.
+        # Only treat as CC when this specific last-4 appears in an explicit CC context.
+        cc_pattern = re.compile(
+            rf"(?i)(credit\s+card\s+ending\s+{re.escape(last4)}"
+            rf"|payment\s+was\s+made\s+using\s+your\s+credit\s+card\s+\S*{re.escape(last4)})",
+        )
+        if cc_pattern.search(blob):
             return (f"HDFC_CC_{last4}", f"hdfc_cc_{last4}")
         return (f"HDFC_SAL_{last4}", "hdfc_savings")
 
@@ -409,6 +482,7 @@ def persist_scraper_sources_from_discovery(
     sources = discovery_envelope.get("sources")
     if not isinstance(sources, list):
         raise ValueError("discovery envelope must contain a 'sources' list")
+    sources = filter_redundant_nse_broker_sources(sources)
 
     uid = (user_id or "").strip()
     if not uid:

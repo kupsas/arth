@@ -10,9 +10,9 @@
  *    (unless you already confirmed that counterparty on another transaction).
  *    Omit ``source`` on this component to review **all** email-linked accounts in one queue.
  * 2. Pick a **category** per row (or select many rows and use the bulk bar).
- * 3. **Confirm** sends ``POST /api/onboarding/classify`` (no ``source`` when mixed), then
- *    ``POST /api/onboarding/backfill/{source}?…`` with ``resume_after_classification`` for each
- *    account that had rows in that batch so chunk import can continue.
+ * 3. **Confirm** sends ``POST /api/onboarding/classify`` (no ``source`` when mixed), then for each
+ *    affected ``source_key`` opens ``GET /api/onboarding/backfill/{source}/stream?resume_after_classification=true``
+ *    so mail import continues with live SSE progress (same resume semantics as the POST chunk API).
  * 4. While the mail importer is **paused for classification** (``needs_classification``), or after **every
  *    email source** has finished (``complete`` on the last source but rows still need labels), an optional
  *    **“rest of queue = Uber”** shortcut fetches *every* pending unknown (not only the visible page),
@@ -24,10 +24,10 @@
  */
 
 import * as React from "react";
-import { Check, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Loader2, Pencil } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -48,9 +48,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   fetchOnboardingUnknowns,
-  postOnboardingBackfillChunk,
   postOnboardingClassify,
+  streamOnboardingBackfill,
   type OnboardingClassifyItem,
   type OnboardingUnknownTxnBrief,
 } from "@/lib/api";
@@ -64,7 +69,8 @@ import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error";
 import type { CounterpartyCategory } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const PAGE_SIZE = 20;
+/** Matches onboarding UX: short pages + outer page scroll (no nested scroll panes). */
+const PAGE_SIZE = 10;
 
 /** Server allows up to 500 rows per ``GET /api/onboarding/unknowns`` — use it when draining the whole queue. */
 const UNKNOWN_FULL_PAGE = 500;
@@ -131,8 +137,10 @@ export type ClassificationBatchReviewProps = {
    * even though the combined queue still has rows, so the string key forces a refetch.
    */
   unknownsTrigger?: number | string;
-  /** After classify + per-source resume succeeds — parent may nudge the backfill poll loop. */
+  /** After classify + SSE resume — parent may refresh backfill UI via ``onImportProgress``. */
   onSubmitted?: () => void;
+  /** Forward live import counters while ``streamOnboardingBackfill`` runs after classification resume. */
+  onImportProgress?: (snapshot: Record<string, unknown>) => void;
   /**
    * When true (e.g. backfill progress ``status === "needs_classification"``), show the
    * **mark entire queue as Uber** shortcut so users can bulk-fix counterparty + category together.
@@ -144,11 +152,22 @@ export type ClassificationBatchReviewProps = {
    */
   allMailSourcesImported?: boolean;
   /**
-   * When true, the Gmail backfill loop is still ingesting messages for this session. The list may
-   * update and saves can race with chunk import — parent passes this so we show a clear overlay
-   * instead of a “broken” confirm button (often greyed out until a category is picked).
+   * When true, the Gmail importer is **actively parsing mail into the ledger** (not paused for
+   * classification/password). We dim the queue so saves do not race with ingestion — see parent
+   * ``mailImportActivelyProcessing`` (SSE-aware; not the same as “HTTP stream connected”).
    */
   mailImportActivelyProcessing?: boolean;
+  /**
+   * While the next source’s SSE stream has not produced a progress snapshot yet, the parent may
+   * hide transaction rows if the **global** unknown backlog is still under the pause threshold
+   * so the card does not flash rows under a “Connecting…” import header.
+   */
+  hideClassificationRowsForImportLimbo?: boolean;
+  /**
+   * Same numeric threshold the server uses to pause for classification (~20). Used for the Uber
+   * bulk shortcut and copy when the list scope is all accounts.
+   */
+  pauseThresholdForShortcuts?: number;
 };
 
 export function ClassificationBatchReview({
@@ -156,9 +175,12 @@ export function ClassificationBatchReview({
   sourceLabel,
   unknownsTrigger,
   onSubmitted,
+  onImportProgress,
   importAwaitingClassification = false,
   allMailSourcesImported = false,
   mailImportActivelyProcessing = false,
+  hideClassificationRowsForImportLimbo = false,
+  pauseThresholdForShortcuts,
 }: ClassificationBatchReviewProps) {
   const scopedSource = source?.trim() || undefined;
   const displayScope =
@@ -184,13 +206,17 @@ export function ClassificationBatchReview({
   const [editingCpId, setEditingCpId] = React.useState<number | null>(null);
 
   const [busy, setBusy] = React.useState(false);
-  /** Bumping this re-runs the list fetch without changing ``page`` (Reload page button). */
-  const [refetchNonce, setRefetchNonce] = React.useState(0);
 
   /** Mirrors the checkbox while the destructive-confirm dialog is open (Base UI controlled checkbox). */
   const [uberDialogOpen, setUberDialogOpen] = React.useState(false);
 
-  const totalPages = Math.max(1, Math.ceil(pendingTotal / PAGE_SIZE) || 1);
+  /** Zero when the queue is empty so we can hide pagination chrome entirely. */
+  const totalPages =
+    pendingTotal > 0 ? Math.max(1, Math.ceil(pendingTotal / PAGE_SIZE)) : 0;
+
+  /** Anchor for scrolling back to the list top whenever ``page`` changes (see effect below). */
+  const listTopRef = React.useRef<HTMLDivElement>(null);
+  const prevPageForScrollRef = React.useRef<number | undefined>(undefined);
 
   const mergeRowState = React.useCallback((txns: OnboardingUnknownTxnBrief[]) => {
     setCategoryById((prev) => {
@@ -299,23 +325,20 @@ export function ClassificationBatchReview({
     return () => {
       cancelled = true;
     };
-  }, [page, scopedSource, mergeRowState, refetchNonce, unknownsTrigger]);
+  }, [page, scopedSource, mergeRowState, unknownsTrigger]);
 
-  const pageIds = React.useMemo(() => rows.map((r) => r.id), [rows]);
-  const allPageSelected =
-    pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
-
-  function toggleSelectAllOnPage() {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (allPageSelected) {
-        for (const id of pageIds) next.delete(id);
-      } else {
-        for (const id of pageIds) next.add(id);
-      }
-      return next;
+  /**
+   * After Prev/Next, bring the review list back into view so you land on row 1 of the new page,
+   * not halfway down the wizard. Skip the first run so initial load does not jump the viewport.
+   */
+  React.useEffect(() => {
+    const prev = prevPageForScrollRef.current;
+    prevPageForScrollRef.current = page;
+    if (prev === undefined || prev === page) return;
+    requestAnimationFrame(() => {
+      listTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
-  }
+  }, [page]);
 
   function toggleOne(id: number) {
     setSelectedIds((prev) => {
@@ -357,7 +380,10 @@ export function ClassificationBatchReview({
         if (sk) sources.add(sk);
       }
       for (const sk of sources) {
-        await postOnboardingBackfillChunk(sk, { resume_after_classification: true });
+        await streamOnboardingBackfill(sk, {
+          resume_after_classification: true,
+          onProgress: (snap) => onImportProgress?.(snap),
+        });
       }
     }
     return result;
@@ -459,11 +485,17 @@ export function ClassificationBatchReview({
   }
 
   /**
-   * Uber bulk row: safe when import is paused for classification **or** all Gmail sources are done
-   * but the combined unknown queue is not empty (no chunk work left to race ``POST /classify``).
+   * Uber bulk row: show when import is paused for classification, all sources are done, **or** the
+   * visible queue already has at least the pause-threshold number of rows (multi-source / SSE
+   * “in between” case — same destructive confirm as end-of-import).
    */
+  const pauseBar = pauseThresholdForShortcuts ?? threshold ?? 20;
   const showUberQueueBulkShortcut =
-    pendingTotal > 0 && (importAwaitingClassification || allMailSourcesImported);
+    pendingTotal > 0 &&
+    (importAwaitingClassification || allMailSourcesImported || pendingTotal >= pauseBar);
+
+  const showPagination =
+    !hideClassificationRowsForImportLimbo && pendingTotal > 0 && totalPages > 1;
 
   return (
     <>
@@ -513,7 +545,7 @@ export function ClassificationBatchReview({
             Review classification queue
             {loading && !rows.length ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
           </CardTitle>
-          {pendingTotal > 0 && (
+          {pendingTotal > 0 && !hideClassificationRowsForImportLimbo && (
             <span
               className="rounded-md border border-border bg-muted/50 px-2.5 py-1 text-sm font-medium tabular-nums text-foreground"
               title="Gaps (missing counterparty or category), LLM rows in Friends & Family / Gifts & Personal Transfers / Miscellaneous (unless that counterparty was already confirmed in a prior review), and the count the importer uses before pausing."
@@ -539,7 +571,7 @@ export function ClassificationBatchReview({
       <CardContent className="relative flex min-h-48 flex-col gap-3">
         {mailImportActivelyProcessing && (
           <div
-            className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-b-lg bg-background/70 px-5 text-center shadow-[inset_0_0_0_1px_hsl(var(--border)/0.35)] backdrop-blur-[3px]"
+            className="absolute inset-0 z-20 flex flex-col items-center justify-start gap-2 rounded-b-lg bg-background/70 px-5 pb-6 pt-8 text-center shadow-[inset_0_0_0_1px_hsl(var(--border)/0.35)] backdrop-blur-[3px]"
             role="status"
             aria-live="polite"
             aria-label="Import in progress"
@@ -549,13 +581,22 @@ export function ClassificationBatchReview({
               Transactions being processed, please wait.
             </p>
             <p className="max-w-xs text-xs text-muted-foreground">
-              You can confirm labels after this batch pauses for review.
+              You can confirm labels once this mail-ingest burst finishes or when import pauses for
+              review.
             </p>
           </div>
         )}
         {error && <p className="text-sm text-destructive">{error}</p>}
 
-        {showUberQueueBulkShortcut && (
+        {hideClassificationRowsForImportLimbo && (
+          <p className="text-sm text-muted-foreground" role="status">
+            Connecting the next email account. The list appears when you have at least{" "}
+            <span className="font-medium text-foreground tabular-nums">{pauseBar}</span> items to
+            review, or when import pauses for labels.
+          </p>
+        )}
+
+        {!hideClassificationRowsForImportLimbo && showUberQueueBulkShortcut && (
           <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-3.5">
             <div className="flex gap-3">
               <Checkbox
@@ -589,7 +630,7 @@ export function ClassificationBatchReview({
           </div>
         )}
 
-        {selectedIds.size > 0 && (
+        {!hideClassificationRowsForImportLimbo && selectedIds.size > 0 && (
           <div className="sticky top-0 z-10 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium tabular-nums">{selectedIds.size} selected</span>
@@ -633,30 +674,48 @@ export function ClassificationBatchReview({
           </div>
         )}
 
-        {!rows.length && !loading && (
+        {!hideClassificationRowsForImportLimbo && !rows.length && !loading && (
           <p className="text-sm text-muted-foreground">No rows to review on this page — you are clear.</p>
         )}
 
-        {!!rows.length && (
+        {!hideClassificationRowsForImportLimbo && !!rows.length && (
           <>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 px-2 text-xs"
-                disabled={busy || !pageIds.length}
-                onClick={toggleSelectAllOnPage}
-              >
-                {allPageSelected ? "Clear page" : "Select page"}
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                {selectedIds.size > 0 && `${selectedIds.size} selected · `}
-                Page {page + 1}/{totalPages}
-              </span>
-            </div>
+            <div
+              ref={listTopRef}
+              className="space-y-2 scroll-mt-6"
+            >
+              {showPagination && (
+                <nav
+                  aria-label="Review queue pages (top)"
+                  className="flex flex-wrap items-center justify-end gap-2"
+                >
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || page <= 0}
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Prev
+                  </Button>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {page + 1} / {totalPages}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || page >= totalPages - 1}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </nav>
+              )}
 
-            <div className="flex max-h-[min(60vh,560px)] flex-col gap-2 overflow-y-auto pr-0.5">
+              <div className="flex flex-col gap-2">
               {rows.map((t) => {
                 const checked = selectedIds.has(t.id);
                 const cat = categoryById[t.id] ?? "";
@@ -681,164 +740,187 @@ export function ClassificationBatchReview({
                       checked && "border-primary/40 bg-primary/5",
                     )}
                   >
-                    {/* Row 1: checkbox + counterparty + amount + confirm */}
+                    {/* Checkbox + left column (counterparty → amount → meta → category) + confirm */}
                     <div className="flex items-start gap-2">
                       <Checkbox
                         checked={checked}
                         onCheckedChange={() => toggleOne(t.id)}
                         aria-label={`Select transaction ${t.id}`}
                         disabled={busy}
-                        className="mt-0.5 shrink-0"
+                        className="mt-1 shrink-0"
                       />
-                      <div className="min-w-0 flex-1">
-                        {editingCpId === t.id ? (
-                          <div className="min-w-0 flex flex-col gap-1">
-                            <Input
-                              className="h-7 text-sm"
-                              value={cp}
-                              maxLength={ONBOARDING_INPUT_LIMITS.counterpartyLabelChars}
-                              autoFocus
-                              aria-invalid={!cp.trim()}
-                              aria-describedby={`cp-edit-hint-${t.id}`}
-                              onChange={(e) =>
-                                setCounterpartyById((prev) => ({
-                                  ...prev,
-                                  [t.id]: guardSingleLineText(
-                                    e.target.value,
-                                    ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
-                                  ),
-                                }))
-                              }
-                              onBlur={() => {
-                                setCounterpartyById((prev) => {
-                                  const cur = guardSingleLineText(
-                                    prev[t.id] ?? cpFallback,
-                                    ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
-                                  ).trim();
-                                  return { ...prev, [t.id]: cur || cpFallback };
-                                });
-                                setEditingCpId(null);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  (e.target as HTMLInputElement).blur();
-                                }
-                              }}
-                            />
-                            <span id={`cp-edit-hint-${t.id}`} className="sr-only">
-                              Counterparty label, max {ONBOARDING_INPUT_LIMITS.counterpartyLabelChars}{" "}
-                              characters. Empty saves as the suggested bank label.
-                            </span>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            {editingCpId === t.id ? (
+                              <div className="min-w-0 flex flex-col gap-1">
+                                <Input
+                                  className="h-7 text-sm"
+                                  value={cp}
+                                  maxLength={ONBOARDING_INPUT_LIMITS.counterpartyLabelChars}
+                                  autoFocus
+                                  aria-invalid={!cp.trim()}
+                                  aria-describedby={`cp-edit-hint-${t.id}`}
+                                  onChange={(e) =>
+                                    setCounterpartyById((prev) => ({
+                                      ...prev,
+                                      [t.id]: guardSingleLineText(
+                                        e.target.value,
+                                        ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
+                                      ),
+                                    }))
+                                  }
+                                  onBlur={() => {
+                                    setCounterpartyById((prev) => {
+                                      const cur = guardSingleLineText(
+                                        prev[t.id] ?? cpFallback,
+                                        ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
+                                      ).trim();
+                                      return { ...prev, [t.id]: cur || cpFallback };
+                                    });
+                                    setEditingCpId(null);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      (e.target as HTMLInputElement).blur();
+                                    }
+                                  }}
+                                />
+                                <span id={`cp-edit-hint-${t.id}`} className="sr-only">
+                                  Counterparty label, max{" "}
+                                  {ONBOARDING_INPUT_LIMITS.counterpartyLabelChars} characters. Empty
+                                  saves as the suggested bank label.
+                                </span>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="group flex max-w-full min-w-0 items-center gap-1.5 rounded-sm text-left font-medium text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                                title="Click to edit counterparty name"
+                                aria-label={`Edit counterparty: ${cp}`}
+                                onClick={() => setEditingCpId(t.id)}
+                              >
+                                {/* Name truncates; pencil fades in on hover / keyboard focus so edit affordance is obvious */}
+                                <span className="min-w-0 truncate">{cp}</span>
+                                <Pencil
+                                  className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                                  aria-hidden
+                                />
+                              </button>
+                            )}
+                            {/* Amount directly under counterparty so eyes stay on the left column */}
+                            <p className="text-sm font-semibold tabular-nums text-foreground">
+                              ₹{amountDisplay}
+                            </p>
                           </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="block max-w-full truncate text-left font-medium text-foreground hover:underline"
-                            title="Tap to edit counterparty label"
-                            onClick={() => setEditingCpId(t.id)}
+                          <Tooltip>
+                            {/*
+                              Base UI TooltipTrigger renders as a single button — never nest <Button>
+                              inside it (invalid HTML). Use shared button styles on the trigger.
+                            */}
+                            <TooltipTrigger
+                              type="button"
+                              disabled={busy || !cat}
+                              aria-label="Confirm this transaction"
+                              className={cn(
+                                buttonVariants({ variant: "ghost", size: "icon" }),
+                                "size-10 shrink-0",
+                              )}
+                              onClick={() => void onConfirmRow(t.id)}
+                            >
+                              <Check className="size-6 stroke-[2.5]" aria-hidden />
+                            </TooltipTrigger>
+                            <TooltipContent side="top">Take a sec to confirm</TooltipContent>
+                          </Tooltip>
+                        </div>
+
+                        {/* Meta chips — source, date, direction, narration */}
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                          {sk && (
+                            <Badge
+                              variant="secondary"
+                              className="px-1.5 py-0 font-normal text-[11px]"
+                            >
+                              {humanizeSourceKey(sk)}
+                            </Badge>
+                          )}
+                          <span className="tabular-nums">{t.txn_date ?? "—"}</span>
+                          <span>{t.direction}</span>
+                          <span
+                            className="truncate font-mono text-[10px]"
+                            title={t.raw_description}
                           >
-                            {cp}
-                          </button>
-                        )}
+                            {t.raw_description}
+                          </span>
+                        </div>
+
+                        {/* Category dropdown */}
+                        <div className="pt-1">
+                          <Select
+                            value={cat ? cat : SELECT_NONE}
+                            onValueChange={(v) =>
+                              setCategoryById((prev) => ({
+                                ...prev,
+                                [t.id]: !v || v === SELECT_NONE ? "" : (v as CounterpartyCategory),
+                              }))
+                            }
+                          >
+                            <SelectTrigger className="h-8 w-full max-w-xs text-xs">
+                              <SelectValue placeholder="Pick a category" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={SELECT_NONE} className="text-muted-foreground">
+                                Pick a category…
+                              </SelectItem>
+                              {COUNTERPARTY_CATEGORY_OPTIONS.map((c) => (
+                                <SelectItem key={c} value={c}>
+                                  {c}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
-                      <span className="shrink-0 tabular-nums font-medium">
-                        ₹{amountDisplay}
-                      </span>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 shrink-0"
-                        disabled={busy || !cat}
-                        title="Confirm this row"
-                        onClick={() => void onConfirmRow(t.id)}
-                      >
-                        <Check className="h-4 w-4" />
-                      </Button>
-                    </div>
-
-                    {/* Row 2: meta chips — source, date, direction, narration */}
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-6 text-xs text-muted-foreground">
-                      {sk && (
-                        <Badge variant="secondary" className="font-normal text-[11px] px-1.5 py-0">
-                          {humanizeSourceKey(sk)}
-                        </Badge>
-                      )}
-                      <span className="tabular-nums">{t.txn_date ?? "—"}</span>
-                      <span>{t.direction}</span>
-                      <span className="truncate font-mono text-[10px]" title={t.raw_description}>
-                        {t.raw_description}
-                      </span>
-                    </div>
-
-                    {/* Row 3: category dropdown */}
-                    <div className="mt-2 pl-6">
-                      <Select
-                        value={cat ? cat : SELECT_NONE}
-                        onValueChange={(v) =>
-                          setCategoryById((prev) => ({
-                            ...prev,
-                            [t.id]: !v || v === SELECT_NONE ? "" : (v as CounterpartyCategory),
-                          }))
-                        }
-                      >
-                        <SelectTrigger className="h-8 w-full max-w-xs text-xs">
-                          <SelectValue placeholder="Pick a category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={SELECT_NONE} className="text-muted-foreground">
-                            Pick a category…
-                          </SelectItem>
-                          {COUNTERPARTY_CATEGORY_OPTIONS.map((c) => (
-                            <SelectItem key={c} value={c}>
-                              {c}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
                     </div>
                   </div>
                 );
               })}
+              </div>
             </div>
           </>
         )}
 
-        {/* Pagination */}
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy || page <= 0}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
+        {/* Pagination (bottom) — same controls as the top nav */}
+        {showPagination && (
+          <nav
+            aria-label="Review queue pages (bottom)"
+            className="flex flex-wrap items-center justify-end gap-2 border-t pt-3"
           >
-            <ChevronLeft className="h-4 w-4" />
-            Prev
-          </Button>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {page + 1} / {totalPages}
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy || page >= totalPages - 1}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Next
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => setRefetchNonce((n) => n + 1)}
-          >
-            Reload
-          </Button>
-        </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy || page <= 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Prev
+            </Button>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {page + 1} / {totalPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy || page >= totalPages - 1}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </nav>
+        )}
       </CardContent>
     </Card>
     </>

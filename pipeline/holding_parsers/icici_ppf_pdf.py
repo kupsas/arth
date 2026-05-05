@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pdfplumber
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn, parse_indian_amount
 from pipeline.holding_parsers.icici_ppf import PPF_RATE_ANNUAL_DEFAULT
 from pipeline.models import AssetClass, CompoundingFrequency, InvestmentTxnType, LiquidityClass, ValuationMethod
@@ -204,3 +205,25 @@ def _parsed_transactions_to_ppf_outputs(
         metadata={"source_file": source_label},
     )
     return [holding], txns
+
+
+def detect_icici_ppf_pdf(path: str | Path) -> DetectionResult | None:
+    """Sniff ICICI PPF band inside a combined / annual PDF."""
+    p = Path(path)
+    if p.suffix.lower() != ".pdf" or not p.is_file():
+        return None
+    try:
+        with pdfplumber.open(p) as pdf:
+            if not pdf.pages:
+                return None
+            t0 = pdf.pages[0].extract_text() or ""
+    except Exception:
+        return None
+    if not _pdf_text_has_ppf_table_section(t0):
+        return None
+    return DetectionResult(
+        source_type="icici_ppf_pdf",
+        confidence=0.82,
+        account_hint=None,
+        label=PARSER_LABELS["icici_ppf_pdf"],
+    )

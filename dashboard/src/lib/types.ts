@@ -887,11 +887,46 @@ export interface RemindersStatusResponse {
 // Statement upload (Phase 4.5d)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface UploadResponse {
-  run_id: number;
-  source_key: string;
-  message: string;
+export type StatementUploadOutcome =
+  | "success"
+  | "type_picker"
+  | "account_picker"
+  | "no_match"
+  | "no_source"
+  | "needs_password";
+
+/** One row from POST /api/pipeline/upload for picker UIs */
+export interface StatementUploadOption {
+  source_type?: string | null;
+  source_key?: string | null;
+  label: string;
 }
+
+/** POST /api/pipeline/upload — content-based detection + disambiguation */
+export interface StatementUploadResult {
+  outcome: StatementUploadOutcome;
+  message: string;
+  run_id?: number | null;
+  source_key?: string | null;
+  contact_prompt?: boolean;
+  /** When outcome is needs_password: user entered wrong pdf_password */
+  password_invalid?: boolean;
+  type_options?: StatementUploadOption[] | null;
+  account_options?: StatementUploadOption[] | null;
+}
+
+/** POST /api/pipeline/upload/holdings — portfolio CSV/PDF */
+export interface HoldingUploadResult {
+  outcome: "success" | "type_picker" | "no_match" | "needs_password";
+  message: string;
+  contact_prompt?: boolean;
+  password_invalid?: boolean;
+  import_stats?: Record<string, unknown> | null;
+  type_options?: StatementUploadOption[] | null;
+}
+
+/** @deprecated Use StatementUploadResult */
+export type UploadResponse = StatementUploadResult;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Portfolio / asset layer (Phase F2) — mirrors holdings, investment txns,
@@ -1319,6 +1354,8 @@ export interface OnboardingStateResponse {
   completed_steps: unknown[];
   discovery_results: Record<string, unknown>;
   backfill_progress: Record<string, unknown>;
+  /** idle | running | done | error — background persist-sources after discovery */
+  persist_sources_status: string;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -1337,6 +1374,36 @@ export interface OnboardingPreclassificationSavedResponse {
 export interface OnboardingBackfillSourceRow {
   source_key: string;
   source_type: string;
+}
+
+/** One row inside ``GET /api/onboarding/portfolio-snapshot`` ``top_holdings``. */
+export interface OnboardingPortfolioSnapshotHoldingRow {
+  id: number | null;
+  name: string | null;
+  symbol: string | null;
+  asset_class: string | null;
+  account_platform: string | null;
+  quantity: number | null;
+  current_value: number;
+}
+
+/** GET /api/onboarding/portfolio-snapshot — broker-only holdings rollup for the wizard. */
+export interface OnboardingPortfolioSnapshotResponse {
+  holding_count: number;
+  equity_count: number;
+  mf_count: number;
+  total_value_inr: number;
+  top_holdings: OnboardingPortfolioSnapshotHoldingRow[];
+}
+
+/** POST /api/onboarding/portfolio-derive — link ledger rows + ingest derived holdings. */
+export interface OnboardingPortfolioDeriveResponse {
+  link_stats: Record<string, number | string>;
+  derived_equity_positions: number;
+  derived_mf_positions: number;
+  ingest_inserted: number;
+  ingest_updated: number;
+  snapshots_upserted: number;
 }
 
 /** GET /api/metrics/classification-stats — coarse automation provenance mix. */

@@ -11,22 +11,34 @@
  * *or* you can import it in Settings (Connect account) with the same behaviour.
  */
 
-import * as React from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, CheckCircle2 } from "lucide-react"
+import * as React from "react"
 
 import { UploadButton } from "@/components/dashboard/upload-button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useOnboardingGaps } from "@/hooks/use-onboarding-gaps"
+import { holdingsCoverageKey, useHoldingsCoverage, useOnboardingGaps } from "@/hooks/use-onboarding-gaps"
 import { cn } from "@/lib/utils"
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 
 export function StepGapDetection() {
+  const queryClient = useQueryClient()
   const { data, isLoading, isError, error, refetch } = useOnboardingGaps()
+  const {
+    data: holdingsCov,
+    isLoading: holdingsCovLoading,
+    refetch: refetchHoldingsCov,
+  } = useHoldingsCoverage()
 
   // After the pipeline run finishes, pull fresh gap heuristics from the server.
   const onUploadComplete = React.useCallback(() => {
     void refetch()
-  }, [refetch])
+    void queryClient.invalidateQueries({ queryKey: [...holdingsCoverageKey] })
+    void refetchHoldingsCov()
+  }, [queryClient, refetch, refetchHoldingsCov])
+
+  const showPortfolioFallback =
+    !holdingsCovLoading && holdingsCov && !holdingsCov.has_holding_data
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -42,11 +54,27 @@ export function StepGapDetection() {
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <UploadButton onImportComplete={onUploadComplete} />
+        <UploadButton variant="transactions" onImportComplete={onUploadComplete} />
         <span className="text-xs text-muted-foreground">
-          Same PDF import as elsewhere in the app — your file stays local.
+          Files are analysed automatically — your statement never leaves your browser session until upload.
         </span>
       </div>
+
+      {showPortfolioFallback && (
+        <Card className="border-dashed">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Portfolio statements</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <p>
+              We didn&apos;t find any broker or mutual-fund emails to build your portfolio yet.
+              If you have ICICI Direct / NSE / PPF PDFs or CSVs on disk, upload them here —
+              we&apos;ll detect the format.
+            </p>
+            <UploadButton variant="holdings" onImportComplete={onUploadComplete} />
+          </CardContent>
+        </Card>
+      )}
 
       {isLoading && <p className="text-sm text-muted-foreground">Analysing your ledger…</p>}
 
@@ -107,6 +135,7 @@ export function StepGapDetection() {
                           <div className="flex items-center justify-between gap-2 flex-wrap">
                             <span className="font-medium">{g.period_label}</span>
                             <UploadButton
+                              variant="transactions"
                               className="text-xs"
                               onImportComplete={onUploadComplete}
                             />

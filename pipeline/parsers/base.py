@@ -13,8 +13,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pipeline.models import ParsedTransaction
+
+if TYPE_CHECKING:
+    from pipeline.detection import DetectionResult
 
 
 class BaseParser(ABC):
@@ -40,3 +44,12 @@ class BaseParser(ABC):
         section skipping, multi-line joining) lives here.
         """
         ...
+
+    @classmethod
+    def detect(cls, file_path: str | Path) -> "DetectionResult | None":
+        """Return a :class:`~pipeline.detection.DetectionResult` if *file_path* looks like this format.
+
+        Upload auto-detection calls this before routing to ``parse()``. Default:
+        unknown → skip (``None``).
+        """
+        return None

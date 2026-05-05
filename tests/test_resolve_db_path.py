@@ -25,6 +25,12 @@ def test_app_env_onboarding_test_uses_arth_onboarding_db() -> None:
     ).resolve()
 
 
+def test_app_env_onboarding_uses_arth_onboarding_db() -> None:
+    assert resolve_db_path(REPO_ROOT, "onboarding", None, None) == (
+        REPO_ROOT / "data" / "arth_onboarding.db"
+    ).resolve()
+
+
 def test_arth_db_name_overrides_app_env() -> None:
     # Even with APP_ENV=test, explicit filename wins (placed under data/).
     assert resolve_db_path(REPO_ROOT, "test", "arth_custom.db", None) == (

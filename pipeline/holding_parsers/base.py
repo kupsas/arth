@@ -12,9 +12,12 @@ import re
 from abc import ABC, abstractmethod
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from pipeline.detection import DetectionResult
 
 
 class ParsedHolding(BaseModel):
@@ -94,6 +97,11 @@ class BaseHoldingParser(ABC):
     def parse_path(self, path: str | Path) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
         """Read *path* (file or directory) and return (holdings, investment_txns)."""
         ...
+
+    @classmethod
+    def detect(cls, path: str | Path) -> "DetectionResult | None":
+        """Return detection metadata if *path* looks like this CSV/directory layout."""
+        return None
 
 
 def parse_icici_number(raw: str) -> float:

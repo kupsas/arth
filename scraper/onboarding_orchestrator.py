@@ -12,47 +12,67 @@ Wraps the same parse → classify → DB path as :mod:`scraper.orchestrator`, bu
     does not paginate thousands of alerts and hit HTTP timeouts. After statements, alert
     IDs are filtered with :func:`scraper.gap_detector.filter_onboarding_alert_ids_after_statements`.
 
-  * **HDFC Savings onboarding** intentionally skips the InstaAlert sweep (statements only);
-    see ``ONBOARDING_SKIP_INSTAALERT_SOURCES``.
+  * **HDFC Savings onboarding** can skip InstaAlerts entirely via
+    ``ONBOARDING_SKIP_INSTAALERT_SOURCES`` (empty by default — use for emergency kill-switch).
+
+  * **HDFC Credit Card** (``hdfc_cc_XXXX``): Gmail discovery often maps InstaAlerts to the
+    card ``source_key`` without also persisting ``emailstatements.cards@…`` mappings.  We
+    merge those statement senders in-memory so statement-first queueing still runs.
 """
 
 from __future__ import annotations
 
+import copy
 import datetime
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, not_, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, func, select
 
-from api.models import OnboardingState, Transaction
+from api.models import OnboardingState, Transaction, UserContact
 from pipeline.models import CounterpartyCategory
 
 from api.services.classifier_runtime import effective_onboarding_unknown_threshold
 from api.services.email_import_flow_log import EmailImportFlowLog
+from scraper.config import BANK_SENDERS
 from scraper.config_loader import BankSendersConfig, get_bank_senders_config
 from scraper.email_router import _normalise_sender
 from scraper.email_parsers import build_email_parser_registry
-from scraper.gap_detector import filter_onboarding_alert_ids_after_statements
+from scraper.gap_detector import (
+    compute_alert_backfill_windows,
+    filter_onboarding_alert_ids_after_statements,
+)
 from scraper.gmail_client import GmailClient
 from scraper.orchestrator import _get_processed_ids, _process_email, _record_email
+from scraper.pdf_passwords import StatementPasswordRequired, is_statement_password_failure
 
 logger = logging.getLogger(__name__)
 
 # How many Gmail messages to drain per API call (tune for UX vs request time).
 DEFAULT_CHUNK_SIZE = 10
 
-# When unknown rows (per source_key) reach this count, pause for classification UI.
+# Upper bound for **SSE / single-connection** backfill: drain the active queue in one
+# ``run_onboarding_backfill`` call so the server can emit per-email progress without
+# chunking at HTTP boundaries. The inner loop still processes one message at a time.
+STREAM_DRAIN_CHUNK_SIZE = 1_000_000
+
+# When unknown rows for a source_key **exceed** this count, pause for classification UI.
 UNKNOWN_THRESHOLD = int(os.environ.get("ONBOARDING_UNKNOWN_THRESHOLD", "20"))
 
 # Pipeline ``source_key`` values for which chunk onboarding imports **statement mail only**
-# (no InstaAlert / per-transaction Gmail listing). Keeps the wizard fast; product can re-enable
-# later per source once alert UX is ready.
-ONBOARDING_SKIP_INSTAALERT_SOURCES: frozenset[str] = frozenset({"hdfc_savings"})
+# (no InstaAlert / per-transaction Gmail listing). Empty by default — InstaAlerts use
+# :func:`compute_alert_backfill_windows` for small targeted Gmail searches.
+ONBOARDING_SKIP_INSTAALERT_SOURCES: frozenset[str] = frozenset()
+
+# After a **pre_statement** window yields at least this many alert emails, add another
+# 90-day slice further back (stop when a slice is sparse — user likely had no alerts then).
+ALERT_PRE_STATEMENT_EXPAND_MIN_RESULTS = 5
 
 # Default historical sweep — wide window; callers can override with after/before.
 _DEFAULT_LOOKBACK_YEARS = 15
@@ -127,6 +147,63 @@ def _partition_senders_for_source(
     return stmt, sorted(set(alert))
 
 
+# Onboarding ``source_key`` for a single HDFC card (last 4 in the suffix).
+_HDFC_CC_ONBOARDING_SOURCE_RE = re.compile(r"^hdfc_cc_(\d{4})$")
+
+
+def merge_hdfc_cc_statement_sender_accounts(
+    bank: BankSendersConfig, source_key: str
+) -> BankSendersConfig:
+    """Attach HDFC CC PDF statement senders to this card for queue + parser routing.
+
+    ``sender_emails_for_source_key`` only lists senders that already have a
+    ``ScraperAccountMapping`` row for the ``source_key``.  Users frequently get
+    InstaAlerts mapped to ``hdfc_cc_XXXX`` during discovery but omit the separate
+    ``emailstatements.cards@hdfcbank.{net,bank.in}`` rows — then ``statement_senders=0``,
+    ``defer_alert_listing=False``, and onboarding hits InstaAlerts first (bad for CC:
+    monthly PDFs should seed history before noisy alerts).
+
+    This returns a **deep copy** of ``bank`` with template entries from
+    :data:`~scraper.config.BANK_SENDERS` for ``parser_key == "hdfc_cc_statement"``,
+    merging ``{last4: {account_id, source_key}}`` when missing.
+    """
+    m = _HDFC_CC_ONBOARDING_SOURCE_RE.match((source_key or "").strip())
+    if not m:
+        return bank
+    last4 = m.group(1)
+    account_id = f"HDFC_CC_{last4}"
+    acct_entry = {"account_id": account_id, "source_key": source_key}
+    out: BankSendersConfig = copy.deepcopy(bank)
+    for sender_email, tmpl in BANK_SENDERS.items():
+        if str(tmpl.get("parser_key") or "") != "hdfc_cc_statement":
+            continue
+        norm = _normalise_sender(sender_email)
+        if norm not in out:
+            entry: dict[str, Any] = {
+                k: copy.deepcopy(v) for k, v in tmpl.items() if k != "accounts"
+            }
+            entry["accounts"] = {last4: copy.deepcopy(acct_entry)}
+            out[norm] = entry
+            continue
+        base = out[norm]
+        acc = base.get("accounts")
+        if not isinstance(acc, dict):
+            base["accounts"] = {}
+            acc = base["accounts"]
+        if last4 not in acc:
+            acc[last4] = copy.deepcopy(acct_entry)
+        for meta_key in (
+            "parser_key",
+            "expected_cadence",
+            "display_name",
+            "source_type",
+            "first_run_lookback_days",
+        ):
+            if meta_key in tmpl and not base.get(meta_key):
+                base[meta_key] = copy.deepcopy(tmpl[meta_key])
+    return out
+
+
 # Categories where the LLM is often wrong (P2P merchants, services mis-tagged as people).
 _ONBOARDING_SENSITIVE_LLM_CATEGORIES: tuple[str, ...] = (
     CounterpartyCategory.FRIENDS_FAMILY.value,
@@ -150,13 +227,44 @@ _PRIOR_USER_REVIEWED_SAME_COUNTERPARTY = (
     )
 ).exists()
 
+# Same idea, but when the *next* email uses a different LLM/parsed label than the name the user
+# typed — we still store the prior label on ``UserContact.aliases_json`` at classify time and
+# match those aliases here so the person does not reappear after the next SSE chunk.
+_UserContactConfirmsCntparty = aliased(UserContact)
+_USER_CONTACT_CONFIRMS_COUNTERPARTY = (
+    select(1)
+    .select_from(_UserContactConfirmsCntparty)
+    .where(_UserContactConfirmsCntparty.user_id == Transaction.user_id)
+    .where(col(_UserContactConfirmsCntparty.relationship).in_(["FRIEND", "FAMILY"]))
+    .where(
+        or_(
+            func.lower(func.trim(_UserContactConfirmsCntparty.display_name))
+            == func.lower(func.trim(Transaction.counterparty)),
+            and_(
+                func.length(func.trim(Transaction.counterparty)) >= 3,
+                func.instr(
+                    func.upper(_UserContactConfirmsCntparty.aliases_json),
+                    func.upper(func.trim(Transaction.counterparty)),
+                )
+                > 0,
+            ),
+        )
+    )
+).exists()
+
+_HUMAN_CONFIRMED_SENSITIVE_COUNTERPARTY = or_(
+    _PRIOR_USER_REVIEWED_SAME_COUNTERPARTY,
+    _USER_CONTACT_CONFIRMS_COUNTERPARTY,
+)
+
 # Shared predicate: rows the onboarding classification queue shows for review.
 #
 # 1. **Automation gap** — missing counterparty or counterparty_category (rules + LLM did not finish).
 # 2. **LLM high-risk labels** — both fields set, ``classification_source == LLM``, and category is
 #    Friends & Family, Gifts & Personal Transfers, or Miscellaneous (needs human check), **unless**
-#    another row for this user is already ``USER_REVIEWED`` with the same counterparty (trimmed,
-#    case-insensitive). Rule-based rows with those categories are *not* re-queued.
+#    the counterparty is already “confirmed”: another ``USER_REVIEWED`` row with the same label,
+#    or a ``UserContact`` (friend/family) whose display name or alias matches (aliases absorb the
+#    pre-rename LLM string from classify). Rule-based rows with those categories are *not* re-queued.
 #
 # ``USER_REVIEWED`` rows are always excluded.
 _CLASSIFICATION_UNKNOWN_PREDICATE = and_(
@@ -172,7 +280,7 @@ _CLASSIFICATION_UNKNOWN_PREDICATE = and_(
             col(Transaction.counterparty).is_not(None),
             col(Transaction.counterparty_category).is_not(None),
             col(Transaction.counterparty_category).in_(_ONBOARDING_SENSITIVE_LLM_CATEGORIES),
-            ~_PRIOR_USER_REVIEWED_SAME_COUNTERPARTY,
+            not_(_HUMAN_CONFIRMED_SENSITIVE_COUNTERPARTY),
         ),
     ),
 )
@@ -289,6 +397,29 @@ class CollectedQueue:
         return len(self.statement_ids) + len(self.alert_items_full)
 
 
+def _gmail_queries_for_sender_date_window(
+    bank: BankSendersConfig,
+    raw_sender: str,
+    after_s: str,
+    before_s: str,
+) -> list[str]:
+    """Return Gmail query strings for one sender (subject-filtered or broad ``from:`` only).
+
+    When ``gmail_subject_filter_keywords`` is set on the sender row (see
+    :data:`scraper.config.BANK_SENDERS`), emit one query per keyword so noisy
+    mailboxes (e.g. ICICI Securities ``service@…``) do not match thousands of
+    portfolio/KYC emails during onboarding listing.
+    """
+    sender_cfg = bank.get(_normalise_sender(raw_sender)) or {}
+    kws = sender_cfg.get("gmail_subject_filter_keywords") or []
+    if not kws:
+        return [f"from:{raw_sender} after:{after_s} before:{before_s}"]
+    return [
+        f'from:{raw_sender} subject:"{kw}" after:{after_s} before:{before_s}'
+        for kw in kws
+    ]
+
+
 def _gather_alert_message_items(
     client: GmailClient,
     bank: BankSendersConfig,
@@ -324,21 +455,21 @@ def _gather_alert_message_items(
         )
 
     for raw_sender in alert_senders:
-        query = f"from:{raw_sender} after:{after_s} before:{before_s}"
-        batch = client.search_messages(
-            query,
-            paginate=True,
-            max_results_per_page=100,
-            max_total=None,
-        )
-        if import_flow_log:
-            import_flow_log.write(
-                "gmail_search_done",
-                f"phase={'alert'!r} sender={raw_sender!r} messages_in_date_range={len(batch)} "
-                f"query={query!r}",
+        for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
+            batch = client.search_messages(
+                query,
+                paginate=True,
+                max_results_per_page=100,
+                max_total=None,
             )
-        for m in batch:
-            alert_msgs[m.id] = m
+            if import_flow_log:
+                import_flow_log.write(
+                    "gmail_search_done",
+                    f"phase={'alert'!r} sender={raw_sender!r} messages_in_date_range={len(batch)} "
+                    f"query={query!r}",
+                )
+            for m in batch:
+                alert_msgs[m.id] = m
 
     alert_pending = sorted(alert_msgs.values(), key=lambda m: m.received_at)
     return [
@@ -399,25 +530,7 @@ def _collect_pending_queue(
         )
 
     for raw_sender in stmt_senders:
-        query = f"from:{raw_sender} after:{after_s} before:{before_s}"
-        batch = client.search_messages(
-            query,
-            paginate=True,
-            max_results_per_page=100,
-            max_total=None,
-        )
-        if import_flow_log:
-            import_flow_log.write(
-                "gmail_search_done",
-                f"phase='statement' sender={raw_sender!r} messages_in_date_range={len(batch)} "
-                f"query={query!r}",
-            )
-        for m in batch:
-            stmt_msgs[m.id] = m
-
-    if not defer_alerts:
-        for raw_sender in alert_senders:
-            query = f"from:{raw_sender} after:{after_s} before:{before_s}"
+        for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
             batch = client.search_messages(
                 query,
                 paginate=True,
@@ -427,11 +540,29 @@ def _collect_pending_queue(
             if import_flow_log:
                 import_flow_log.write(
                     "gmail_search_done",
-                    f"phase='alert' sender={raw_sender!r} messages_in_date_range={len(batch)} "
+                    f"phase='statement' sender={raw_sender!r} messages_in_date_range={len(batch)} "
                     f"query={query!r}",
                 )
             for m in batch:
-                alert_msgs[m.id] = m
+                stmt_msgs[m.id] = m
+
+    if not defer_alerts:
+        for raw_sender in alert_senders:
+            for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
+                batch = client.search_messages(
+                    query,
+                    paginate=True,
+                    max_results_per_page=100,
+                    max_total=None,
+                )
+                if import_flow_log:
+                    import_flow_log.write(
+                        "gmail_search_done",
+                        f"phase='alert' sender={raw_sender!r} messages_in_date_range={len(batch)} "
+                        f"query={query!r}",
+                    )
+                for m in batch:
+                    alert_msgs[m.id] = m
 
     stmt_pending = sorted(stmt_msgs.values(), key=lambda m: m.received_at)
     alert_pending = sorted(alert_msgs.values(), key=lambda m: m.received_at)
@@ -506,6 +637,237 @@ def _load_backfill_progress_from_db(
     return dict(all_bf.get(source_key) or {})
 
 
+def _gather_alert_items_for_date_window(
+    client: GmailClient,
+    bank: BankSendersConfig,
+    source_key: str,
+    *,
+    after: datetime.date,
+    before_exclusive: datetime.date,
+    session: Session,
+    exclude_message_ids: set[str],
+    import_flow_log: EmailImportFlowLog | None = None,
+) -> list[dict[str, str]]:
+    """InstaAlert Gmail search restricted to ``[after, before_exclusive)`` (narrow windows).
+
+    Same behaviour as :func:`_gather_alert_message_items` but accepts an explicit slice
+    so onboarding never lists an unbounded multi-year alert queue in one HTTP request.
+    """
+    return _gather_alert_message_items(
+        client,
+        bank,
+        source_key,
+        after=after,
+        before=before_exclusive,
+        session=session,
+        exclude_message_ids=exclude_message_ids,
+        import_flow_log=import_flow_log,
+    )
+
+
+def _filter_alert_items_for_window_kind(
+    session: Session,
+    user_id: str,
+    source_key: str,
+    bank: BankSendersConfig,
+    alert_items: list[dict[str, str]],
+    *,
+    window_kind: str,
+    had_statement_ids_at_init: bool,
+) -> list[str]:
+    """Turn Gmail rows into pending message ids for this window ``kind``."""
+    if window_kind in ("pre_statement", "coverage_uncertain"):
+        def _sk(row: dict[str, str]) -> tuple[int, str]:
+            raw = row.get("received_at") or ""
+            try:
+                d = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return (int(d.timestamp()), row.get("id") or "")
+            except ValueError:
+                return (0, row.get("id") or "")
+
+        ordered = sorted(alert_items, key=_sk)
+        return [str(r["id"]) for r in ordered if r.get("id")]
+    return filter_onboarding_alert_ids_after_statements(
+        session,
+        user_id,
+        source_key,
+        bank,
+        alert_items,
+        had_statement_ids_at_init=had_statement_ids_at_init,
+    )
+
+
+def _try_extend_pre_statement_windows(
+    src_state: dict[str, Any],
+    *,
+    global_after: datetime.date,
+    global_before_exclusive: datetime.date,
+) -> bool:
+    """Append another pre-statement slice after a dense older slice; returns True if appended."""
+    kind = str(src_state.get("_last_drained_window_kind") or "")
+    cnt = int(src_state.get("_last_drained_window_loaded_count") or 0)
+    if kind != "pre_statement" or cnt < ALERT_PRE_STATEMENT_EXPAND_MIN_RESULTS:
+        return False
+    windows: list[dict[str, Any]] = list(src_state.get("_alert_windows") or [])
+    if not windows:
+        return False
+    last = windows[-1]
+    if str(last.get("kind") or "") != "pre_statement":
+        return False
+    try:
+        prev_start = datetime.date.fromisoformat(str(last["after"])[:10])
+    except ValueError:
+        return False
+    new_before_ex = prev_start
+    new_start = prev_start - datetime.timedelta(days=90)
+    new_start = max(new_start, global_after)
+    if new_start >= new_before_ex or new_before_ex > global_before_exclusive:
+        return False
+    windows.append(
+        {
+            "after": new_start.isoformat(),
+            "before": new_before_ex.isoformat(),
+            "kind": "pre_statement",
+            "label": f"Backfill before statements: {new_start.isoformat()} .. {new_before_ex.isoformat()}",
+        }
+    )
+    src_state["_alert_windows"] = windows
+    return True
+
+
+def _ensure_alert_queue_ready_windowed(
+    session: Session,
+    user_id: str,
+    source_key: str,
+    bank: BankSendersConfig,
+    src_state: dict[str, Any],
+    *,
+    gmail_client: GmailClient,
+    after: datetime.date,
+    before: datetime.date,
+    import_flow_log: EmailImportFlowLog | None = None,
+    progress_commit_hook: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    """Fill ``_pending_alert_ids`` using :func:`compute_alert_backfill_windows` slices."""
+    if src_state.get("_pending_alert_ids") and src_state.get("_use_alert_windows"):
+        return
+
+    if not src_state.get("_alerts_transitioned"):
+        windows = compute_alert_backfill_windows(
+            session,
+            user_id,
+            source_key,
+            bank,
+            gmail_after_inclusive=after,
+            gmail_before_exclusive=before,
+            had_statement_ids_at_init=bool(src_state.get("_had_statement_ids_at_init")),
+        )
+        src_state["_use_alert_windows"] = True
+        src_state["_alert_windows"] = windows
+        src_state["_alert_next_window_idx"] = 0
+        src_state["_alert_emails_planned_total"] = 0
+        src_state["windows_total"] = len(windows)
+        src_state["windows_completed"] = int(src_state.get("windows_completed") or 0)
+        src_state["_defer_alert_fetch"] = False
+        if progress_commit_hook is not None:
+            src_state["status"] = "processing_alerts"
+            src_state["current_phase"] = "listing_alerts"
+            progress_commit_hook(dict(src_state))
+
+    exclude_ids = set(src_state.get("_statement_id_set_at_init") or [])
+    stmt_planned = int(src_state.get("_statement_total_at_init") or 0)
+    had_stmt = bool(src_state.get("_had_statement_ids_at_init"))
+
+    while True:
+        windows = list(src_state.get("_alert_windows") or [])
+        nxt = int(src_state.get("_alert_next_window_idx") or 0)
+        if nxt >= len(windows):
+            if _try_extend_pre_statement_windows(
+                src_state, global_after=after, global_before_exclusive=before
+            ):
+                windows = list(src_state.get("_alert_windows") or [])
+                src_state["windows_total"] = len(windows)
+                continue
+            break
+
+        w = windows[nxt]
+        try:
+            wa = datetime.date.fromisoformat(str(w["after"])[:10])
+            wb = datetime.date.fromisoformat(str(w["before"])[:10])
+        except ValueError:
+            nxt += 1
+            src_state["_alert_next_window_idx"] = nxt
+            continue
+
+        kind = str(w.get("kind") or "gap")
+        if import_flow_log:
+            import_flow_log.write(
+                "gmail_alert_window_search",
+                f"source_key={source_key} window_idx={nxt}/{len(windows)} kind={kind!r} "
+                f"after={wa.isoformat()} before={wb.isoformat()}",
+            )
+
+        items = _gather_alert_items_for_date_window(
+            gmail_client,
+            bank,
+            source_key,
+            after=wa,
+            before_exclusive=wb,
+            session=session,
+            exclude_message_ids=exclude_ids,
+            import_flow_log=import_flow_log,
+        )
+        ids = _filter_alert_items_for_window_kind(
+            session,
+            user_id,
+            source_key,
+            bank,
+            items,
+            window_kind=kind,
+            had_statement_ids_at_init=had_stmt,
+        )
+        if ids:
+            src_state["_pending_alert_ids"] = ids
+            src_state["_alert_loaded_window_idx"] = nxt
+            src_state["_alert_loaded_window_size"] = len(ids)
+            planned = int(src_state.get("_alert_emails_planned_total") or 0) + len(ids)
+            src_state["_alert_emails_planned_total"] = planned
+            src_state["emails_found"] = stmt_planned + planned
+            src_state["_initial_pending_total"] = src_state["emails_found"]
+            src_state["current_window_label"] = str(w.get("label") or "")
+            if import_flow_log:
+                import_flow_log.write(
+                    "gmail_alert_window_loaded",
+                    f"window_idx={nxt} pending_ids={len(ids)} kind={kind!r}",
+                )
+            src_state["_alert_next_window_idx"] = nxt + 1
+            break
+
+        nxt += 1
+        src_state["_alert_next_window_idx"] = nxt
+        if import_flow_log:
+            import_flow_log.write(
+                "gmail_alert_window_empty",
+                f"window_idx={nxt - 1} advanced to {nxt}",
+            )
+
+    if not src_state.get("_pending_alert_ids"):
+        src_state["current_window_label"] = None
+        planned = int(src_state.get("_alert_emails_planned_total") or 0)
+        stmt_planned = int(src_state.get("_statement_total_at_init") or 0)
+        src_state["emails_found"] = stmt_planned + planned
+        src_state["_initial_pending_total"] = src_state["emails_found"]
+
+    src_state["_alerts_transitioned"] = True
+    if import_flow_log:
+        import_flow_log.write(
+            "gmail_alert_queue_after_gaps",
+            f"windowed=True pending={len(src_state.get('_pending_alert_ids') or [])} "
+            f"next_window_idx={int(src_state.get('_alert_next_window_idx') or 0)} "
+            f"windows={len(src_state.get('_alert_windows') or [])}",
+        )
+
+
 def _ensure_alert_queue_ready(
     session: Session,
     user_id: str,
@@ -519,16 +881,50 @@ def _ensure_alert_queue_ready(
     import_flow_log: EmailImportFlowLog | None = None,
     progress_commit_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
-    if src_state.get("_alerts_transitioned"):
-        return
-    # Wipe any deferred InstaAlert payload for sources we import as statements-only, so a
-    # half-finished JSON blob from an older build cannot resurrect a giant alert search.
+    """Build or extend the InstaAlert slice of the onboarding queue (statement-first)."""
     if source_key in ONBOARDING_SKIP_INSTAALERT_SOURCES:
         src_state["_alert_items_full"] = []
         src_state["_defer_alert_fetch"] = False
+        src_state["_use_alert_windows"] = False
+        src_state["_pending_alert_ids"] = []
+        src_state["_alerts_transitioned"] = True
+        stmt_planned = int(src_state.get("_statement_total_at_init") or 0)
+        src_state["emails_found"] = stmt_planned
+        src_state["_initial_pending_total"] = stmt_planned
+        return
+
+    defer = bool(src_state.get("_defer_alert_fetch"))
+    had = bool(src_state.get("_had_statement_ids_at_init"))
+    can_window = (
+        had
+        and gmail_client is not None
+        and after is not None
+        and before is not None
+    )
+    # Statement-first deferral *or* an in-progress windowed run (``_defer_alert_fetch`` is
+    # cleared after the first window plan is built — keep routing on ``_use_alert_windows``).
+    if can_window and (defer or src_state.get("_use_alert_windows")):
+        assert gmail_client is not None and after is not None and before is not None
+        _ensure_alert_queue_ready_windowed(
+            session,
+            user_id,
+            source_key,
+            bank,
+            src_state,
+            gmail_client=gmail_client,
+            after=after,
+            before=before,
+            import_flow_log=import_flow_log,
+            progress_commit_hook=progress_commit_hook,
+        )
+        return
+
+    if src_state.get("_alerts_transitioned"):
+        return
+
     full = list(src_state.get("_alert_items_full") or [])
 
-    if src_state.get("_defer_alert_fetch") and not full:
+    if defer and not full:
         if gmail_client is None or after is None or before is None:
             logger.warning(
                 "Deferred InstaAlert listing missing gmail_client or date window — "
@@ -537,20 +933,8 @@ def _ensure_alert_queue_ready(
             )
             full = []
             src_state["_defer_alert_fetch"] = False
-        elif source_key in ONBOARDING_SKIP_INSTAALERT_SOURCES:
-            full = []
-            src_state["_alert_items_full"] = full
-            src_state["_defer_alert_fetch"] = False
-            if import_flow_log:
-                import_flow_log.write(
-                    "gmail_alert_search_skipped",
-                    f"source_key={source_key} reason=onboarding_inst_alert_disabled",
-                )
         else:
             exclude_ids = set(src_state.get("_statement_id_set_at_init") or [])
-            # InstaAlert listing can paginate for a long time. When the API passes
-            # ``progress_commit_hook``, flush a snapshot first so GET /progress does not
-            # look "stuck" on the last statement counts while Gmail search runs.
             if progress_commit_hook is not None:
                 src_state["status"] = "processing_alerts"
                 src_state["current_phase"] = "listing_alerts"
@@ -568,14 +952,14 @@ def _ensure_alert_queue_ready(
             src_state["_alert_items_full"] = full
             src_state["_defer_alert_fetch"] = False
 
-    had = bool(src_state.get("_had_statement_ids_at_init"))
+    had_stmt = bool(src_state.get("_had_statement_ids_at_init"))
     filtered_ids = filter_onboarding_alert_ids_after_statements(
         session,
         user_id,
         source_key,
         bank,
         full,
-        had_statement_ids_at_init=had,
+        had_statement_ids_at_init=had_stmt,
     )
     src_state["_pending_alert_ids"] = filtered_ids
     src_state["_alerts_transitioned"] = True
@@ -587,7 +971,7 @@ def _ensure_alert_queue_ready(
     if import_flow_log:
         import_flow_log.write(
             "gmail_alert_queue_after_gaps",
-            f"alert_ids_after_gap_filter={len(filtered_ids)} (had_statement_phase={had})",
+            f"alert_ids_after_gap_filter={len(filtered_ids)} (had_statement_phase={had_stmt})",
         )
 
 
@@ -622,13 +1006,21 @@ def run_onboarding_backfill(
     after: datetime.date | None = None,
     before: datetime.date | None = None,
     resume_after_classification: bool = False,
+    resume_after_password: bool = False,
     resume_from_pause: bool = False,
     unknown_threshold: int | None = None,
     progress_callback: ProgressCallback | None = None,
+    emit_event: ProgressCallback | None = None,
     import_flow_log: EmailImportFlowLog | None = None,
     progress_commit_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> OnboardingBackfillResult:
     """Advance onboarding backfill by **one chunk** (up to ``chunk_size`` emails).
+
+    Classification pause: ``unknown_threshold`` is checked **before each Gmail message**
+    and **after each successfully recorded message**, so a large ``chunk_size`` (including
+    SSE drain mode) cannot skip far past the threshold before ``needs_classification``.
+    Pause triggers when unknown rows for this source are **strictly greater than** the
+    threshold (e.g. default 20 → import continues through 20 pending, pauses at 21+).
 
     Args:
         session: Active SQLModel session (caller commits after persisting state).
@@ -642,10 +1034,15 @@ def run_onboarding_backfill(
         resume_after_classification: When current status is ``needs_classification``,
             pass True to continue processing remaining queued IDs after the user
             fixed merchant rules (Phase 3 will set this from the classify endpoint).
+        resume_after_password: When status is ``needs_password``, pass True after the user
+            saved PAN/DOB/account ingredients (or full env-style passwords) so the same
+            Gmail message can be retried.
         resume_from_pause: When status is ``paused``, pass True to clear the pause
             flag and continue chunk processing on the next call.
         unknown_threshold: Override env ``ONBOARDING_UNKNOWN_THRESHOLD``.
         progress_callback: Optional hook invoked after each email (tests / logging).
+        emit_event: Same shape as ``progress_callback``; used by the SSE stream endpoint to
+            push per-email JSON to the client (in addition to ``progress_callback`` when both set).
         import_flow_log: When provided (onboarding HTTP handler), append diagnostics to
             ``data/logs/email-import.log``.
         progress_commit_hook: Optional callback invoked with a shallow copy of ``src_state``
@@ -660,6 +1057,7 @@ def run_onboarding_backfill(
     else:
         thresh = effective_onboarding_unknown_threshold(session, user_id)
     bank = get_bank_senders_config(session, user_id)
+    bank = merge_hdfc_cc_statement_sender_accounts(bank, source_key)
     parser_registry = build_email_parser_registry(bank)
 
     after_date = after
@@ -707,7 +1105,7 @@ def run_onboarding_backfill(
     if import_flow_log:
         import_flow_log.write(
             "backfill_step",
-            f"incoming_status={status!r} chunk_size={chunk_size} resume_after_classification={resume_after_classification} resume_from_pause={resume_from_pause}",
+            f"incoming_status={status!r} chunk_size={chunk_size} resume_after_classification={resume_after_classification} resume_after_password={resume_after_password} resume_from_pause={resume_from_pause}",
         )
 
     if status == "paused" and resume_from_pause:
@@ -743,24 +1141,82 @@ def run_onboarding_backfill(
         return OnboardingBackfillResult(progress=merged)
 
     if status == "needs_classification" and not resume_after_classification:
-        unknowns = int(src_state.get("unknowns_pending") or 0)
+        fresh_src = count_classification_unknowns(
+            session, user_id=user_id, source_key=source_key
+        )
+        total_backlog = count_all_classification_unknowns(session, user_id=user_id)
         if import_flow_log:
             import_flow_log.write(
                 "backfill_exit",
-                f"waiting for classification UI unknowns_pending={unknowns} (pass resume_after_classification to continue)",
+                f"waiting for classification UI unknowns_pending={fresh_src} "
+                f"global_unknowns={total_backlog} (resume only after entire queue is cleared)",
             )
         return OnboardingBackfillResult(
             progress={
                 **src_state,
                 "source": source_key,
                 "status": "needs_classification",
-                "unknowns_pending": unknowns,
+                "unknowns_pending": fresh_src,
                 "error_message": src_state.get("error_message"),
-                "message": "Pass resume_after_classification=true after resolving unknowns.",
+                "message": "Pass resume_after_classification=true after every pending row is reviewed.",
             }
         )
 
-    # Transition out of classification gate.
+    if status == "needs_password" and not resume_after_password:
+        if import_flow_log:
+            import_flow_log.write(
+                "backfill_exit",
+                "waiting for PDF password ingredients (pass resume_after_password after saving secrets)",
+            )
+        return OnboardingBackfillResult(
+            progress={
+                **src_state,
+                "source": source_key,
+                "status": "needs_password",
+                "unknowns_pending": count_classification_unknowns(
+                    session, user_id=user_id, source_key=source_key
+                ),
+                "error_message": src_state.get("error_message"),
+                "message": "Save PAN/DOB/account fragments or env passwords, then pass resume_after_password=true.",
+            }
+        )
+
+    # Transition out of PDF-password gate (retry same Gmail IDs).
+    if status == "needs_password" and resume_after_password:
+        src_state.pop("password_failure_message_id", None)
+        src_state.pop("password_parser_key", None)
+        src_state["error_message"] = None
+        active_qp, pub_qp = _active_drain_queue(src_state)
+        if active_qp:
+            src_state["status"] = pub_qp
+            src_state["current_phase"] = "statements" if pub_qp == "processing_statements" else "alerts"
+        status = str(src_state.get("status") or "processing")
+
+    # Client may pass resume early; only honour it when the **combined** review queue is empty.
+    if status == "needs_classification" and resume_after_classification:
+        total_backlog = count_all_classification_unknowns(session, user_id=user_id)
+        if total_backlog > 0:
+            fresh_src = count_classification_unknowns(
+                session, user_id=user_id, source_key=source_key
+            )
+            if import_flow_log:
+                import_flow_log.write(
+                    "backfill_exit",
+                    "resume_after_classification ignored — "
+                    f"global_unknowns={total_backlog} (clear all accounts' pending rows first)",
+                )
+            return OnboardingBackfillResult(
+                progress={
+                    **src_state,
+                    "source": source_key,
+                    "status": "needs_classification",
+                    "unknowns_pending": fresh_src,
+                    "error_message": src_state.get("error_message"),
+                    "message": "Clear every pending classification row before resuming import.",
+                }
+            )
+
+    # Transition out of classification gate (global unknown count is zero).
     if status == "needs_classification" and resume_after_classification:
         src_state["status"] = "processing_statements"
         stmt0 = list(src_state.get("_pending_statement_ids") or [])
@@ -891,6 +1347,17 @@ def run_onboarding_backfill(
             "_defer_alert_fetch",
             "_statement_total_at_init",
             "_statement_id_set_at_init",
+            "_use_alert_windows",
+            "_alert_windows",
+            "_alert_next_window_idx",
+            "_alert_loaded_window_idx",
+            "_alert_loaded_window_size",
+            "_alert_emails_planned_total",
+            "_last_drained_window_kind",
+            "_last_drained_window_loaded_count",
+            "current_window_label",
+            "windows_total",
+            "windows_completed",
         ):
             src_state.pop(k, None)
         if import_flow_log:
@@ -912,11 +1379,90 @@ def run_onboarding_backfill(
 
     already_done = _get_processed_ids(session)
 
-    for msg_id in chunk:
+    _CLASSIFICATION_GATE_KEYS: tuple[str, ...] = (
+        "_pending_statement_ids",
+        "_pending_alert_ids",
+        "_alert_items_full",
+        "_alerts_transitioned",
+        "_had_statement_ids_at_init",
+        "_defer_alert_fetch",
+        "_statement_total_at_init",
+        "_statement_id_set_at_init",
+        "_use_alert_windows",
+        "_alert_windows",
+        "_alert_next_window_idx",
+        "_alert_loaded_window_idx",
+        "_alert_loaded_window_size",
+        "_alert_emails_planned_total",
+        "_last_drained_window_kind",
+        "_last_drained_window_loaded_count",
+        "current_window_label",
+        "windows_total",
+        "windows_completed",
+    )
+
+    def _pause_if_classification_budget_exceeded(remainder_start_idx: int) -> OnboardingBackfillResult | None:
+        """Return a gate result when unknowns **exceed** ``thresh`` (strictly greater).
+
+        ``remainder_start_idx`` indexes into ``chunk``: IDs from that index onward are left on
+        the pending queue (not yet processed this step). Use ``i`` before fetching ``chunk[i]``,
+        and ``i + 1`` after successfully recording ``chunk[i]``.
+        """
+        unknowns_now = count_classification_unknowns(session, user_id=user_id, source_key=source_key)
+        if unknowns_now <= thresh:
+            return None
+        remainder_ids = list(chunk[remainder_start_idx:]) + list(rest)
+        if pub_status == "processing_statements":
+            src_state["_pending_statement_ids"] = remainder_ids
+        else:
+            src_state["_pending_alert_ids"] = remainder_ids
+        stmt_rest = list(src_state.get("_pending_statement_ids") or [])
+        alert_rest = list(src_state.get("_pending_alert_ids") or [])
+        src_state["emails_processed"] = emails_done
+        src_state["transactions_parsed"] = tx_total
+        if src_state.get("_alerts_transitioned"):
+            pass
+        else:
+            src_state["emails_found"] = initial_total
+        src_state["unknowns_pending"] = unknowns_now
+        src_state["status"] = "needs_classification"
+        src_state["source"] = source_key
+        src_state["error_message"] = None
+        if not stmt_rest and not alert_rest:
+            for k in _CLASSIFICATION_GATE_KEYS:
+                src_state.pop(k, None)
+        if import_flow_log:
+            import_flow_log.write(
+                "classification_pause",
+                f"unknowns={unknowns_now} threshold={thresh} remainder_start_idx={remainder_start_idx} "
+                f"stmt_remaining={len(stmt_rest)} alert_remaining={len(alert_rest)}",
+            )
+        return OnboardingBackfillResult(progress=src_state)
+
+    for i, msg_id in enumerate(chunk):
         if msg_id in already_done:
             logger.debug("Skipping already-processed email %s during backfill chunk", msg_id)
             emails_done += 1
+            slice_skip = _public_slice(
+                {
+                    **src_state,
+                    "source": source_key,
+                    "status": pub_status,
+                    "emails_found": initial_total,
+                    "emails_processed": emails_done,
+                    "transactions_parsed": tx_total,
+                    "current_phase": src_state.get("current_phase"),
+                }
+            )
+            if progress_callback:
+                progress_callback(slice_skip)
+            if emit_event:
+                emit_event(slice_skip)
             continue
+
+        gate = _pause_if_classification_budget_exceeded(i)
+        if gate is not None:
+            return gate
 
         try:
             if import_flow_log:
@@ -958,8 +1504,55 @@ def run_onboarding_backfill(
             )
             if progress_callback:
                 progress_callback(slice_pub)
+            if emit_event:
+                emit_event(slice_pub)
+
+            gate_after = _pause_if_classification_budget_exceeded(i + 1)
+            if gate_after is not None:
+                return gate_after
 
         except Exception as exc:
+            if is_statement_password_failure(exc):
+                session.rollback()
+                remainder_chunk = chunk[i + 1 :]
+                rebuilt = [msg_id] + remainder_chunk + list(rest)
+                if pub_status == "processing_statements":
+                    src_state["_pending_statement_ids"] = rebuilt
+                else:
+                    src_state["_pending_alert_ids"] = rebuilt
+                p_key = getattr(exc, "parser_key", None)
+                if not p_key and isinstance(exc, StatementPasswordRequired):
+                    p_key = exc.parser_key
+                err_txt = str(exc).strip() or "PDF password missing or incorrect."
+                # TODO: Product gap — when every derived/env candidate fails, we only surface
+                # ``StepPasswordIngredients`` (PAN/DOB/customer ID). Normal users cannot set a
+                # literal PDF password without editing .env or DB. Add UI + API to store
+                # per-bank override strings in ``UserSecrets`` (mirroring ICICI_STATEMENT_* /
+                # HDFC_* env keys) and show that form here, keyed by ``password_parser_key``.
+                src_state.update(
+                    {
+                        "source": source_key,
+                        "status": "needs_password",
+                        "emails_found": initial_total,
+                        "emails_processed": emails_done,
+                        "transactions_parsed": tx_total,
+                        "unknowns_pending": count_classification_unknowns(
+                            session, user_id=user_id, source_key=source_key
+                        ),
+                        "password_failure_message_id": msg_id,
+                        "password_parser_key": p_key,
+                        "error_message": err_txt,
+                        "current_phase": src_state.get("current_phase"),
+                        "message": "Save credentials and POST with resume_after_password=true.",
+                    }
+                )
+                if import_flow_log:
+                    import_flow_log.write(
+                        "needs_password",
+                        f"message_id={msg_id} parser_key={p_key!r} detail={err_txt!r}",
+                    )
+                return OnboardingBackfillResult(progress=src_state)
+
             logger.exception("Onboarding backfill failed on message %s", msg_id)
             # The failed operation may have left the SQLAlchemy session in a
             # dirty state (e.g. IntegrityError → PendingRollbackError).  We
@@ -1003,6 +1596,21 @@ def run_onboarding_backfill(
     if pub_status == "processing_statements":
         src_state["_pending_statement_ids"] = rest
     else:
+        # Windowed InstaAlert import: record completed slice so we can expand pre-statement.
+        if (
+            pub_status == "processing_alerts"
+            and src_state.get("_use_alert_windows")
+            and not rest
+        ):
+            lw = int(src_state.get("_alert_loaded_window_idx") or -1)
+            wins = list(src_state.get("_alert_windows") or [])
+            if lw >= 0 and lw < len(wins):
+                src_state["_last_drained_window_kind"] = str(wins[lw].get("kind") or "")
+                src_state["_last_drained_window_loaded_count"] = int(
+                    src_state.get("_alert_loaded_window_size") or 0
+                )
+                wc = int(src_state.get("windows_completed") or 0) + 1
+                src_state["windows_completed"] = wc
         src_state["_pending_alert_ids"] = rest
 
     stmt_rest = list(src_state.get("_pending_statement_ids") or [])
@@ -1020,33 +1628,15 @@ def run_onboarding_backfill(
     unknowns = count_classification_unknowns(session, user_id=user_id, source_key=source_key)
     src_state["unknowns_pending"] = unknowns
 
-    if unknowns >= thresh:
+    if unknowns > thresh:
         src_state["status"] = "needs_classification"
         if not stmt_rest and not alert_rest:
-            for k in (
-                "_pending_statement_ids",
-                "_pending_alert_ids",
-                "_alert_items_full",
-                "_alerts_transitioned",
-                "_had_statement_ids_at_init",
-                "_defer_alert_fetch",
-                "_statement_total_at_init",
-                "_statement_id_set_at_init",
-            ):
+            for k in _CLASSIFICATION_GATE_KEYS:
                 src_state.pop(k, None)
     elif not stmt_rest and not alert_rest:
         src_state["status"] = "complete"
         src_state["current_phase"] = None
-        for k in (
-            "_pending_statement_ids",
-            "_pending_alert_ids",
-            "_alert_items_full",
-            "_alerts_transitioned",
-            "_had_statement_ids_at_init",
-            "_defer_alert_fetch",
-            "_statement_total_at_init",
-            "_statement_id_set_at_init",
-        ):
+        for k in _CLASSIFICATION_GATE_KEYS:
             src_state.pop(k, None)
     else:
         _next_ids, pub2 = _active_drain_queue(src_state)

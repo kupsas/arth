@@ -14,16 +14,18 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import ClassVar
 
+import pikepdf
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 
-from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn
 from pipeline.holding_parsers.icici_direct_contract_note import parse_icici_direct_trade_pdf
 from pipeline.models import ParsedTransaction
-from scraper.email_parsers.base_statement import BaseStatementEmailParser
-from scraper.pdf_passwords import NSE_TRADES_EXECUTED_PASSWORD_KEYS, resolve_pdf_password_chain
-from scraper.pdf_utils import decrypt_pdf
+from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
+from scraper.pdf_passwords import (
+    StatementPasswordRequired,
+    resolve_nse_pdf_password_candidates,
+)
+from scraper.pdf_utils import decrypt_pdf_with_password_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -39,33 +41,15 @@ def classify_icici_direct_subject(subject: str) -> str | None:
     return None
 
 
-def _nse_trades_pdf_password() -> tuple[str, str]:
-    """Password for NSE-originated trade PDFs and primary env key for error messages."""
-    p = resolve_pdf_password_chain(*NSE_TRADES_EXECUTED_PASSWORD_KEYS)
-    return (p, NSE_TRADES_EXECUTED_PASSWORD_KEYS[0])
+def _nse_trades_pdf_password_candidates() -> list[str]:
+    return resolve_nse_pdf_password_candidates()
 
 
-class ICICIDirectTradeEmailParser(BaseStatementEmailParser):
+class ICICIDirectTradeEmailParser(BaseBrokerStatementParser):
     """Decrypt the NSE trades PDF and emit investment rows (no bank ledger rows)."""
-
-    parse_type: ClassVar[str] = "attachment"
-
-    def __init__(self, accounts: dict[str, dict]) -> None:
-        super().__init__(accounts)
-        self._attachment_holdings: list[ParsedHolding] = []
-        self._attachment_inv_txns: list[ParsedInvestmentTxn] = []
 
     def can_parse(self, sender: str, subject: str) -> bool:
         return classify_icici_direct_subject(subject) is not None
-
-    def attachment_investment_outputs(
-        self,
-    ) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
-        return (self._attachment_holdings, self._attachment_inv_txns)
-
-    def reset_attachment_outputs(self) -> None:
-        self._attachment_holdings = []
-        self._attachment_inv_txns = []
 
     def parse_attachment(
         self,
@@ -83,15 +67,20 @@ class ICICIDirectTradeEmailParser(BaseStatementEmailParser):
             )
             return []
 
-        password, env_name = _nse_trades_pdf_password()
-        if not password:
-            logger.error(
-                "Missing %s — cannot decrypt NSE trades PDF.",
-                env_name,
+        candidates = _nse_trades_pdf_password_candidates()
+        if not candidates:
+            raise StatementPasswordRequired(
+                "nse_trades_executed",
+                "Set NSE_TRADES_EXECUTED_PASSWORD or PAN ingredient for derived passwords.",
             )
-            return []
 
-        decrypted = decrypt_pdf(pdf_bytes, password)
+        try:
+            decrypted, _used = decrypt_pdf_with_password_candidates(pdf_bytes, candidates)
+        except pikepdf.PasswordError as e:
+            raise StatementPasswordRequired(
+                "nse_trades_executed",
+                "None of the NSE PDF password candidates worked. Check env keys and PAN.",
+            ) from e
         try:
             self._attachment_inv_txns.extend(
                 parse_icici_direct_trade_pdf(

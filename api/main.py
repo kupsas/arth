@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from api.auth import get_current_user
-from api.database import get_engine, init_db
+from api.database import SQLiteSerializingSession, get_engine, init_db
 from api.routes import metrics, pipeline, transactions, user_config
 from api.services.inflation_service import sync_imf_cpi_history
 from api.services.price_feed import run_startup_price_sync
@@ -44,7 +44,6 @@ from api.routes.onboarding import router as onboarding_router
 from api.routes.setup import router as setup_router
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
-from sqlmodel import Session
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,7 @@ async def _run_startup_db_maintenance_in_thread() -> None:
 
     def _sync_startup_prices() -> None:
         try:
-            with Session(get_engine()) as session:
+            with SQLiteSerializingSession(get_engine()) as session:
                 run_startup_price_sync(session)
                 session.commit()
         except Exception:
@@ -81,7 +80,7 @@ async def _run_startup_db_maintenance_in_thread() -> None:
             ):
                 logger.info("INFLATION_DISABLE_IMF — skipping startup inflation sync")
                 return
-            with Session(get_engine()) as session:
+            with SQLiteSerializingSession(get_engine()) as session:
                 sync_imf_cpi_history(session)
         except Exception:
             logger.exception(

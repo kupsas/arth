@@ -8,7 +8,11 @@ import pytest
 from sqlmodel import Session, select
 
 from api.models import ScraperAccountMapping, UserPipelineSource
-from scraper.source_builder import _infer_accounts_dict
+from scraper.source_builder import (
+    _infer_accounts_dict,
+    discovery_has_non_nse_broker_mail,
+    filter_redundant_nse_broker_sources,
+)
 
 
 @pytest.fixture
@@ -54,6 +58,19 @@ def test_hdfc_bank_credit_card_ending_plain_digits(infer_session: tuple[Session,
     )
     assert "1905" in acct
     assert acct["1905"]["source_key"] == "hdfc_cc_1905"
+
+
+def test_hdfc_bank_savings_last4_not_cc_when_generic_credit_card_mention_in_blob(
+    infer_session: tuple[Session, str],
+) -> None:
+    """Regression: blob-wide "credit card" substring used to mis-tag savings tails as ``hdfc_cc_*``."""
+    session, uid = infer_session
+    html = _read_fixture("alerts_hdfcbank_net_01.html")
+    marketing = " Earn more rewards on every credit card spend. Visit us today. "
+    cfg = {"parser_key": "hdfc_bank"}
+    acct = _infer_accounts_dict(cfg, ["InstaAlert", html + marketing], session=session, user_id=uid)
+    assert "3703" in acct
+    assert acct["3703"]["source_key"] == "hdfc_savings"
 
 
 def test_icici_bank_imps_body_finds_xxxx_last4(infer_session: tuple[Session, str]) -> None:
@@ -117,3 +134,46 @@ def test_hdfc_inbound_fixture_masked_account(infer_session: tuple[Session, str])
     cfg = {"parser_key": "hdfc_bank"}
     acct = _infer_accounts_dict(cfg, ["Account update for your HDFC Bank A/c", html], session=session, user_id=uid)
     assert "3703" in acct
+
+
+def test_filter_redundant_nse_keeps_nse_when_only_nse_broker() -> None:
+    sources = [
+        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 5, "source_type": "broker"},
+    ]
+    assert discovery_has_non_nse_broker_mail(sources) is False
+    out = filter_redundant_nse_broker_sources(sources)
+    assert out is sources
+    assert len(out) == 1
+
+
+def test_filter_redundant_nse_drops_nse_when_icici_broker_present() -> None:
+    """ICICI Direct mail makes NSE trade confirmations redundant (same trades)."""
+    sources = [
+        {
+            "sender_email": "service@icicisecurities.com",
+            "email_count_estimate": 12,
+            "source_type": "broker",
+        },
+        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 100, "source_type": "broker"},
+        {"sender_email": "nseinvest@nse.co.in", "email_count_estimate": 39, "source_type": "broker"},
+    ]
+    assert discovery_has_non_nse_broker_mail(sources) is True
+    out = filter_redundant_nse_broker_sources(sources)
+    assert len(out) == 1
+    assert out[0]["sender_email"] == "service@icicisecurities.com"
+
+
+def test_filter_redundant_nse_keeps_both_when_icici_broker_has_zero_mail() -> None:
+    """If the primary broker row matched no messages, NSE remains the usable feed."""
+    sources = [
+        {
+            "sender_email": "service@icicisecurities.com",
+            "email_count_estimate": 0,
+            "source_type": "broker",
+        },
+        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 10, "source_type": "broker"},
+    ]
+    assert discovery_has_non_nse_broker_mail(sources) is False
+    out = filter_redundant_nse_broker_sources(sources)
+    assert out is sources
+    assert len(out) == 2

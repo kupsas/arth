@@ -4,7 +4,7 @@
  * Step 2 — Auto-discovery (Track 2 Phase 5a).
  *
  * Calls ``POST /api/onboarding/discover`` which streams NDJSON: we show per-sender
- * progress and append rows as each bank sender is probed in Gmail (headers only).
+ * progress as each bank sender is probed in Gmail (message ID list only).
  *
  * If ``GET /api/onboarding/state`` already has ``discovery_results`` from a finished
  * scan (e.g. user clicked Back or reopened the tab), we **hydrate** that snapshot and
@@ -54,7 +54,7 @@ function discoveryPanelSafeFragment(cat: DiscoveryUiCategory, institution: strin
 }
 
 /**
- * Per-sender breakdown inside an expanded institution row (Gmail address + volume + dates).
+ * Per-sender breakdown inside an expanded institution row (Gmail address + volume).
  * Only shown after the user clicks the institution accordion — keeps the first screen calm.
  */
 function DiscoverySenderDetailTable({ rows }: { rows: OnboardingDiscoveryStreamRow[] }) {
@@ -64,7 +64,6 @@ function DiscoverySenderDetailTable({ rows }: { rows: OnboardingDiscoveryStreamR
         <TableRow>
           <TableHead>Sender</TableHead>
           <TableHead className="text-right">≈ Msgs</TableHead>
-          <TableHead>Date span</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -75,9 +74,6 @@ function DiscoverySenderDetailTable({ rows }: { rows: OnboardingDiscoveryStreamR
               <div className="text-xs text-muted-foreground font-mono">{r.sender_email}</div>
             </TableCell>
             <TableCell className="text-right tabular-nums">{r.email_count_estimate}</TableCell>
-            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-              {r.earliest_email_date ?? "—"} → {r.latest_email_date ?? "—"}
-            </TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -87,12 +83,9 @@ function DiscoverySenderDetailTable({ rows }: { rows: OnboardingDiscoveryStreamR
 
 export interface StepDiscoveryProps {
   onContinue: () => void
-  /** While ``POST /api/onboarding/persist-sources`` runs after Continue. */
-  persistBusy?: boolean
-  persistError?: string | null
 }
 
-export function StepDiscovery({ onContinue, persistBusy = false, persistError = null }: StepDiscoveryProps) {
+export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
   const onboardingState = useOnboardingState()
   const {
     runDiscover,
@@ -184,8 +177,8 @@ export function StepDiscovery({ onContinue, persistBusy = false, persistError = 
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Discover sources</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            We scan your mailbox for known bank sender addresses. In this step we only read email
-            headers and search metadata — not full message bodies.
+            We scan your mailbox for known bank sender addresses. Each check is a single Gmail
+            search (message IDs only) — we do not download full message bodies in this step.
           </p>
         </div>
       </div>
@@ -332,18 +325,12 @@ export function StepDiscovery({ onContinue, persistBusy = false, persistError = 
         </Card>
       )}
 
-      {persistError ? (
-        <OnboardingErrorCallout title="Could not save email sources" hint="Check Gmail is still connected, then try Continue again.">
-          {persistError}
-        </OnboardingErrorCallout>
-      ) : null}
-
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" onClick={() => void runRescan()} disabled={isPending}>
           Re-scan
         </Button>
-        <Button type="button" onClick={() => onContinue()} disabled={!canContinue || persistBusy}>
-          {persistBusy ? "Saving sources…" : "Continue"}
+        <Button type="button" onClick={() => onContinue()} disabled={!canContinue}>
+          Continue
         </Button>
       </div>
     </div>

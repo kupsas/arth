@@ -37,6 +37,11 @@ def statement_secrets_context(
         _ctx_user_id.reset(tok_u)
 
 
+def get_statement_secrets_scope() -> tuple[Session | None, str | None]:
+    """Return (session, user_id) when inside :func:`statement_secrets_context`, else (None, None)."""
+    return _ctx_session.get(), _ctx_user_id.get()
+
+
 def resolve_secret_env(env_key: str, default: str = "") -> str:
     """Return secret for ``env_key``: UserSecrets JSON (if in context), else ``os.getenv``."""
     session = _ctx_session.get()

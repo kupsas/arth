@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 from sqlalchemy import event, text
@@ -23,6 +24,29 @@ from sqlmodel import Session, SQLModel, create_engine
 from pipeline.config import DB_PATH, REPO_ROOT
 
 logger = logging.getLogger(__name__)
+
+# SQLite allows only one writer at a time. WAL mode lets readers proceed during a
+# write, but concurrent flush/commit from multiple threads (e.g. onboarding backfill
+# worker + API classify/patch) still causes ``database is locked``. Serialize those
+# operations process-wide; use RLock so commit()->flush() nesting stays safe.
+_SQLITE_WRITER_LOCK = threading.RLock()
+
+
+class SQLiteSerializingSession(Session):
+    """Session that serializes flush/commit/rollback for multi-threaded SQLite use."""
+
+    def flush(self, objects=None):  # type: ignore[override]
+        with _SQLITE_WRITER_LOCK:
+            return super().flush(objects)
+
+    def commit(self):  # type: ignore[override]
+        with _SQLITE_WRITER_LOCK:
+            return super().commit()
+
+    def rollback(self):  # type: ignore[override]
+        with _SQLITE_WRITER_LOCK:
+            return super().rollback()
+
 
 # `check_same_thread=False` is required because FastAPI serves requests
 # across multiple threads, but SQLite's default is single-thread only.
@@ -544,6 +568,16 @@ def _apply_sqlite_patches() -> None:
                 )
             )
 
+        if _table_exists(conn, "onboarding_states") and not _column_exists(
+            conn, "onboarding_states", "persist_sources_status"
+        ):
+            conn.execute(
+                text(
+                    "ALTER TABLE onboarding_states ADD COLUMN persist_sources_status TEXT "
+                    "NOT NULL DEFAULT 'idle'"
+                )
+            )
+
         # User contacts: distinguish wizard-seeded rows (replace on re-save) from Settings-created rows.
         if _table_exists(conn, "user_contacts") and not _column_exists(
             conn, "user_contacts", "contact_source"
@@ -582,14 +616,14 @@ def _chmod_owner_rw_only(path: Path) -> None:
 def _seed_desktop_prereq_defaults() -> None:
     """Seed app_users + scraper config from env / scraper.config when tables are empty."""
     import bcrypt
-    from sqlmodel import Session, select
+    from sqlmodel import select
 
     from api.models import AppUser, ScraperAccountMapping, ScraperBankSender
     from api.services.family_member_utils import self_member_id
     from scraper.config import BANK_SENDERS
 
     try:
-        with Session(_engine) as session:
+        with SQLiteSerializingSession(_engine) as session:
             if session.exec(select(AppUser)).first() is None:
                 raw_user = (os.getenv("AUTH_USERNAME") or "sashank").strip()
                 raw_pw = (os.getenv("AUTH_PASSWORD") or "").strip()
@@ -652,14 +686,14 @@ def _sync_missing_bank_senders_from_config() -> None:
     otherwise never be polled. This runs on every ``init_db()`` and only adds
     missing (user_id, sender_email) rows plus account mappings — idempotent.
     """
-    from sqlmodel import Session, select
+    from sqlmodel import select
 
     from api.models import ScraperAccountMapping, ScraperBankSender
     from api.services.family_member_utils import self_member_id
     from scraper.config import BANK_SENDERS
 
     try:
-        with Session(_engine) as session:
+        with SQLiteSerializingSession(_engine) as session:
             # Only users who already use SQLite for scraper config (≥1 row).
             # Others still get :data:`scraper.config.BANK_SENDERS` in memory — no merge needed.
             all_rows = session.exec(select(ScraperBankSender)).all()
@@ -720,13 +754,13 @@ def _sync_missing_bank_senders_from_config() -> None:
 
 def _hydrate_scraper_sender_metadata_from_code() -> None:
     """Fill NULL discovery columns on existing ``scraper_bank_senders`` from ``BANK_SENDERS``."""
-    from sqlmodel import Session, select
+    from sqlmodel import select
 
     from api.models import ScraperBankSender
     from scraper.config import BANK_SENDERS
 
     try:
-        with Session(_engine) as session:
+        with SQLiteSerializingSession(_engine) as session:
             changed = False
             for row in session.exec(select(ScraperBankSender)).all():
                 cfg = BANK_SENDERS.get(row.sender_email.strip().lower())
@@ -746,6 +780,88 @@ def _hydrate_scraper_sender_metadata_from_code() -> None:
         logger.exception("Hydrate scraper_bank_senders from BANK_SENDERS skipped or failed")
 
 
+def _seed_password_templates() -> None:
+    """Insert or update default PDF password recipes (idempotent by ``parser_key``)."""
+    from sqlmodel import select
+
+    from api.models import PasswordTemplate
+
+    rows: list[dict[str, str | None]] = [
+        {
+            "parser_key": "icici_statement_monthly",
+            "display_name": "ICICI Bank monthly e-statement PDF",
+            "required_fields_json": '["dob_iso"]',
+            "password_formula": "{icici_first4_upper}{dob_ddmm}",
+            "notes": (
+                "Name comes from your saved identity (preclassification) and aliases. "
+                "We try FIRST4+DDMM upper then lower for each name variant. "
+                "Optional UserSecrets override for non-standard bank spellings."
+            ),
+        },
+        {
+            "parser_key": "icici_statement_annual",
+            "display_name": "ICICI Bank annual / FY statement PDF",
+            "required_fields_json": '["dob_iso"]',
+            "password_formula": "{icici_first4_upper}{dob_ddmm}",
+            "notes": (
+                "Same as monthly; env overrides first. Identity name + aliases drive FIRST4."
+            ),
+        },
+        {
+            "parser_key": "hdfc_combined_statement",
+            "display_name": "HDFC Bank combined email statement PDF",
+            "required_fields_json": '["hdfc_customer_id"]',
+            "password_formula": "{hdfc_customer_id}",
+            "notes": "Typical pattern: your HDFC customer ID (net banking login ID), digits only.",
+        },
+        {
+            "parser_key": "hdfc_cc_statement",
+            "display_name": "HDFC Bank credit card statement PDF",
+            "required_fields_json": '["dob_iso"]',
+            "password_formula": "{icici_first4_upper}{dob_ddmm}",
+            "notes": (
+                "FIRST4 from your saved identity and aliases + DOB as DDMM. Same rules as ICICI."
+            ),
+        },
+        {
+            "parser_key": "nse_trades_executed",
+            "display_name": "NSE “Trades executed” contract PDF",
+            "required_fields_json": '["pan"]',
+            "password_formula": "{pan}",
+            "notes": "Usually your PAN in uppercase; matches NSE_TRADES_EXECUTED_PASSWORD.",
+        },
+        {
+            "parser_key": "icici_direct_trade",
+            "display_name": "ICICI Direct — NSE trades PDF (PAN)",
+            "required_fields_json": '["pan"]',
+            "password_formula": "{pan}",
+            "notes": "Same as NSE contract-note PDFs; set explicit env keys if your broker differs.",
+        },
+    ]
+
+    try:
+        with SQLiteSerializingSession(_engine) as session:
+            for r in rows:
+                pk = str(r.get("parser_key") or "")
+                if not pk:
+                    continue
+                existing = session.exec(
+                    select(PasswordTemplate).where(PasswordTemplate.parser_key == pk)
+                ).first()
+                if existing is None:
+                    session.add(PasswordTemplate(**r))
+                else:
+                    for col_name, val in r.items():
+                        if col_name == "parser_key":
+                            continue
+                        setattr(existing, col_name, val)
+                    session.add(existing)
+            session.commit()
+            logger.info("Upserted password_templates (%d rows)", len(rows))
+    except Exception:
+        logger.exception("Password template seed skipped or failed")
+
+
 def init_db() -> None:
     """Create all tables that don't already exist.
 
@@ -760,6 +876,7 @@ def init_db() -> None:
     _apply_sqlite_patches()
     _hydrate_scraper_sender_metadata_from_code()
     _seed_desktop_prereq_defaults()
+    _seed_password_templates()
     _sync_missing_bank_senders_from_config()
     _merge_starter_pack_for_all_users()
     # Phase A.5 — limit exposure of local secrets (SQLite file + Gmail OAuth token).
@@ -769,5 +886,5 @@ def init_db() -> None:
 
 def get_session():
     """FastAPI dependency — yields a DB session per request, auto-closes."""
-    with Session(_engine) as session:
+    with SQLiteSerializingSession(_engine) as session:
         yield session

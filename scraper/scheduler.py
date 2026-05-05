@@ -43,9 +43,9 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlmodel import Session, select
+from sqlmodel import select
 
-from api.database import get_engine
+from api.database import SQLiteSerializingSession, get_engine
 from api.models import AppUser
 from api.services.inflation_service import sync_imf_cpi_history
 from pipeline.config import APP_ENV, LLM_MODEL  # noqa: F401 — LLM_MODEL for context; not used directly here
@@ -168,7 +168,7 @@ def _run_scrape_job() -> ScrapeResult:
             _gmail_client.authenticate(allow_interactive_oauth=False)
 
         # ── Run the scrape ────────────────────────────────────────────────────
-        with Session(get_engine()) as session:
+        with SQLiteSerializingSession(get_engine()) as session:
             result = scrape_new_emails(session=session, client=_gmail_client)
 
         # ── Update shared status ──────────────────────────────────────────────
@@ -236,14 +236,14 @@ def _run_daily_price_job() -> None:
 
     try:
         logger.info("Daily price job starting...")
-        with Session(get_engine()) as session:
+        with SQLiteSerializingSession(get_engine()) as session:
             backfill_summary = backfill_nse_portfolio_gaps(session)
             refresh_summary = refresh_all_prices(session)
             session.commit()
 
         # Sub-Plan C — equity/MF T+2 dates track calendar days; cheap, no network.
         try:
-            with Session(get_engine()) as liq_session:
+            with SQLiteSerializingSession(get_engine()) as liq_session:
                 liq_result = refresh_all_users_liquidity_dates(liq_session)
                 liq_session.commit()
             logger.info(
@@ -328,7 +328,7 @@ def _run_inflation_sync_job() -> None:
         logger.debug("INFLATION_DISABLE_IMF — skipping scheduled inflation sync")
         return
     try:
-        with Session(get_engine()) as session:
+        with SQLiteSerializingSession(get_engine()) as session:
             summary = sync_imf_cpi_history(session)
         if summary.get("ok"):
             logger.info(
@@ -354,7 +354,7 @@ def _email_scrape_job_skip_reason() -> str | None:
     if not GMAIL_TOKEN_PATH.exists():
         return f"Gmail token not found at {GMAIL_TOKEN_PATH}"
     try:
-        with Session(get_engine()) as session:
+        with SQLiteSerializingSession(get_engine()) as session:
             users = session.exec(select(AppUser)).all()
             if not any(u.setup_completed_at is not None for u in users):
                 return "first-run setup not completed yet (wizard or /api/setup/complete)"

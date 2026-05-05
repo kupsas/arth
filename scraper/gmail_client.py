@@ -321,6 +321,33 @@ class GmailClient:
 
     # ── Email fetching ──────────────────────────────────────────────────────────
 
+    def list_message_ids(
+        self,
+        query: str,
+        *,
+        max_results: int = 100,
+    ) -> list[str]:
+        """Return up to ``max_results`` message IDs matching ``query`` (newest first).
+
+        Uses a single ``messages().list()`` call — no per-ID ``messages().get()``.
+        Onboarding discovery uses this for fast presence + volume caps without
+        fetching headers or bodies.
+        """
+        self._require_auth()
+        logger.debug("Gmail list_message_ids query: %s max_results=%s", query, max_results)
+        try:
+            response = (
+                self._service.users()
+                .messages()
+                .list(userId="me", q=query, maxResults=max_results)
+                .execute()
+            )
+        except HttpError as e:
+            logger.error("Gmail API list() failed for query %r: %s", query, e)
+            raise
+        batch = response.get("messages", []) or []
+        return [str(m["id"]) for m in batch if m.get("id")]
+
     def search_messages(
         self,
         query: str,

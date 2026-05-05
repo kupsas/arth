@@ -5,33 +5,42 @@ We mock :class:`scraper.gmail_client.GmailClient` so tests never call the real G
 
 from __future__ import annotations
 
-import datetime
 from unittest.mock import MagicMock
 
-from scraper.discovery import DiscoveredSource, discover_sources, discovered_sources_to_json
-from scraper.gmail_client import GmailMessage
+from scraper.discovery import (
+    DiscoveredSource,
+    discover_sources,
+    discover_sources_iter,
+    discovered_sources_to_json,
+)
 
 
-def _msg(
-    i: int,
-    *,
-    subject: str = "Account alert",
-    day: int = 1,
-) -> GmailMessage:
-    """Build a small :class:`GmailMessage` for list probes."""
-    return GmailMessage(
-        id=f"m{i}",
-        thread_id=f"t{i}",
-        sender="alerts@bank.test",
-        subject=subject,
-        received_at=datetime.datetime(2024, 3, day, 12, 0, 0, tzinfo=datetime.timezone.utc),
-    )
+def test_discover_sources_iter_probes_nse_senders_last() -> None:
+    """``@nse.co.in`` mailboxes run after other configured senders so streaming UI is not
+    misled into showing an NSE-only demat row while ICICI Direct is still queued
+    (alphabetical order used to probe ``ebix@nse.co.in`` before ``service@icicisecurities.com``).
+    """
+    client = MagicMock()
+    client.list_message_ids.return_value = []
+
+    bank = {
+        "ebix@nse.co.in": {"display_name": "NSE ebix", "source_type": "broker"},
+        "service@icicisecurities.com": {"display_name": "ICICI Direct", "source_type": "broker"},
+        "alerts@hdfcbank.net": {"display_name": "HDFC", "source_type": "savings"},
+    }
+    list(discover_sources_iter(client, bank))
+
+    from_queries = [c.args[0] for c in client.list_message_ids.call_args_list]
+    assert len(from_queries) == 3
+    assert from_queries[0] == "from:alerts@hdfcbank.net"
+    assert from_queries[1] == "from:service@icicisecurities.com"
+    assert from_queries[2] == "from:ebix@nse.co.in"
 
 
 def test_discover_sources_empty_mailbox() -> None:
-    """When Gmail returns no rows for a sender, estimate is 0 and dates are None."""
+    """When Gmail returns no IDs for a sender, estimate is 0 and sample IDs are empty."""
     client = MagicMock()
-    client.search_messages.return_value = []
+    client.list_message_ids.return_value = []
 
     bank = {
         "nobody@example.com": {
@@ -39,36 +48,20 @@ def test_discover_sources_empty_mailbox() -> None:
             "source_type": "savings",
         }
     }
-    out = discover_sources(client, bank, existence_sample_size=3)
+    out = discover_sources(client, bank)
     assert len(out) == 1
     r = out[0]
     assert r.sender_email == "nobody@example.com"
     assert r.email_count_estimate == 0
-    assert r.earliest_email_date is None
-    assert r.latest_email_date is None
-    client.search_messages.assert_called()
+    assert r.sample_message_ids == []
+    client.list_message_ids.assert_called()
 
 
-def test_discover_sources_finds_email_and_volume_estimate() -> None:
-    """With one sample page of messages, dates are min/max of that page; estimate is capped scan."""
+def test_discover_sources_finds_ids_and_caps_estimate() -> None:
+    """``email_count_estimate`` is len(ids) from a single list call; first 3 IDs are samples."""
     client = MagicMock()
-    # First call: non-paginated probe (per sender)
-    sample = [_msg(1, day=5), _msg(2, day=20)]
-    full_page = sample * 2  # paginated estimate path returns 4 (<= estimate_cap)
-
-    def _search(
-        _query: str,
-        *,
-        paginate: bool = False,
-        max_results_per_page: int = 100,
-        max_total: int | None = None,
-    ):
-        if not paginate:
-            return sample
-        # Capped volume sweep
-        return full_page[: max_total or len(full_page)]
-
-    client.search_messages.side_effect = _search
+    ids = [f"m{i}" for i in range(10)]
+    client.list_message_ids.return_value = ids
 
     bank = {
         "alerts@hdfcbank.net": {
@@ -76,53 +69,26 @@ def test_discover_sources_finds_email_and_volume_estimate() -> None:
             "source_type": "savings",
         }
     }
-    out = discover_sources(client, bank, estimate_cap=100)
+    out = discover_sources(client, bank, list_max_results=100)
     assert len(out) == 1
     r = out[0]
-    assert r.email_count_estimate == len(full_page)
-    assert r.earliest_email_date == datetime.date(2024, 3, 5)
-    assert r.latest_email_date == datetime.date(2024, 3, 20)
-
-
-def test_discover_sources_subject_filter_requires_regex_match() -> None:
-    """``subject_patterns_must_match_sample`` drops non-matching subjects from the small sample."""
-    client = MagicMock()
-    # Probe page: one InstaAlert (matches) and one marketing email (dropped)
-    m_ok = _msg(1, subject="InstaAlert: UPI")
-    m_bad = _msg(2, subject="We miss you — apply for a loan")
-    client.search_messages.return_value = [m_ok, m_bad]
-
-    bank = {
-        "bank@test.in": {
-            "display_name": "Filtered",
-            "source_type": "savings",
-            "discovery_subject_patterns": [r"InstaAlert"],
-        }
-    }
-    out = discover_sources(
-        client,
-        bank,
-        subject_patterns_must_match_sample=True,
-        estimate_cap=20,
-    )
-    assert len(out) == 1
-    r = out[0]
-    # After filter only one message remains, so min == max == that day
-    assert r.earliest_email_date == datetime.date(2024, 3, 1)
-    assert r.latest_email_date == datetime.date(2024, 3, 1)
+    assert r.email_count_estimate == 10
+    assert r.sample_message_ids == ["m0", "m1", "m2"]
+    client.list_message_ids.assert_called_once_with("from:alerts@hdfcbank.net", max_results=100)
 
 
 def test_discovered_sources_to_json_round_trip() -> None:
-    """JSON helper matches API contract (ISO dates, no surprise types)."""
+    """JSON helper matches API contract (no surprise types)."""
     row = DiscoveredSource(
         sender_email="a@b.com",
         display_name="Bank",
         source_type="savings",
         email_count_estimate=3,
-        earliest_email_date=datetime.date(2022, 1, 2),
-        latest_email_date=datetime.date(2022, 6, 1),
+        sample_message_ids=["x1", "x2"],
     )
     payload = discovered_sources_to_json([row])[0]
     assert payload["sender_email"] == "a@b.com"
-    assert payload["earliest_email_date"] == "2022-01-02"
     assert payload["email_count_estimate"] == 3
+    assert payload["sample_message_ids"] == ["x1", "x2"]
+    assert "earliest_email_date" not in payload
+    assert "latest_email_date" not in payload

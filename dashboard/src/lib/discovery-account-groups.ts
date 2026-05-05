@@ -140,10 +140,17 @@ export function groupDiscoveryRowsForUi(rows: OnboardingDiscoveryStreamRow[]): R
       list.push(row)
       byInst.set(label, list)
     }
-    const groups = [...byInst.entries()].map(([institution, list]) =>
+    let groups = [...byInst.entries()].map(([institution, list]) =>
       buildInstitutionGroup(institution, list),
     )
     groups.sort((a, b) => a.institution.localeCompare(b.institution))
+    // Demat: NSE trade emails duplicate other broker mail — hide NSE when any other demat line exists.
+    if (cat === "demat") {
+      const withoutNse = groups.filter((g) => g.institution !== "NSE")
+      if (withoutNse.length < groups.length && withoutNse.length > 0) {
+        groups = withoutNse
+      }
+    }
     result[cat] = groups
   }
   return result

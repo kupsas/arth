@@ -112,7 +112,12 @@ def user_has_classifier_api_key(session: Session, user_id: str) -> bool:
 
 
 def effective_onboarding_unknown_threshold(session: Session, user_id: str) -> int:
-    """Lower pause threshold when LLM cannot trim unknowns (no keys or ``LLM_MODEL=none``)."""
+    """Budget before classification pause — import stops when unknowns **exceed** this count.
+
+    Example: default ``20`` allows up to ``20`` pending rows for the active source; the next
+    row that pushes the count to ``21`` triggers ``needs_classification``.
+    Lower values apply when LLM cannot trim unknowns (no keys or ``LLM_MODEL=none``).
+    """
     low = int(os.getenv("ONBOARDING_UNKNOWN_THRESHOLD_LOW", "10"))
     high = int(os.getenv("ONBOARDING_UNKNOWN_THRESHOLD", "20"))
     if str(pc.LLM_MODEL or "").strip().lower() == "none":

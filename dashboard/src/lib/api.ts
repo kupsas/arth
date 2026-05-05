@@ -67,6 +67,8 @@ import type {
   Transaction,
   TransactionFilters,
   TransactionUpdate,
+  StatementUploadResult,
+  HoldingUploadResult,
   UploadResponse,
   SimulationParams,
   SimulationResult,
@@ -80,6 +82,8 @@ import type {
   OnboardingStateResponse,
   OnboardingPreclassificationSavedResponse,
   OnboardingBackfillSourceRow,
+  OnboardingPortfolioDeriveResponse,
+  OnboardingPortfolioSnapshotResponse,
   ClassificationStatsResponse,
 } from "@/lib/types";
 
@@ -712,34 +716,41 @@ export function deleteReminder(id: number): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statement upload  →  /api/pipeline/upload  (Phase 4.5d)
+// Statement upload  →  /api/pipeline/upload  (content-based detection)
 // ─────────────────────────────────────────────────────────────────────────────
+
+export interface UploadStatementOptions {
+  /** After account picker: which configured pipeline source to import into */
+  sourceKey?: string;
+  /** After type picker: logical parser id, e.g. hdfc_savings_pdf */
+  sourceType?: string;
+  /** Password for encrypted PDFs (required on retry after needs_password) */
+  pdfPassword?: string;
+}
 
 /**
  * POST /api/pipeline/upload
- * Uploads a bank statement file and triggers the pipeline.
- * Returns a run_id that can be polled via GET /api/pipeline/runs/{id}.
- *
- * @param file      The File object from an <input type="file"> or drag-and-drop
- * @param sourceKey Optional parser key override (e.g. "hdfc_savings")
+ * Smart-detects bank statement format from file content, then runs the pipeline.
+ * May return type_picker / account_picker / no_match — see ``StatementUploadResult``.
  */
 export async function uploadStatement(
   file: File,
-  sourceKey?: string,
-): Promise<UploadResponse> {
+  opts?: UploadStatementOptions,
+): Promise<StatementUploadResult> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const url = buildApiUrl(
-    "/api/pipeline/upload",
-    sourceKey ? { source_key: sourceKey } : undefined,
-  );
+  const params: QueryParams = {};
+  if (opts?.sourceKey) params.source_key = opts.sourceKey;
+  if (opts?.sourceType) params.source_type = opts.sourceType;
+  if (opts?.pdfPassword) params.pdf_password = opts.pdfPassword;
+
+  const url = buildApiUrl("/api/pipeline/upload", Object.keys(params).length ? params : undefined);
 
   const res = await fetch(url, {
     method: "POST",
     credentials: "include",
     body: formData,
-    // Don't set Content-Type — let the browser set multipart/form-data with the boundary
   });
 
   if (res.status === 401) {
@@ -752,7 +763,53 @@ export async function uploadStatement(
     throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
   }
 
-  return res.json() as Promise<UploadResponse>;
+  return res.json() as Promise<StatementUploadResult>;
+}
+
+export interface UploadHoldingsOptions {
+  sourceType?: string;
+  pdfPassword?: string;
+}
+
+/**
+ * POST /api/pipeline/upload/holdings — portfolio CSV/PDF (manual fallback).
+ */
+export async function uploadHoldingsStatement(
+  file: File,
+  opts?: UploadHoldingsOptions,
+): Promise<HoldingUploadResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const params: QueryParams = {};
+  if (opts?.sourceType) params.source_type = opts.sourceType;
+  if (opts?.pdfPassword) params.pdf_password = opts.pdfPassword;
+  const url = buildApiUrl(
+    "/api/pipeline/upload/holdings",
+    Object.keys(params).length ? params : undefined,
+  );
+
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
+
+  if (!res.ok) {
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+  }
+
+  return res.json() as Promise<HoldingUploadResult>;
+}
+
+/** GET /api/onboarding/holdings-coverage — whether the user already has portfolio rows */
+export function fetchHoldingsCoverage(): Promise<{ has_holding_data: boolean }> {
+  return get<{ has_holding_data: boolean }>("/api/onboarding/holdings-coverage");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -934,8 +991,6 @@ export type OnboardingDiscoveryStreamRow = {
   display_name: string
   source_type: string
   email_count_estimate: number
-  earliest_email_date: string | null
-  latest_email_date: string | null
 }
 
 /** Parsed NDJSON events from streaming discovery (see ``streamOnboardingDiscover``). */
@@ -1151,12 +1206,48 @@ export function postOnboardingClassify(body: {
   return post("/api/onboarding/classify", body)
 }
 
+/** GET /api/onboarding/password-requirements — PDF password templates for discovered senders. */
+export function fetchOnboardingPasswordRequirements(): Promise<
+  {
+    parser_key: string;
+    display_name: string;
+    required_fields: string[];
+    notes?: string | null;
+  }[]
+> {
+  return get("/api/onboarding/password-requirements");
+}
+
+/** GET /api/onboarding/pdf-password-name-preview — names used for FIRST4+DDMM PDF passwords. */
+export function fetchOnboardingPdfPasswordNamePreview(): Promise<{ name_strings: string[] }> {
+  return get("/api/onboarding/pdf-password-name-preview");
+}
+
+/** GET /api/onboarding/password-ingredients — saved PAN/DOB/HDFC (for form hydration after refresh). */
+export function fetchOnboardingPasswordIngredientsSaved(): Promise<{
+  pan: string | null;
+  dob_iso: string | null;
+  hdfc_customer_id: string | null;
+}> {
+  return get("/api/onboarding/password-ingredients");
+}
+
+/** POST /api/onboarding/password-ingredients — merge PAN/DOB/account fragments into UserSecrets. */
+export function postOnboardingPasswordIngredients(body: {
+  pan?: string | null;
+  dob_iso?: string | null;
+  hdfc_customer_id?: string | null;
+}): Promise<{ ok: boolean }> {
+  return post("/api/onboarding/password-ingredients", body);
+}
+
 /** POST /api/onboarding/backfill/{source} */
 export function postOnboardingBackfillChunk(
   source: string,
   body?: {
     chunk_size?: number;
     resume_after_classification?: boolean;
+    resume_after_password?: boolean;
     resume_from_pause?: boolean;
   },
   opts?: { signal?: AbortSignal },
@@ -1182,12 +1273,183 @@ export function fetchOnboardingBackfillProgress(
   unknowns_pending: number;
   error_message: string | null;
   current_phase: string | null;
+  password_parser_key?: string | null;
+  password_failure_message_id?: string | null;
+  current_window_label?: string | null;
+  windows_total?: number;
+  windows_completed?: number;
 }> {
   return get(
     `/api/onboarding/backfill/${encodeURIComponent(source)}/progress`,
     undefined,
     opts,
   );
+}
+
+/** Parsed SSE payloads from ``GET /api/onboarding/backfill/{source}/stream``. */
+export type OnboardingBackfillStreamPayload =
+  | ({ type: "progress" } & Record<string, unknown>)
+  | { type: "status"; progress: Record<string, unknown> }
+  | { type: "gate"; progress: Record<string, unknown> }
+  | { type: "complete"; progress: Record<string, unknown> }
+  | { type: "error"; detail: string; terminal?: boolean };
+
+/** How ``streamOnboardingBackfill`` finished (wizard uses this instead of chunk polling). */
+export type OnboardingBackfillStreamResult = {
+  lastProgress: Record<string, unknown> | null;
+  endReason: "complete" | "gate" | "error" | "closed";
+};
+
+/**
+ * ``GET /api/onboarding/backfill/{source}/stream`` returns ``text/event-stream`` (SSE).
+ * Each ``data:`` line is JSON: ``progress`` (per email), ``status`` / ``gate`` / ``complete``, or ``error``.
+ *
+ * Resume flags mirror ``POST /backfill/{source}`` so after a gate you open a **new** stream
+ * with e.g. ``resume_after_password: true`` (avoids holding the server lock during user input).
+ */
+export async function streamOnboardingBackfill(
+  source: string,
+  options?: {
+    signal?: AbortSignal;
+    resume_after_classification?: boolean;
+    resume_after_password?: boolean;
+    resume_from_pause?: boolean;
+    after?: string;
+    before?: string;
+    /** Called for every ``progress``, ``status``, ``gate``, and ``complete`` snapshot (smooth UI). */
+    onProgress?: (snapshot: Record<string, unknown>) => void;
+  },
+): Promise<OnboardingBackfillStreamResult> {
+  const signal = options?.signal;
+  const onProgress = options?.onProgress;
+  const q = new URLSearchParams();
+  if (options?.resume_after_classification) q.set("resume_after_classification", "true");
+  if (options?.resume_after_password) q.set("resume_after_password", "true");
+  if (options?.resume_from_pause) q.set("resume_from_pause", "true");
+  if (options?.after) q.set("after", options.after);
+  if (options?.before) q.set("before", options.before);
+  const qs = q.toString();
+  const path = `/api/onboarding/backfill/${encodeURIComponent(source)}/stream${qs ? `?${qs}` : ""}`;
+  const url = buildApiUrl(path);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "GET", credentials: "include", signal });
+  } catch (e) {
+    if (signal?.aborted || isAbortLike(e)) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    throw e;
+  }
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
+
+  if (!res.ok) {
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new ApiError(500, "No response body from backfill stream.");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let lastProgress: Record<string, unknown> | null = null;
+  let endReason: OnboardingBackfillStreamResult["endReason"] = "closed";
+
+  function ingestPayload(payload: OnboardingBackfillStreamPayload): void {
+    const t = payload.type;
+    if (t === "progress") {
+      const rest = { ...(payload as Record<string, unknown>) }
+      delete rest.type
+      lastProgress = rest
+      onProgress?.(rest)
+      return
+    }
+    if (t === "status" || t === "gate" || t === "complete") {
+      lastProgress = payload.progress;
+      onProgress?.(payload.progress);
+    }
+    if (t === "complete") {
+      endReason = "complete";
+    }
+    if (t === "gate") {
+      endReason = "gate";
+    }
+    if (t === "error") {
+      endReason = "error";
+      throw new ApiError(503, payload.detail || "Email import stream reported an error.");
+    }
+  }
+
+  try {
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (e) {
+        if (signal?.aborted || isAbortLike(e)) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        throw e;
+      }
+      const { done, value } = chunk;
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by a blank line (\\n\\n).
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const lines = frame.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const jsonStr = trimmed.replace(/^data:\s*/, "").trim();
+          if (!jsonStr) continue;
+          let payload: OnboardingBackfillStreamPayload;
+          try {
+            payload = JSON.parse(jsonStr) as OnboardingBackfillStreamPayload;
+          } catch {
+            throw new ApiError(500, "Invalid backfill SSE payload from server.");
+          }
+          ingestPayload(payload);
+        }
+      }
+    }
+
+    const tail = buffer.trim();
+    if (tail) {
+      const lines = tail.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const jsonStr = trimmed.replace(/^data:\s*/, "").trim();
+        if (!jsonStr) continue;
+        let payload: OnboardingBackfillStreamPayload;
+        try {
+          payload = JSON.parse(jsonStr) as OnboardingBackfillStreamPayload;
+        } catch {
+          throw new ApiError(500, "Invalid backfill SSE payload from server.");
+        }
+        ingestPayload(payload);
+      }
+    }
+  } catch (e) {
+    if (signal?.aborted || isAbortLike(e)) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    throw e;
+  }
+
+  throwIfAborted(signal);
+  return { lastProgress, endReason };
 }
 
 /** POST /api/onboarding/persist-sources — seed scraper DB rows from last discovery scan. */
@@ -1211,6 +1473,16 @@ export function postOnboardingBackfillResume(source: string): Promise<Record<str
 /** POST /api/onboarding/complete */
 export function postOnboardingComplete(): Promise<{ ok: boolean; current_step: string }> {
   return post<{ ok: boolean; current_step: string }>("/api/onboarding/complete", {});
+}
+
+/** POST /api/onboarding/portfolio-derive — reconcile ledger + derive broker holdings (ICICI Direct slice). */
+export function postOnboardingPortfolioDerive(): Promise<OnboardingPortfolioDeriveResponse> {
+  return post<OnboardingPortfolioDeriveResponse>("/api/onboarding/portfolio-derive", {});
+}
+
+/** GET /api/onboarding/portfolio-snapshot — counts + top broker holdings after derivation/import. */
+export function fetchOnboardingPortfolioSnapshot(): Promise<OnboardingPortfolioSnapshotResponse> {
+  return get<OnboardingPortfolioSnapshotResponse>("/api/onboarding/portfolio-snapshot");
 }
 
 /** GET /api/onboarding/classifier-status — saved keys only (UserSecrets); ignores server env keys. */

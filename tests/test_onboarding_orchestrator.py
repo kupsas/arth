@@ -7,13 +7,13 @@ network. This mirrors the strategy in ``test_orchestrator.py``.
 from __future__ import annotations
 
 import datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from api.models import Transaction
+from api.models import Transaction, UserContact
 from scraper.config_loader import BankSendersConfig
 from scraper.gmail_client import GmailMessage
 from scraper.onboarding_orchestrator import (
@@ -23,6 +23,7 @@ from scraper.onboarding_orchestrator import (
     sender_emails_for_source_key,
     pause_backfill_state,
     resume_backfill_state,
+    _collect_pending_queue,
 )
 
 # Minimal static config shaped like ``BANK_SENDERS`` (one savings source).
@@ -121,6 +122,60 @@ def test_count_classification_unknowns_increments(
 
 @patch("scraper.onboarding_orchestrator.get_bank_senders_config", return_value=_MINI_BANK)
 @patch("scraper.onboarding_orchestrator._process_email", return_value=("processed", 1))
+def test_run_onboarding_backfill_emit_event_matches_progress_slices(
+    _proc,
+    _bank,
+    session: Session,
+) -> None:
+    """emit_event receives the same public snapshot shape as progress_callback (per email)."""
+    t0 = datetime.date(2010, 1, 1)
+    t1 = datetime.date.today() + datetime.timedelta(days=1)
+    m1 = GmailMessage(
+        id="mid1",
+        thread_id="th1",
+        sender="alerts@hdfcbank.net",
+        subject="x",
+        received_at=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+    )
+
+    class _FakeGmail:
+        def search_messages(self, query: str, **kwargs):
+            if "alerts@hdfcbank.net" in query and "bank.in" not in query:
+                return [m1]
+            return []
+
+        def fetch_message_by_id(self, message_id: str) -> GmailMessage:
+            return m1
+
+    emitted: list[dict] = []
+
+    def emit_event(slice_pub: dict) -> None:
+        emitted.append(dict(slice_pub))
+
+    with patch("scraper.onboarding_orchestrator._record_email"), patch(
+        "scraper.onboarding_orchestrator._get_processed_ids", return_value=set()
+    ):
+        g = _FakeGmail()
+        run_onboarding_backfill(
+            session=session,
+            user_id="u1",
+            source_key="hdfc_savings_test",
+            gmail_client=g,  # type: ignore[arg-type]
+            existing_progress={},
+            chunk_size=1,
+            after=t0,
+            before=t1,
+            unknown_threshold=10_000,
+            emit_event=emit_event,
+        )
+
+    assert len(emitted) == 1
+    assert emitted[0].get("emails_processed") == 1
+    assert emitted[0].get("source") == "hdfc_savings_test"
+
+
+@patch("scraper.onboarding_orchestrator.get_bank_senders_config", return_value=_MINI_BANK)
+@patch("scraper.onboarding_orchestrator._process_email", return_value=("processed", 1))
 def test_run_onboarding_backfill_processes_chunk(
     _proc,
     _bank,
@@ -202,7 +257,7 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
     _bank,
     session: Session,
 ) -> None:
-    """When DB unknowns for the source meet ``unknown_threshold``, status is ``needs_classification``."""
+    """When DB unknowns for the source **exceed** ``unknown_threshold``, status is ``needs_classification``."""
     t0 = datetime.date(2010, 1, 1)
     t1 = datetime.date.today() + datetime.timedelta(days=1)
     m1 = GmailMessage(
@@ -238,10 +293,77 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
             chunk_size=1,
             after=t0,
             before=t1,
-            unknown_threshold=3,
+            unknown_threshold=2,
         )
     assert r.progress.get("status") == "needs_classification"
     assert int(r.progress.get("unknowns_pending") or 0) >= 3
+
+
+def test_merge_hdfc_cc_statement_senders_enables_statement_first_partition() -> None:
+    """InstaAlerts-only DB mapping for hdfc_cc_XXXX still yields CC statement senders."""
+    from scraper.onboarding_orchestrator import (
+        _partition_senders_for_source,
+        merge_hdfc_cc_statement_sender_accounts,
+        sender_emails_for_source_key,
+    )
+
+    bank: BankSendersConfig = {
+        "alerts@hdfcbank.bank.in": {
+            "parser_key": "hdfc_bank",
+            "accounts": {
+                "3703": {
+                    "account_id": "HDFC_CC_3703",
+                    "source_key": "hdfc_cc_3703",
+                },
+            },
+            "expected_cadence": "per_transaction",
+        },
+    }
+    merged = merge_hdfc_cc_statement_sender_accounts(bank, "hdfc_cc_3703")
+    senders = sender_emails_for_source_key(merged, "hdfc_cc_3703")
+    assert "emailstatements.cards@hdfcbank.net" in senders
+    assert "emailstatements.cards@hdfcbank.bank.in" in senders
+    stmt, alert = _partition_senders_for_source(merged, "hdfc_cc_3703")
+    assert "emailstatements.cards@hdfcbank.net" in stmt
+    assert "emailstatements.cards@hdfcbank.bank.in" in stmt
+    assert "alerts@hdfcbank.bank.in" in alert
+
+
+def test_collect_pending_queue_uses_gmail_subject_keywords_for_icici_direct() -> None:
+    """Broker mailbox queries use subject:\"…\" clauses instead of bare ``from:`` only."""
+    client = MagicMock()
+    client.search_messages.return_value = []
+
+    bank: BankSendersConfig = {
+        "service@icicisecurities.com": {
+            "parser_key": "icici_direct_statement",
+            "expected_cadence": "quarterly",
+            "accounts": {
+                "0000": {
+                    "account_id": "ICICI_DIRECT",
+                    "source_key": "icici_direct_equity",
+                },
+            },
+            "gmail_subject_filter_keywords": [
+                "Equity Transaction Statement",
+                "Mutual Fund Account Statement",
+            ],
+        },
+    }
+    with patch("scraper.onboarding_orchestrator._get_processed_ids", return_value=set()):
+        _collect_pending_queue(
+            client,
+            bank,
+            "icici_direct_equity",
+            after=datetime.date(2020, 1, 1),
+            before=datetime.date(2026, 1, 1),
+            session=MagicMock(),
+        )
+
+    queries = [c[0][0] for c in client.search_messages.call_args_list]
+    assert len(queries) == 2
+    assert any('subject:"Equity Transaction Statement"' in q for q in queries)
+    assert any('subject:"Mutual Fund Account Statement"' in q for q in queries)
 
 
 def test_partition_statement_senders_annual_before_monthly() -> None:
@@ -379,6 +501,41 @@ def test_llm_sensitive_skipped_when_user_already_reviewed_same_counterparty(
             txn_type="UPI_TRANSFER",
             channel="UPI",
             counterparty="  naseema begum ",
+            counterparty_category="Friends and Family",
+            classification_source="LLM",
+        )
+    )
+    session.commit()
+    assert count_classification_unknowns(session, user_id="u1", source_key="hdfc_savings_test") == 0
+
+
+def test_llm_sensitive_skipped_when_user_contact_alias_matches_counterparty(
+    session: Session,
+) -> None:
+    """Friend saved via classify (aliases include LLM label) suppresses a later mismatched LLM row."""
+    session.add(
+        UserContact(
+            user_id="u1",
+            display_name="Alex",
+            aliases_json='["ALEX", "ALEX FROM BANK STRING"]',
+            relationship="FRIEND",
+            contact_source="ONBOARDING",
+        )
+    )
+    session.add(
+        Transaction(
+            content_hash="h" + "k" * 60,
+            txn_date=datetime.date(2024, 5, 1),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=9.0,
+            raw_description="UPI ALEX",
+            txn_type="UPI_TRANSFER",
+            channel="UPI",
+            counterparty="Alex From Bank String",
             counterparty_category="Friends and Family",
             classification_source="LLM",
         )

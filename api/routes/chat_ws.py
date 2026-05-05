@@ -42,7 +42,7 @@ from agent.memory import ConversationMemory
 from agent.profile import generate_user_profile
 from agent.security import CostTracker, SessionRateLimiter, screen_message
 from api.auth import COOKIE_NAME, create_session_token, get_current_user, verify_session_token
-from api.database import get_session
+from api.database import SQLiteSerializingSession, get_engine, get_session
 from api.services import chat_service
 
 logger = logging.getLogger(__name__)
@@ -214,9 +214,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
     chat_session_id: str | None = session_id
 
     # Load or create persisted session row + hydrate memory.
-    from api.database import get_engine
 
-    with Session(get_engine()) as db:
+    with SQLiteSerializingSession(get_engine()) as db:
         if chat_session_id:
             cs = chat_service.get_session(db, chat_session_id, user)
             if cs is None:
@@ -234,7 +233,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
     assert chat_session_id is not None
 
-    with Session(get_engine()) as db:
+    with SQLiteSerializingSession(get_engine()) as db:
         cs_row = chat_service.get_session(db, chat_session_id, user)
     title = cs_row.title if cs_row else None
     await websocket.send_json(
@@ -248,7 +247,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
     async def persist_memory() -> None:
         """Snapshot OpenAI-format messages to SQLite after each successful turn."""
-        with Session(get_engine()) as db:
+        with SQLiteSerializingSession(get_engine()) as db:
             chat_service.replace_session_messages(db, chat_session_id, user, memory.get_messages())
 
     async def run_one_turn(user_text: str) -> None:

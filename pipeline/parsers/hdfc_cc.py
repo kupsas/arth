@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 import warnings
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.base import BaseParser
 
@@ -43,6 +45,27 @@ _COL_DEBIT_CREDIT = "debit /credit"   # old: "debit / credit", new: "debit /cred
 _COL_REWARD_OLD = "feature reward points"
 _COL_REWARD_NEW = "rewards"
 
+_CC_LAST4_PATTERNS = (
+    re.compile(r"(?:X{4}\s*){3}(\d{4})", re.I),
+    re.compile(
+        r"(?:Card|CARD)\s*(?:No\.?|Number)?\s*[:\s]*.*?(\d{4})\s*(?:\n|$)",
+        re.S,
+    ),
+)
+
+
+def _hdfc_cc_last4_hint(sample: str) -> str | None:
+    for rx in _CC_LAST4_PATTERNS:
+        m = rx.search(sample)
+        if m:
+            return m.group(1)
+    for line in sample.splitlines()[:40]:
+        if "hdfc" in line.lower() and re.search(r"\b(\d{4})\b", line):
+            m2 = re.search(r"\b(\d{4})\b", line)
+            if m2:
+                return m2.group(1)
+    return None
+
 
 class HDFCCreditCardParser(BaseParser):
     """Parse HDFC credit card statements (single file or full-year directory)."""
@@ -50,6 +73,48 @@ class HDFCCreditCardParser(BaseParser):
     @property
     def source_id(self) -> str:
         return "hdfc_cc"
+
+    @classmethod
+    def detect(cls, file_path: str | Path) -> DetectionResult | None:
+        """HDFC CC CSV: tilde-delimited rows; header row starts with *Transaction type*."""
+        path = Path(file_path)
+        if path.is_dir():
+            csvs = sorted(path.glob("*.csv"))
+            if not csvs:
+                return None
+            path = csvs[0]
+        elif path.suffix.lower() != ".csv":
+            return None
+
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return None
+        first_content = next((ln for ln in lines if ln.strip()), "")
+        if "~" not in first_content and "~|~" not in first_content:
+            return None
+        delimiter = "~|~" if "~|~" in first_content else "~"
+
+        def split_row(raw: str) -> list[str]:
+            return [c.strip() for c in raw.strip().split(delimiter)]
+
+        header_idx = None
+        for i, line in enumerate(lines):
+            cells = split_row(line)
+            if cells and cells[0].lower() == "transaction type":
+                header_idx = i
+                break
+        if header_idx is None:
+            return None
+
+        sample = "\n".join(lines[: min(len(lines), 60)])
+        hint = _hdfc_cc_last4_hint(sample)
+        return DetectionResult(
+            source_type="hdfc_cc",
+            confidence=0.94,
+            account_hint=hint,
+            label=PARSER_LABELS["hdfc_cc"],
+        )
 
     def parse(self, file_path: str | Path) -> list[ParsedTransaction]:
         """Accept either a single .csv file or a directory of monthly .csv files.

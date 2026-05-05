@@ -36,6 +36,7 @@ from typing import Any
 
 import pdfplumber
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.base import BaseParser
 
@@ -60,6 +61,42 @@ class HDFCSavingsPdfParser(BaseParser):
     @property
     def source_id(self) -> str:
         return "hdfc_savings_pdf"
+
+    @classmethod
+    def detect(cls, file_path: str | Path) -> DetectionResult | None:
+        """Combined HDFC savings PDF: relationship summary + savings txn grid."""
+        path = Path(file_path)
+        if path.suffix.lower() != ".pdf" or not path.is_file():
+            return None
+        try:
+            with pdfplumber.open(path) as pdf:
+                inst = cls()
+                if not pdf.pages:
+                    return None
+                ok = False
+                for i in range(min(3, len(pdf.pages))):
+                    t = pdf.pages[i].extract_text() or ""
+                    tl = t.lower()
+                    if "credit card" in tl and "combined" not in tl and "savings account details" not in tl:
+                        continue
+                    if "Combined" in t or "Savings Account Details" in t:
+                        ok = True
+                        break
+                    if "Txn Date" in t and ("Withdrawals" in t or "withdrawal" in tl or "Deposits" in t):
+                        ok = True
+                        break
+                if not ok:
+                    ok = inst._looks_like_combined_statement_pdf(pdf)
+                if not ok:
+                    return None
+        except Exception:
+            return None
+        return DetectionResult(
+            source_type="hdfc_savings_pdf",
+            confidence=0.88,
+            account_hint=None,
+            label=PARSER_LABELS["hdfc_savings_pdf"],
+        )
 
     def parse(self, file_path: str | Path) -> list[ParsedTransaction]:
         path = Path(file_path)

@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.base import BaseParser
 
@@ -27,6 +29,43 @@ class HDFCSavingsParser(BaseParser):
     @property
     def source_id(self) -> str:
         return "hdfc_savings"
+
+    @classmethod
+    def detect(cls, file_path: str | Path) -> DetectionResult | None:
+        """HDFC savings exports are ``.txt`` with comma-separated 7-column rows."""
+        path = Path(file_path)
+        if path.is_dir():
+            txts = list(path.glob("*.txt"))
+            if not txts:
+                return None
+            path = sorted(txts)[0]
+        elif path.suffix.lower() != ".txt":
+            return None
+
+        try:
+            sample = path.read_text(encoding="utf-8", errors="replace")[:12000]
+        except OSError:
+            return None
+        lines = [ln.strip() for ln in sample.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            return None
+        # Skip optional blank line — header often row 2.
+        header_line = lines[1] if len(lines) > 1 and "," in lines[1] else lines[0]
+        hl = header_line.lower()
+        if "date" not in hl or ("narration" not in hl and "transaction" not in hl):
+            return None
+        hint: str | None = None
+        for ln in lines[:25]:
+            m = re.search(r"(?:account|a/c)\s*(?:no\.?|number)\s*[:\s]*(\d{6,})", ln, re.I)
+            if m:
+                hint = m.group(1)[-4:]
+                break
+        return DetectionResult(
+            source_type="hdfc_savings",
+            confidence=0.92,
+            account_hint=hint,
+            label=PARSER_LABELS["hdfc_savings"],
+        )
 
     def parse(self, file_path: str | Path) -> list[ParsedTransaction]:
         """Accept either a single .txt file or a directory of yearly .txt files.

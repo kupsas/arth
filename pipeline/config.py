@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Environment — controls which DB file is used (prod vs test vs onboarding QA)
+# Environment — controls which DB file is used (prod vs test vs onboarding)
 # pytest overrides this via in-memory SQLite, so it doesn't use either file.
 # ---------------------------------------------------------------------------
 APP_ENV: str = os.getenv("APP_ENV", "prod")
@@ -38,7 +38,8 @@ def resolve_db_path(
     2. ``ARTH_DB_NAME`` — **basename only** (slashes stripped); file lives under
        ``<repo_root>/data/`` — e.g. ``ARTH_DB_NAME=arth_onboarding.db``.
     3. ``APP_ENV=test`` → ``data/arth_test.db``.
-    4. ``APP_ENV=onboarding_test`` → ``data/arth_onboarding.db`` (fresh onboarding runs).
+    4. ``APP_ENV=onboarding`` or ``onboarding_test`` → ``data/arth_onboarding.db``
+       (dedicated onboarding SQLite; same file for both env names).
     5. Otherwise → ``data/arth.db``.
 
     Parameters ``arth_db_name`` / ``arth_db_path`` are the raw env string or ``None``
@@ -55,7 +56,7 @@ def resolve_db_path(
         return (data_dir / safe).resolve()
     if app_env == "test":
         return (data_dir / "arth_test.db").resolve()
-    if app_env == "onboarding_test":
+    if app_env in ("onboarding", "onboarding_test"):
         return (data_dir / "arth_onboarding.db").resolve()
     return (data_dir / "arth.db").resolve()
 

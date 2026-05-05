@@ -107,12 +107,12 @@ def verify_credentials(username: str, password: str) -> bool:
     otherwise fall back to ``AUTH_USERNAME`` / ``AUTH_PASSWORD`` from ``.env``.
     """
     try:
-        from sqlmodel import Session, select
+        from sqlmodel import select
 
-        from api.database import get_engine
+        from api.database import SQLiteSerializingSession, get_engine
         from api.models import AppUser
 
-        with Session(get_engine()) as session:
+        with SQLiteSerializingSession(get_engine()) as session:
             user = session.exec(
                 select(AppUser).where(AppUser.username == username)
             ).first()

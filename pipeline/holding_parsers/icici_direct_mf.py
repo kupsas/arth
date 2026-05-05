@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.holding_parsers.base import (
     BaseHoldingParser,
     ParsedHolding,
@@ -183,6 +184,31 @@ class ICICIDirectMFParser(BaseHoldingParser):
     @property
     def source_id(self) -> str:
         return "icici_direct_mf"
+
+    @classmethod
+    def detect(cls, path: str | Path) -> DetectionResult | None:
+        """Quoted MF ledger CSV from ICICI Direct."""
+        p = Path(path)
+        if p.is_dir():
+            for f in sorted(p.glob("*.csv")):
+                hit = cls.detect(f)
+                if hit:
+                    return hit
+            return None
+        if p.suffix.lower() != ".csv":
+            return None
+        peek = strip_bom(p.read_text(encoding="utf-8", errors="replace")[:4096])
+        pl = peek.lower()
+        if ("fund name" in pl or "fundname" in pl) and (
+            "scheme name" in pl or "schemedescription" in pl or "transaction type" in pl
+        ):
+            return DetectionResult(
+                source_type="icici_direct_mf",
+                confidence=0.91,
+                account_hint=None,
+                label=PARSER_LABELS["icici_direct_mf"],
+            )
+        return None
 
     def parse_path(self, path: str | Path) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
         return parse_icici_direct_mf_path(Path(path))

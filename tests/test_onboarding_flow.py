@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import time
 from datetime import date
 from typing import Any
 from unittest.mock import patch
@@ -100,8 +101,7 @@ def test_discover_saves_to_onboarding_state(
                 display_name="T",
                 source_type="savings",
                 email_count_estimate=2,
-                earliest_email_date=date(2020, 1, 1),
-                latest_email_date=date(2020, 6, 1),
+                sample_message_ids=["mid1", "mid2"],
             )
         ]
     )
@@ -114,10 +114,12 @@ def test_discover_saves_to_onboarding_state(
     assert lines[1]["type"] == "found"
     assert lines[1]["index"] == 0
     assert lines[2]["type"] == "done"
+    time.sleep(0.25)
     with Session(engine) as session:  # type: ignore[call-arg]
         row = session.exec(select(OnboardingState).where(OnboardingState.user_id == "flow_user")).first()
         assert row is not None
         assert "a@test.in" in (row.discovery_results_json or "")
+        assert getattr(row, "persist_sources_status", None) == "done"
 
 
 @patch("api.routes.onboarding._gmail_client_connected", return_value=object())
@@ -152,6 +154,34 @@ def test_backfill_endpoint_merges_progress_in_state(
         ).first()
         assert st is not None
         assert "hdfc_savings" in (st.backfill_progress_json or "")
+
+
+@patch("api.routes.onboarding._gmail_client_connected", return_value=object())
+@patch("api.routes.onboarding.run_onboarding_backfill", autospec=True)
+def test_backfill_stream_returns_sse_complete_event(
+    mock_backfill: Any,
+    _g: Any,
+    flow_client: TestClient,
+) -> None:
+    """GET …/stream wraps orchestrator output as SSE (terminal ``complete`` frame)."""
+    sample_progress = {
+        "source": "hdfc_savings",
+        "status": "complete",
+        "emails_found": 2,
+        "emails_processed": 2,
+        "transactions_parsed": 2,
+        "unknowns_pending": 0,
+        "error_message": None,
+        "current_phase": None,
+    }
+    mock_backfill.return_value = type("R", (), {"progress": sample_progress})()
+
+    r = flow_client.get("/api/onboarding/backfill/hdfc_savings/stream")
+    assert r.status_code == 200, r.text
+    assert "text/event-stream" in (r.headers.get("content-type") or "").lower()
+    body = r.text
+    assert "data:" in body
+    assert '"type": "complete"' in body or '"type":"complete"' in body.replace(" ", "")
 
 
 def test_gaps_and_complete_round_trip(
@@ -307,7 +337,7 @@ def test_backfill_progress_reconciles_stale_needs_classification(
     engine: object,
     flow_client: TestClient,
 ) -> None:
-    """GET progress clears ``needs_classification`` when live unknowns are below the pause threshold."""
+    """GET progress clears ``needs_classification`` once the **global** review queue is empty."""
     sk = "hdfc_savings"
     blob = {
         "status": "needs_classification",
@@ -331,18 +361,18 @@ def test_backfill_progress_reconciles_stale_needs_classification(
     with (
         patch(
             "api.routes.onboarding.count_classification_unknowns",
-            return_value=15,
+            return_value=0,
         ),
         patch(
-            "api.routes.onboarding.effective_onboarding_unknown_threshold",
-            return_value=20,
+            "api.routes.onboarding.count_all_classification_unknowns",
+            return_value=0,
         ),
     ):
         r = flow_client.get(f"/api/onboarding/backfill/{sk}/progress")
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["unknowns_pending"] == 15
+    assert body["unknowns_pending"] == 0
     assert body["status"] == "processing_alerts"
     assert body["current_phase"] == "alerts"
 
@@ -352,5 +382,5 @@ def test_backfill_progress_reconciles_stale_needs_classification(
         ).one()
         saved = json.loads(st.backfill_progress_json or "{}")[sk]
         assert saved["status"] == "processing_alerts"
-        assert saved["unknowns_pending"] == 15
+        assert saved["unknowns_pending"] == 0
         assert saved["_pending_alert_ids"] == ["m1", "m2"]

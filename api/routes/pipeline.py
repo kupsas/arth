@@ -16,6 +16,7 @@ import tempfile
 import threading
 import traceback
 from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
@@ -315,114 +316,380 @@ def _run_to_detail(run: PipelineRun) -> PipelineRunDetail:
 # POST /upload  — upload a statement file and auto-run the pipeline
 # ───────────────────────────────────────────────────────────────────────────
 
-class UploadResponse(BaseModel):
-    """Returned immediately when an upload is accepted."""
-    run_id: int
-    source_key: str
+class UploadOption(BaseModel):
+    """One row for type picker or account picker UIs."""
+
+    source_type: str | None = None
+    source_key: str | None = None
+    label: str
+
+
+class UploadStatementResponse(BaseModel):
+    """Structured outcome so the client can branch without guessing HTTP codes."""
+
+    outcome: Literal[
+        "success",
+        "type_picker",
+        "account_picker",
+        "no_match",
+        "no_source",
+        "needs_password",
+    ]
     message: str
+    run_id: int | None = None
+    source_key: str | None = None
+    contact_prompt: bool = False
+    password_invalid: bool = False
+    type_options: list[UploadOption] | None = None
+    account_options: list[UploadOption] | None = None
 
 
-@router.post("/upload", response_model=UploadResponse)
+_DETECT_CONF = 0.72
+
+
+def _dedupe_detection_by_type(results: list[Any]) -> list[Any]:
+    """Keep the strongest confidence per *source_type*."""
+    best: dict[str, Any] = {}
+    for r in results:
+        cur = best.get(r.source_type)
+        if cur is None or r.confidence > cur.confidence:
+            best[r.source_type] = r
+    return list(best.values())
+
+
+@router.post("/upload", response_model=UploadStatementResponse)
 async def upload_statement(
     file: UploadFile = File(...),
-    source_key: str | None = Query(None, description="Force a specific parser key"),
+    source_key: str | None = Query(None, description="Force a specific pipeline source_key after disambiguation"),
+    source_type: str | None = Query(
+        None,
+        description="After type picker: logical parser id (e.g. hdfc_savings_pdf)",
+    ),
     llm_model: str = Query("auto"),
+    pdf_password: str | None = Query(
+        None,
+        description="When the PDF is password-protected: user password (after onboarding/env candidates fail)",
+    ),
     *,
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
-) -> UploadResponse:
-    """Upload a bank statement file and automatically run the pipeline on it.
+) -> UploadStatementResponse:
+    """Upload a bank statement; sniff file **content** to pick the parser + account.
 
-    Auto-detection logic (when source_key is not provided):
-      - Filename contains "1905"       → hdfc_cc_1905
-      - Filename contains "5778"       → hdfc_cc_5778
-      - Filename contains "HDFC" + no CC pattern → hdfc_savings
-      - Filename contains "ICICI"      → icici_savings
-      - Extension is .txt              → hdfc_savings (most common txt format)
-    Pass source_key explicitly to override auto-detection.
-
-    The file is saved temporarily to data/uploads/, the pipeline runs in a
-    background thread, and the temporary file is cleaned up after processing.
+    Flow:
+      1. No ``source_key`` → run detectors → ``success`` | ``type_picker`` |
+         ``account_picker`` | ``no_match`` | ``no_source``.
+      2. User disambiguates → re-upload with ``source_type``, then ``source_key`` if needed.
     """
     from pipeline import config
+    from pipeline.detection import (
+        account_option_label,
+        detect_transaction_file,
+        resolve_transaction_source_key,
+    )
+    from pipeline.parsers import PARSER_REGISTRY
+
+    from pipeline.config import DATA_DIR
+    from pipeline.pdf_upload_unlock import (
+        NeedsPdfPassword,
+        WrongPdfPassword,
+        prepare_upload_pdf_path,
+    )
 
     filename = file.filename or "upload.txt"
-
-    detected_source = source_key or _detect_source_key(filename)
     user_sources = config.get_source_configs(current_user, session)
-    valid_for_user = set(user_sources.keys())
-    if detected_source not in valid_for_user:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Could not auto-detect source from filename {filename!r}. "
-                f"Please specify source_key. Valid options for this user: "
-                f"{sorted(valid_for_user)}"
-            ),
-        )
+    valid_keys = sorted(user_sources.keys())
 
-    # Save the uploaded file to a temp location
-    from pipeline.config import DATA_DIR
     uploads_dir = DATA_DIR / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
     suffix = Path(filename).suffix or ".txt"
-    with tempfile.NamedTemporaryFile(
-        dir=uploads_dir, suffix=suffix, delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(dir=uploads_dir, suffix=suffix, delete=False) as tmp:
         tmp_path = Path(tmp.name)
         shutil.copyfileobj(file.file, tmp)
 
-    logger.info("Upload received: %s → %s (source=%s)", filename, tmp_path.name, detected_source)
+    tmp_kept = False
+    active_file = tmp_path
+    try:
+        if tmp_path.suffix.lower() == ".pdf":
+            try:
+                active_file, _ = prepare_upload_pdf_path(
+                    tmp_path,
+                    session=session,
+                    user_id=current_user,
+                    pdf_password=pdf_password,
+                )
+            except NeedsPdfPassword:
+                return UploadStatementResponse(
+                    outcome="needs_password",
+                    message=(
+                        "This PDF is password-protected. We couldn't unlock it with your saved "
+                        "statement settings — enter the password from the bank (often name + date "
+                        "of birth as printed on the statement cover)."
+                    ),
+                    contact_prompt=False,
+                    password_invalid=False,
+                )
+            except WrongPdfPassword:
+                return UploadStatementResponse(
+                    outcome="needs_password",
+                    message="That password didn't unlock the PDF. Try again.",
+                    contact_prompt=False,
+                    password_invalid=True,
+                )
 
-    # Create a PipelineRun placeholder so we can return the ID immediately
-    run = PipelineRun(
-        source_key=detected_source,
-        llm_model=llm_model,
-        status="running",
+        # ── Explicit source_key (user picked account or retry) ─────────────────
+        if source_key:
+            sk = source_key.strip()
+            if sk not in user_sources:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid source_key {sk!r}. Configured: {valid_keys}",
+                )
+            run = PipelineRun(source_key=sk, llm_model=llm_model, status="running")
+            session.add(run)
+            session.flush()
+            run_id = run.id
+            session.commit()
+            threading.Thread(
+                target=_run_upload_background,
+                args=(run_id, sk, active_file, llm_model, current_user),
+                daemon=True,
+            ).start()
+            tmp_kept = True
+            logger.info("Upload (explicit key): %s → %s (%s)", filename, active_file.name, sk)
+            return UploadStatementResponse(
+                outcome="success",
+                message=f"Import started for {sk}. Poll GET /api/pipeline/runs/{run_id} for status.",
+                run_id=run_id,
+                source_key=sk,
+            )
+
+        raw_results = detect_transaction_file(active_file)
+        strong = [r for r in raw_results if r.confidence >= _DETECT_CONF]
+        if not strong and raw_results:
+            strong = [max(raw_results, key=lambda r: r.confidence)]
+
+        if source_type:
+            st = source_type.strip()
+            strong = [r for r in strong if r.source_type == st]
+            if not strong:
+                return UploadStatementResponse(
+                    outcome="no_match",
+                    message=(
+                        "This file does not look like the statement type you selected. "
+                        "Try another option or send us the file so we can add support."
+                    ),
+                    contact_prompt=True,
+                )
+
+        deduped = _dedupe_detection_by_type(strong)
+        if len(deduped) > 1:
+            return UploadStatementResponse(
+                outcome="type_picker",
+                message="We detected more than one possible statement format. Which one is this file?",
+                type_options=[
+                    UploadOption(source_type=r.source_type, label=r.label) for r in deduped
+                ],
+            )
+
+        if len(deduped) == 0:
+            return UploadStatementResponse(
+                outcome="no_match",
+                message=(
+                    "We couldn't recognise this statement format. It may be a type we have not "
+                    "seen before — please reach out to us and we'll help. Your data was not changed."
+                ),
+                contact_prompt=True,
+            )
+
+        chosen = deduped[0]
+        resolved = resolve_transaction_source_key(
+            source_type=chosen.source_type,
+            account_hint=chosen.account_hint,
+            user_source_keys=valid_keys,
+            parser_registry=PARSER_REGISTRY,
+        )
+
+        if resolved is None:
+            return UploadStatementResponse(
+                outcome="no_source",
+                message=(
+                    f"This looks like {chosen.label}, but you have no matching bank account "
+                    "connected yet. Add the account under pipeline sources, then try again."
+                ),
+            )
+
+        if isinstance(resolved, list):
+            return UploadStatementResponse(
+                outcome="account_picker",
+                message="We matched the file format. Which account should we import into?",
+                account_options=[
+                    UploadOption(source_key=rk, label=account_option_label(rk)) for rk in resolved
+                ],
+            )
+
+        run = PipelineRun(source_key=resolved, llm_model=llm_model, status="running")
+        session.add(run)
+        session.flush()
+        run_id = run.id
+        session.commit()
+        threading.Thread(
+            target=_run_upload_background,
+            args=(run_id, resolved, active_file, llm_model, current_user),
+            daemon=True,
+        ).start()
+        tmp_kept = True
+        logger.info("Upload (auto): %s → %s (%s)", filename, active_file.name, resolved)
+        return UploadStatementResponse(
+            outcome="success",
+            message=(
+                f"Import started for {resolved}. Poll GET /api/pipeline/runs/{run_id} for status."
+            ),
+            run_id=run_id,
+            source_key=resolved,
+        )
+    finally:
+        if not tmp_kept:
+            active_file.unlink(missing_ok=True)
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# POST /upload/holdings  — portfolio PDF/CSV when Gmail had no holdings
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class HoldingUploadResponse(BaseModel):
+    outcome: Literal["success", "type_picker", "no_match", "needs_password"]
+    message: str
+    contact_prompt: bool = False
+    password_invalid: bool = False
+    import_stats: dict[str, Any] | None = None
+    type_options: list[UploadOption] | None = None
+
+
+@router.post("/upload/holdings", response_model=HoldingUploadResponse)
+async def upload_holdings_statement(
+    file: UploadFile = File(...),
+    source_type: str | None = Query(
+        None,
+        description="After type picker: logical holding parser id (e.g. icici_direct_mf_statement_pdf)",
+    ),
+    pdf_password: str | None = Query(
+        None,
+        description="Password for encrypted portfolio PDFs (after saved/env candidates)",
+    ),
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> HoldingUploadResponse:
+    """Upload a portfolio CSV/PDF; content sniff routes to the correct holding ingest."""
+    from pipeline.config import DATA_DIR
+    from pipeline.detection import detect_holding_file
+    from pipeline.holding_upload_ingest import ingest_portfolio_file
+    from pipeline.pdf_upload_unlock import (
+        NeedsPdfPassword,
+        WrongPdfPassword,
+        prepare_upload_pdf_path,
     )
-    session.add(run)
-    session.flush()
-    run_id = run.id
-    session.commit()
 
-    # Kick off background processing
-    thread = threading.Thread(
-        target=_run_upload_background,
-        args=(run_id, detected_source, tmp_path, llm_model, current_user),
-        daemon=True,
-    )
-    thread.start()
+    filename = file.filename or "upload.pdf"
+    uploads_dir = DATA_DIR / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(filename).suffix or ".pdf"
+    with tempfile.NamedTemporaryFile(dir=uploads_dir, suffix=suffix, delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+        shutil.copyfileobj(file.file, tmp)
 
-    return UploadResponse(
-        run_id=run_id,
-        source_key=detected_source,
-        message=(
-            f"Upload accepted for {detected_source}. "
-            f"Poll GET /api/pipeline/runs/{run_id} for status."
-        ),
-    )
+    active_file = tmp_path
+    try:
+        if tmp_path.suffix.lower() == ".pdf":
+            try:
+                active_file, _ = prepare_upload_pdf_path(
+                    tmp_path,
+                    session=session,
+                    user_id=current_user,
+                    pdf_password=pdf_password,
+                )
+            except NeedsPdfPassword:
+                return HoldingUploadResponse(
+                    outcome="needs_password",
+                    message=(
+                        "This PDF is password-protected. Enter the password from your broker/bank "
+                        "(we already tried your saved statement secrets)."
+                    ),
+                    password_invalid=False,
+                )
+            except WrongPdfPassword:
+                return HoldingUploadResponse(
+                    outcome="needs_password",
+                    message="That password didn't unlock the PDF. Try again.",
+                    password_invalid=True,
+                )
 
+        raw = detect_holding_file(active_file)
+        strong = [r for r in raw if r.confidence >= _DETECT_CONF]
+        if not strong and raw:
+            strong = [max(raw, key=lambda r: r.confidence)]
 
-def _detect_source_key(filename: str) -> str:
-    """Infer the parser source_key from the uploaded filename.
+        if source_type:
+            st = source_type.strip()
+            strong = [r for r in strong if r.source_type == st]
+            if not strong:
+                return HoldingUploadResponse(
+                    outcome="no_match",
+                    message=(
+                        "This file doesn't match the portfolio statement type you picked. "
+                        "Try another or contact us with a sample."
+                    ),
+                    contact_prompt=True,
+                )
 
-    Returns "unknown" if no pattern matches so the caller can raise a 400.
-    """
-    name_upper = filename.upper()
-    if "1905" in name_upper:
-        return "hdfc_cc_1905"
-    if "5778" in name_upper:
-        return "hdfc_cc_5778"
-    # Check for HDFC (not credit card) — savings account statement
-    if "HDFC" in name_upper:
-        return "hdfc_savings"
-    if "ICICI" in name_upper:
-        return "icici_savings"
-    # .txt is almost always HDFC savings in this setup
-    if filename.lower().endswith(".txt"):
-        return "hdfc_savings"
-    return "unknown"
+        deduped = _dedupe_detection_by_type(strong)
+        if len(deduped) > 1:
+            return HoldingUploadResponse(
+                outcome="type_picker",
+                message="We found multiple possible portfolio formats. Which one is this file?",
+                type_options=[
+                    UploadOption(source_type=r.source_type, label=r.label) for r in deduped
+                ],
+            )
+
+        if len(deduped) == 0:
+            return HoldingUploadResponse(
+                outcome="no_match",
+                message=(
+                    "We couldn't recognise this portfolio file. Please reach out — "
+                    "we can add support. Nothing was imported."
+                ),
+                contact_prompt=True,
+            )
+
+        chosen = deduped[0].source_type
+        stats = ingest_portfolio_file(
+            path=active_file,
+            source_type=chosen,
+            user_id=current_user,
+            session=session,
+        )
+        session.commit()
+        return HoldingUploadResponse(
+            outcome="success",
+            message=f"Imported using {chosen}.",
+            import_stats=stats,
+        )
+    except ValueError as ve:
+        session.rollback()
+        return HoldingUploadResponse(
+            outcome="no_match",
+            message=str(ve),
+            contact_prompt=True,
+        )
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        active_file.unlink(missing_ok=True)
 
 
 def _run_upload_background(
@@ -464,6 +731,8 @@ def _run_upload_background(
         try:
             source_cfgs = config.get_source_configs(user_id, session)
             source_cfg = source_cfgs[source_key]
+            # Same label as email/CLI imports — not the upload tempfile basename (tmpx….csv).
+            statement_src = source_cfg["source_statement"]
             parser_cls = PARSER_REGISTRY[source_key]
             parser = parser_cls()
 
@@ -472,7 +741,7 @@ def _run_upload_background(
                 parsed,
                 account_id=source_cfg["account_id"],
                 currency=source_cfg.get("currency", "INR"),
-                source_statement=input_file.name,
+                source_statement=statement_src,
             )
             ucfg = pipeline_config_for_account_owner(session, source_cfg["account_id"])
             classify_rules(canonical, ucfg)
@@ -500,7 +769,7 @@ def _run_upload_background(
                     txn_date=txn.txn_date,
                     account_id=txn.account_id,
                     user_id=row_uid,
-                    source_statement=input_file.name,
+                    source_statement=statement_src,
                     direction=txn.direction.value,
                     amount=float(txn.amount),
                     currency=txn.currency,

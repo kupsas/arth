@@ -24,6 +24,7 @@ from typing import Any
 import pdfplumber
 
 from api.services.price_feed import canonical_nse_symbol
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.holding_parsers.base import ParsedInvestmentTxn
 from pipeline.holding_parsers.icici_direct_equity import resolve_icici_direct_nse_symbol
 from pipeline.models import InvestmentTxnType
@@ -540,3 +541,32 @@ def parse_icici_direct_trade_pdf(
     if aggregate:
         rows = aggregate_icici_direct_trades(rows)
     return rows
+
+
+def detect_icici_contract_note_pdf(path: str | Path) -> DetectionResult | None:
+    """NSE / ICICI contract-note style PDF with Symbol × Buy/Sell × Quantity grid."""
+    p = Path(path)
+    if p.suffix.lower() != ".pdf" or not p.is_file():
+        return None
+    try:
+        text = _extract_all_text(p)[:18_000]
+    except Exception:
+        return None
+    tl = text.lower()
+    # Distinctive vs equity transaction statement: mailers often say Trades executed / NSE.
+    strong = (
+        "trades executed" in tl
+        or "capital market" in tl
+        or ("contract" in tl and "nse" in tl)
+        or ("trade no" in tl and "symbol" in tl)
+    )
+    if not strong:
+        return None
+    if "symbol" in tl and ("buy" in tl or "sell" in tl) and "quantity" in tl:
+        return DetectionResult(
+            source_type="icici_direct_contract_note",
+            confidence=0.85,
+            account_hint=None,
+            label=PARSER_LABELS["icici_direct_contract_note"],
+        )
+    return None

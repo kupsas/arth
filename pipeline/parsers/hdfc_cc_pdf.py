@@ -38,6 +38,7 @@ from typing import Literal
 
 import pdfplumber
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.base import BaseParser
 from pipeline.parsers.hdfc_cc import HDFCCreditCardParser
@@ -61,12 +62,56 @@ _LEGACY_DATE_LINE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(.+)$")
 _CC_SECTION = Literal["domestic", "international"]
 
 
+_CC_NUM_HINT = re.compile(
+    r"(?:Credit\s*Card|CARD)\s*(?:No\.?|Number)?\s*[^\d\n]*(\d{4})(?:\D|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 class HDFCCreditCardPdfParser(BaseParser):
     """Parse one monthly HDFC CC statement PDF into :class:`ParsedTransaction` rows."""
 
     @property
     def source_id(self) -> str:
         return "hdfc_cc_pdf"
+
+    @classmethod
+    def detect(cls, file_path: str | Path) -> DetectionResult | None:
+        """HDFC credit card statement PDF: *Credit Card* in header + txn date lines."""
+        path = Path(file_path)
+        if path.suffix.lower() != ".pdf" or not path.is_file():
+            return None
+        try:
+            with pdfplumber.open(path) as pdf:
+                if not pdf.pages:
+                    return None
+                chunks: list[str] = []
+                for i in range(min(3, len(pdf.pages))):
+                    chunks.append(pdf.pages[i].extract_text() or "")
+                text = "\n".join(chunks)
+        except Exception:
+            return None
+        tl = text.lower()
+        if "credit card" not in tl and not ("hdfc" in tl and "card" in tl):
+            return None
+        if "hdfc" not in tl and "hdfc" not in path.name.lower():
+            return None
+        hint: str | None = None
+        m = _CC_NUM_HINT.search(text)
+        if m:
+            hint = m.group(1)
+        has_pipe_txn = bool(re.search(r"\d{2}/\d{2}/\d{4}\s*\|", text))
+        flat = re.sub(r"[\r\n]+", " ", text[:12000])
+        has_legacy = bool(re.search(r"\d{2}/\d{2}/\d{4}\s+[A-Za-z]", flat))
+        if not has_pipe_txn and not has_legacy:
+            if "domestic" not in tl and "international" not in tl and "outstanding" not in tl:
+                return None
+        return DetectionResult(
+            source_type="hdfc_cc_pdf",
+            confidence=0.9,
+            account_hint=hint,
+            label=PARSER_LABELS["hdfc_cc_pdf"],
+        )
 
     def parse(self, file_path: str | Path) -> list[ParsedTransaction]:
         """Read *file_path* (decrypted PDF) and return all card transactions."""

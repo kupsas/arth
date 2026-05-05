@@ -4,7 +4,7 @@
 "use client"
 
 import { useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query"
-import { fetchOnboardingGaps } from "@/lib/api"
+import { fetchHoldingsCoverage, fetchOnboardingGaps } from "@/lib/api"
 import type { OnboardingGapsResponse } from "@/lib/types"
 
 export const onboardingGapsKey = ["onboarding", "gaps"] as const
@@ -16,6 +16,19 @@ export function useOnboardingGaps(
     queryKey: [...onboardingGapsKey],
     queryFn: () => fetchOnboardingGaps(),
     staleTime: 30_000,
+    ...options,
+  })
+}
+
+export const holdingsCoverageKey = ["onboarding", "holdings-coverage"] as const
+
+export function useHoldingsCoverage(
+  options?: Partial<UseQueryOptions<{ has_holding_data: boolean }>>,
+) {
+  return useQuery<{ has_holding_data: boolean }>({
+    queryKey: [...holdingsCoverageKey],
+    queryFn: () => fetchHoldingsCoverage(),
+    staleTime: 60_000,
     ...options,
   })
 }
