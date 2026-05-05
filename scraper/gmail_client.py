@@ -36,6 +36,8 @@ import base64
 import datetime
 import html
 import logging
+import os
+import threading
 import webbrowser
 import wsgiref.simple_server
 import wsgiref.util
@@ -49,7 +51,14 @@ from google_auth_oauthlib.flow import InstalledAppFlow, WSGITimeoutError
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from scraper.config import GMAIL_CREDENTIALS_PATH, GMAIL_SCOPES, GMAIL_TOKEN_PATH
+from scraper.config import (
+    GMAIL_CREDENTIALS_PATH,
+    GMAIL_OAUTH_BIND_HOST,
+    GMAIL_OAUTH_CALLBACK_PORT,
+    GMAIL_OAUTH_REDIRECT_HOST,
+    GMAIL_SCOPES,
+    GMAIL_TOKEN_PATH,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +177,72 @@ def _run_oauth_local_server_with_tab_title(
     return flow.credentials
 
 
+def start_gmail_oauth_return_auth_url() -> tuple[str, threading.Thread]:
+    """Run desktop OAuth in a daemon thread; return the Google **authorization URL** immediately.
+
+    The dashboard should open the URL in the user's browser (``window.open``). The thread
+    listens on ``GMAIL_OAUTH_BIND_HOST:GMAIL_OAUTH_CALLBACK_PORT`` for Google's redirect,
+    exchanges the code, and writes ``GMAIL_TOKEN_PATH``. Does **not** call ``webbrowser.open``.
+    """
+    if not GMAIL_CREDENTIALS_PATH.exists():
+        raise FileNotFoundError(
+            f"Gmail credentials not found at {GMAIL_CREDENTIALS_PATH}.\n"
+            "The repo normally ships this file; if you deleted it, restore it from Git "
+            "or add your own Desktop OAuth client JSON from Google Cloud Console."
+        )
+
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(GMAIL_CREDENTIALS_PATH), GMAIL_SCOPES
+    )
+    wsgi_app = _OAuthSuccessHtmlApp(
+        "The authentication flow has completed. You may close this window.",
+        "Authentication complete",
+    )
+    wsgiref.simple_server.WSGIServer.allow_reuse_address = False
+    local_server = wsgiref.simple_server.make_server(
+        GMAIL_OAUTH_BIND_HOST,
+        GMAIL_OAUTH_CALLBACK_PORT,
+        wsgi_app,
+        handler_class=_OAuthLocalRequestHandler,
+    )
+    redirect_uri = f"http://{GMAIL_OAUTH_REDIRECT_HOST}:{GMAIL_OAUTH_CALLBACK_PORT}/"
+    flow.redirect_uri = redirect_uri
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+
+    def _worker() -> None:
+        try:
+            local_server.timeout = None
+            local_server.handle_request()
+            try:
+                authorization_response = wsgi_app.last_request_uri.replace(
+                    "http", "https",
+                )
+            except AttributeError as e:
+                raise WSGITimeoutError(
+                    "Timed out waiting for response from authorization server"
+                ) from e
+            flow.fetch_token(authorization_response=authorization_response)
+            GMAIL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+            GMAIL_TOKEN_PATH.write_text(flow.credentials.to_json())
+            try:
+                os.chmod(GMAIL_TOKEN_PATH, 0o600)
+            except OSError:
+                pass
+            logger.info("Gmail OAuth completed — token saved to %s", GMAIL_TOKEN_PATH)
+        except Exception:
+            logger.exception("Gmail OAuth flow failed")
+        finally:
+            local_server.server_close()
+
+    thread = threading.Thread(target=_worker, daemon=True, name="gmail-oauth-url")
+    thread.start()
+    return auth_url, thread
+
+
 class GmailReauthRequiredError(Exception):
     """Raised when the saved refresh token is dead and OAuth must be done again.
 
@@ -231,8 +306,8 @@ class GmailClient:
         if not GMAIL_CREDENTIALS_PATH.exists():
             raise FileNotFoundError(
                 f"Gmail credentials not found at {GMAIL_CREDENTIALS_PATH}.\n"
-                "Download credentials.json from GCP Console → APIs & Services → "
-                "Credentials and save it to data/gmail_credentials.json."
+                "The repo normally ships this file; if you deleted it, restore it from Git "
+                "or add your own Desktop OAuth client JSON from Google Cloud Console."
             )
 
         creds: Credentials | None = None

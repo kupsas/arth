@@ -1,43 +1,42 @@
-# Ingestion paths — declared hierarchy (DESKTOP_PREREQS item 7)
+# How money gets **into** Arth
 
-**Policy:** **Gmail / email scraping is the primary path** for ongoing ingestion. **File-based pipeline** (`pipeline.run`, API upload, `holding_pipeline` CLI) is the **explicit fallback** for gaps email cannot cover, historical migration, or recovery.
+**Plain rule:** For month-to-month life, **Gmail is the main lane** — alerts and statement PDFs we recognise. **Uploads and file imports** are the **backup** when mail is silent, incomplete, or you’re migrating old folders.
 
-Reconciliation when two paths describe the same real-world transaction is implemented in [`pipeline/db_writer.py`](../../pipeline/db_writer.py). See [`scraper/README.md`](../../scraper/README.md#how-reconciliation-works).
-
----
-
-## Bank transactions (`transactions` table)
-
-| Source key | Primary (email) | Fallback (files) | Parser modules (email vs file) |
-|------------|-----------------|------------------|--------------------------------|
-| `hdfc_savings` | InstaAlerts + combined statement PDFs from Gmail | Yearly `.txt` under configured dirs via `user_pipeline_sources.statement_folder` + [`pipeline/config.py`](../../pipeline/config.py) `DATA_DIR` | `scraper/email_parsers/hdfc_bank.py`, `hdfc_statement.py` vs `pipeline/parsers/hdfc_savings.py` |
-| `hdfc_cc_*` | InstaAlerts + CC statement PDF emails | Monthly CSV dirs via `user_pipeline_sources` | `hdfc_cc_statement.py` vs `pipeline/parsers/hdfc_cc.py` |
-| `icici_savings` | InstaAlerts + monthly/annual statement PDFs | Yearly PDF dirs via `user_pipeline_sources` | `icici_bank.py`, `icici_statement.py` vs `pipeline/parsers/icici_savings.py` |
-
-**Operational note:** Use `run_historical_backfill` or [`scripts/scrape_historical.py`](../../scripts/scrape_historical.py) for multi-year Gmail sweeps instead of legacy per-bank backfill scripts.
+Matching logic when the **same** spend appears twice (mail + statement) lives in `[pipeline/db_writer.py](../pipeline/db_writer.py)`. Human-readable story: `[scraper/README.md](../scraper/README.md)`.
 
 ---
 
-## Holdings and investment transactions
+## Everyday bank transactions
 
-| Asset / flow | Paths | Notes |
-|--------------|-------|--------|
-| **ICICI PPF** | Annual statement PDF (email → `icici_ppf_pdf.py`) vs CSV export (`icici_ppf.py`, `holding_pipeline --source icici_ppf`) | **Complementary:** annual PDF is authoritative for FY-shaped data in-mail; CSV is useful for bulk import when email is unavailable. Avoid overlapping periods without dedup awareness. |
-| **ICICI Direct equity** | Full portfolio CSV (`icici_direct_equity`) vs NSE “Trades executed” PDF emails (`icici_direct_contract_note.py`) | **Complementary:** CSV for positions/cost snapshot; NSE PDFs for per-fill execution. Linking uses `investment_txn_linking`; avoid double-counting fills. |
 
----
+| Source        | Prefer (ongoing)             | When files win                      |
+| ------------- | ---------------------------- | ----------------------------------- |
+| HDFC savings  | Mail alerts + PDFs we parse  | Yearly `.txt` or configured folders |
+| HDFC cards    | Mail alerts + CC PDFs        | Monthly CSV exports you drop in     |
+| ICICI savings | Mail alerts + statement PDFs | PDF / export folders you configure  |
 
-## Entry points (quick reference)
 
-| Mechanism | Where | Role |
-|-----------|--------|------|
-| Scheduled + manual scrape | `scraper/orchestrator.scrape_new_emails`, APScheduler, `POST /api/scraper/trigger` | Incremental email |
-| Historical window | `run_historical_backfill`, `POST /api/scraper/backfill`, `scripts/scrape_historical.py` | Date-bounded Gmail import |
-| File pipeline | `python -m pipeline.run`, `POST /api/pipeline/run`, `POST /api/pipeline/upload` | Statement files on disk / upload |
-| Holdings / liabilities | `pipeline/holding_pipeline.py` CLI | Broker exports, PPF CSV, NPS, etc. |
+“Which parser?” — mail-side pieces live under `scraper/email_parsers/`; file-side readers under `pipeline/parsers/`. Contributors wire **both** when a bank splits across channels.
+
+**Big historical Gmail catch-up:** use backfill (`POST /api/scraper/backfill`) or `scripts/scrape_historical.py` instead of one-off legacy scripts per bank.
 
 ---
 
-## PDF passwords
+## Holdings & broker-style flows
 
-Logical kinds and env-var chains are centralized in [`scraper/pdf_passwords.py`](../../scraper/pdf_passwords.py). Setup-wizard (DOB/PAN) derivation can plug in without new scattered `getenv` calls in each parser.
+Some investments arrive only as **broker exports** or **statement PDFs**; mail may complement or duplicate. Treat overlapping periods carefully — follow notes in code / hooks when both paths exist for the same FY.
+
+---
+
+## Ways to trigger an import
+
+
+| You…                          | What runs               |
+| ----------------------------- | ----------------------- |
+| Leave the server on           | Scheduled Gmail passes  |
+| Tap “fetch now” / API         | One mail cycle          |
+| Choose a date window          | Historical mail import  |
+| Upload in **Settings** or CLI | File readers + pipeline |
+
+
+Holdings-specific CLIs use `holding_pipeline.py` — see `[pipeline/README.md](../pipeline/README.md)`.

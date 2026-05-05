@@ -13,7 +13,9 @@ import { useQueryClient } from "@tanstack/react-query"
 import { Link2, Pencil, Trash2 } from "lucide-react"
 
 import { UploadButton } from "@/components/dashboard/upload-button"
+import { OnboardingOptionalLlmKeys } from "@/components/onboarding/onboarding-optional-llm-keys"
 import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard"
+import { AgentChatLlmSettings } from "@/components/settings/agent-chat-llm-settings"
 import { ReminderExamplePicker } from "@/components/settings/reminder-example-picker"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -243,6 +245,10 @@ export default function SettingsPage() {
           </div>
         </SheetContent>
       </Sheet>
+
+      <OnboardingOptionalLlmKeys />
+
+      <AgentChatLlmSettings />
 
       <Card>
         <CardHeader>

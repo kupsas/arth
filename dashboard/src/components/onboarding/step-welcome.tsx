@@ -123,9 +123,15 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
       })
       const t = await res.text()
       if (!res.ok) {
-        // FastAPI may return { detail: ... } — userMessageFromApiResponseBody flattens it
         setError(userMessageFromApiResponseBody(t) || "Couldn't start sign-in. Try again.")
         return
+      }
+      const payload = (JSON.parse(t || "{}") ?? {}) as {
+        status?: string
+        auth_url?: string
+      }
+      if (payload.auth_url) {
+        window.open(payload.auth_url, "_blank", "noopener,noreferrer")
       }
       // Start lightweight auto-checks after OAuth launch; primary button shows poll spinner.
       setConnectingDotCount(3)
@@ -186,8 +192,7 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
         <CardDescription>
           Arth reads <strong>bank alert emails</strong> you already get (HDFC, ICICI, etc.) to build
           your ledger. Your data stays on this computer — we do not send your mail to analytics
-          services. Use the button below to sign in with Google in your browser, then come back
-          here.
+          services. Tap the button below, then complete Google sign-in in the new tab and return here.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -228,7 +233,7 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
           )}
         </Button>
         <p className="text-xs text-muted-foreground">
-          Complete the Google sign-in window, then return to this page.
+          After you tap Allow in Google, return to this tab — we detect the connection automatically.
         </p>
         <Button
           type="button"

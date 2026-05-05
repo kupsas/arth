@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
+from api.constants import DEFAULT_LOCAL_USER
 from scraper.config import BANK_SENDERS
 from scraper.email_router import _normalise_sender
 
@@ -32,7 +33,7 @@ def get_bank_senders_config(session: Session, user_id: str) -> BankSendersConfig
     """
     from api.models import ScraperAccountMapping, ScraperBankSender
 
-    uid = (user_id or "").strip() or "sashank"
+    uid = (user_id or "").strip() or DEFAULT_LOCAL_USER
 
     senders = session.exec(
         select(ScraperBankSender).where(ScraperBankSender.user_id == uid)

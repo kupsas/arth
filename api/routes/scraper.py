@@ -11,7 +11,7 @@ Endpoints:
   POST  /stop          — pause the scheduler
   PATCH /config        — change the polling interval
   GET   /emails        — list processed emails (paginated, filterable)
-  POST  /oauth/init    — kick off Gmail OAuth2 flow (opens browser)
+  POST  /oauth/init    — kick off Gmail OAuth2 flow (returns ``auth_url`` for the browser)
   GET   /oauth/status  — is Gmail authenticated?
   GET   /coverage      — which accounts have real-time email coverage
 """
@@ -30,7 +30,7 @@ from sqlmodel import Session, col, select
 from api.auth import get_current_user
 from api.database import SQLiteSerializingSession, get_engine, get_session
 from api.models import ProcessedEmail
-from scraper.config import GMAIL_TOKEN_PATH
+from scraper.config import GMAIL_CREDENTIALS_PATH, GMAIL_TOKEN_PATH
 from scraper.config_loader import all_sender_emails, get_bank_senders_config
 from scraper.orchestrator import run_historical_backfill
 from scraper.scheduler import (
@@ -45,6 +45,8 @@ from scraper.scheduler import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_oauth_flow_busy = threading.Event()
 
 
 # ─── Request / response schemas ───────────────────────────────────────────────
@@ -318,11 +320,10 @@ def list_processed_emails(
 def oauth_init():
     """Start the Gmail OAuth2 flow.
 
-    This opens a browser window on the machine running the API server with
-    Google's consent screen.  After you click "Allow", the token is saved to
-    data/gmail_token.json and the scheduler is automatically activated.
+    Returns ``auth_url`` — open it in the user's browser (same machine). After Google
+    redirects to the local callback port, the token is saved and the scheduler resumes.
 
-    Check GET /api/scraper/oauth/status to confirm authentication completed.
+    Poll GET /api/scraper/oauth/status to confirm completion.
 
     If Gmail is already authenticated, returns a message saying so (no-op).
     """
@@ -332,33 +333,61 @@ def oauth_init():
             "message": "Gmail is already connected on this device. You can continue in the setup steps.",
         }
 
-    def _run_oauth_flow() -> None:
-        """Execute the full OAuth flow in a background thread.
+    if not GMAIL_CREDENTIALS_PATH.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Gmail OAuth client file is missing at data/gmail_credentials.json. "
+                "Restore it from the repo or add your own Desktop OAuth client JSON."
+            ),
+        )
 
-        This must run in a thread because InstalledAppFlow.run_local_server()
-        starts a temporary HTTP server and blocks until the browser redirect
-        callback arrives — it can't run on the FastAPI event loop.
-        """
+    if _oauth_flow_busy.is_set():
+        raise HTTPException(
+            status_code=409,
+            detail="Another Gmail sign-in is already in progress. Finish or close that window first.",
+        )
+
+    try:
+        from scraper.gmail_client import start_gmail_oauth_return_auth_url
+
+        _oauth_flow_busy.set()
+        auth_url, worker = start_gmail_oauth_return_auth_url()
+    except FileNotFoundError as exc:
+        _oauth_flow_busy.clear()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OSError as exc:
+        _oauth_flow_busy.clear()
+        logger.warning("Gmail OAuth bind failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not start the local sign-in helper — often the OAuth callback port is "
+                f"already in use. Stop the other process or set ARTH_GMAIL_OAUTH_CALLBACK_PORT. ({exc})"
+            ),
+        ) from exc
+
+    def _finalize() -> None:
         try:
-            from scraper.gmail_client import GmailClient
-            logger.info("Starting Gmail OAuth flow (browser will open)...")
-            client = GmailClient()
-            client.authenticate()
-            logger.info("Gmail OAuth completed — token saved, activating scheduler")
-            note_gmail_reconnected()
-            # Now that the token exists, activate the scheduler
-            resume_scheduler()
-        except Exception as exc:
-            logger.error("Gmail OAuth flow failed: %s", exc)
+            worker.join(timeout=600)
+        finally:
+            _oauth_flow_busy.clear()
+            if GMAIL_TOKEN_PATH.exists():
+                try:
+                    logger.info("Gmail OAuth completed — token saved, activating scheduler")
+                    note_gmail_reconnected()
+                    resume_scheduler()
+                except Exception:
+                    logger.exception("Post-Gmail-OAuth scheduler resume failed")
 
-    thread = threading.Thread(target=_run_oauth_flow, daemon=True, name="gmail-oauth")
-    thread.start()
+    threading.Thread(target=_finalize, daemon=True, name="gmail-oauth-finalize").start()
 
     return {
         "status": "oauth_started",
+        "auth_url": auth_url,
         "message": (
-            "A browser window will open shortly with Google’s sign-in. After you tap "
-            "“Allow,” come back to this app — the next step will look for your bank emails."
+            "Use “Open Google sign-in” in your browser to approve access. After you tap "
+            "“Allow,” come back here — the next step will look for your bank emails."
         ),
     }
 

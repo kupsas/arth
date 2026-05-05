@@ -7,9 +7,9 @@ with env ``ARTH_ACCOUNT_USER_MAP`` (JSON object: account_id -> user_id).
 
 Example::
 
-    export ARTH_ACCOUNT_USER_MAP='{"HDFC_SAL_3703":"sashank","ICICI_SAV_9999":"aditi"}'
+    export ARTH_ACCOUNT_USER_MAP='{"HDFC_SAL_3703":"local","ICICI_SAV_9999":"partner"}'
 
-When unmapped, accounts default to ``sashank`` (single-user / legacy behaviour).
+When unmapped, accounts default to ``local`` (single-user open-source default).
 
 Tests can call :func:`register_account_for_user` to bind accounts without env vars.
 """
@@ -21,12 +21,14 @@ import logging
 import os
 from typing import TYPE_CHECKING, Final
 
+from api.constants import DEFAULT_LOCAL_USER
+
 if TYPE_CHECKING:
     from sqlmodel import Session
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_USER: Final[str] = "sashank"
+_DEFAULT_USER: Final[str] = DEFAULT_LOCAL_USER
 
 # Test-only overrides (cleared between tests if needed).
 _test_overrides: dict[str, str] = {}

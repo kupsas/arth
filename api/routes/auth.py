@@ -1,7 +1,7 @@
 """
 Authentication routes — login, logout, session status.
 
-POST /api/auth/login   → verify credentials, set session cookie
+POST /api/auth/login   → set session cookie (local install; no password check)
 POST /api/auth/logout  → clear session cookie
 GET  /api/auth/me      → return current user info (requires valid session)
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 
 from api.auth import (
@@ -25,8 +25,8 @@ from api.auth import (
     SESSION_MAX_AGE,
     create_session_token,
     get_current_user,
-    verify_credentials,
 )
+from api.constants import DEFAULT_LOCAL_USER
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -52,31 +52,20 @@ class AuthStatusResponse(BaseModel):
 
 @router.post("/login", response_model=AuthStatusResponse)
 def login(body: LoginRequest, response: Response) -> AuthStatusResponse:
-    """Verify credentials and issue a session cookie.
-
-    On success: sets an httpOnly "arth_session" cookie and returns 200.
-    On failure: returns 401 — same error for wrong username OR wrong password
-    (no information leakage about which field was wrong).
-    """
-    if not verify_credentials(body.username, body.password):
-        logger.warning("Failed login attempt for username: %r", body.username)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Hmm, wrong username or password. Give it another shot.",
-        )
-
-    token = create_session_token(body.username)
+    """Issue a session cookie for the local install (password is not validated)."""
+    _ = body
+    token = create_session_token(DEFAULT_LOCAL_USER)
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
         max_age=SESSION_MAX_AGE,
-        httponly=True,       # not readable by JavaScript
-        samesite="lax",      # safe for same-site cross-port (localhost:3000 → localhost:8000)
-        secure=False,        # localhost only; flip to True for HTTPS
+        httponly=True,
+        samesite="lax",
+        secure=False,
         path="/",
     )
-    logger.info("Successful login for user: %r", body.username)
-    return AuthStatusResponse(authenticated=True, username=body.username)
+    logger.info("Session cookie issued for local user")
+    return AuthStatusResponse(authenticated=True, username=DEFAULT_LOCAL_USER)
 
 
 @router.post("/logout", response_model=AuthStatusResponse)

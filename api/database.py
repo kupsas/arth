@@ -21,6 +21,7 @@ from pathlib import Path
 from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine
 
+from api.constants import DEFAULT_LOCAL_USER
 from pipeline.config import DB_PATH, REPO_ROOT
 
 logger = logging.getLogger(__name__)
@@ -526,13 +527,19 @@ def _apply_sqlite_patches() -> None:
         if not _column_exists(conn, "recurring_patterns", "user_id"):
             conn.execute(
                 text(
-                    "ALTER TABLE recurring_patterns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'sashank'"
+                    f"ALTER TABLE recurring_patterns ADD COLUMN user_id TEXT NOT NULL DEFAULT '{DEFAULT_LOCAL_USER}'"
                 )
             )
         conn.execute(
             text(
-                "UPDATE recurring_patterns SET user_id = 'sashank' "
+                f"UPDATE recurring_patterns SET user_id = '{DEFAULT_LOCAL_USER}' "
                 "WHERE user_id IS NULL OR TRIM(user_id) = ''"
+            )
+        )
+        conn.execute(
+            text(
+                f"UPDATE recurring_patterns SET user_id = '{DEFAULT_LOCAL_USER}' "
+                "WHERE user_id = 'sashank'"
             )
         )
         if not _index_exists(conn, "uq_recurring_pattern_user_cp_dir_freq"):
@@ -614,7 +621,10 @@ def _chmod_owner_rw_only(path: Path) -> None:
 
 
 def _seed_desktop_prereq_defaults() -> None:
-    """Seed app_users + scraper config from env / scraper.config when tables are empty."""
+    """Seed app_users + scraper config when tables are empty.
+
+    Auth is disabled for local installs — ``password_hash`` is a placeholder that is never checked.
+    """
     import bcrypt
     from sqlmodel import select
 
@@ -625,25 +635,22 @@ def _seed_desktop_prereq_defaults() -> None:
     try:
         with SQLiteSerializingSession(_engine) as session:
             if session.exec(select(AppUser)).first() is None:
-                raw_user = (os.getenv("AUTH_USERNAME") or "sashank").strip()
-                raw_pw = (os.getenv("AUTH_PASSWORD") or "").strip()
-                if raw_pw:
-                    pw_hash = bcrypt.hashpw(
-                        raw_pw.encode("utf-8"),
-                        bcrypt.gensalt(rounds=12),
-                    ).decode("ascii")
-                    session.add(
-                        AppUser(
-                            username=raw_user,
-                            password_hash=pw_hash,
-                            setup_completed_at=None,
-                        )
+                pw_hash = bcrypt.hashpw(
+                    b"arth-local-no-password-v1",
+                    bcrypt.gensalt(rounds=12),
+                ).decode("ascii")
+                session.add(
+                    AppUser(
+                        username=DEFAULT_LOCAL_USER,
+                        password_hash=pw_hash,
+                        setup_completed_at=None,
                     )
-                    session.commit()
-                    logger.info("Seeded default app_users row for %r", raw_user)
+                )
+                session.commit()
+                logger.info("Seeded default app_users row for %r", DEFAULT_LOCAL_USER)
 
             if session.exec(select(ScraperBankSender)).first() is None:
-                uid = (os.getenv("AUTH_USERNAME") or "sashank").strip()
+                uid = DEFAULT_LOCAL_USER
                 mid = self_member_id(session, uid)
                 for sender_email, cfg in BANK_SENDERS.items():
                     pk = cfg.get("parser_key")

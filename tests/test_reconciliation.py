@@ -575,7 +575,8 @@ class TestB2bPdfSkipsWhenInstaAlertExists:
         alert = Transaction(
             txn_date=d,
             account_id="HDFC_SAL_3703",
-            user_id="sashank",
+            # Must match :func:`user_id_for_account` for this account (open-source default: local).
+            user_id="local",
             amount=2000.0,
             direction="INFLOW",
             raw_description="UPI: abhignya2410-1@okaxis BARU ABHIGNYA",

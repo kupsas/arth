@@ -27,6 +27,9 @@ htmlcov/
 # Environment secrets (API keys — never commit)
 .env
 
+# Security disclosure policy — maintain locally until we’re ready to publish it
+SECURITY.md
+
 # OS / editor files
 .DS_Store
 .idea/
@@ -97,7 +100,7 @@ data/icici_nse_symbol_overrides.json
 data/nse_market_cap_overrides.json
 
 # Gmail OAuth credentials and token (never commit — contains secrets)
-data/gmail_credentials.json
+# OAuth token only — never commit (contains refresh token).
 data/gmail_token.json
 
 # Local find/replace map used when syncing real Gmail HTML into fixtures (may contain PII substrings).

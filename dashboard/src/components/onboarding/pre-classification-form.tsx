@@ -323,7 +323,7 @@ export function PreClassificationForm() {
           <Label htmlFor="pc-first">First name</Label>
           <Input
             id="pc-first"
-            placeholder='e.g. "Sai Sashank"'
+            placeholder='e.g. "Ada Lovelace"'
             maxLength={ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}
             value={d.firstName}
             aria-invalid={firstNameInvalid}

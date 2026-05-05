@@ -1,7 +1,7 @@
 """
 Dashboard agent chat — REST session CRUD + WebSocket streaming of agent events.
 
-Browser authenticates with the ``arth_session`` cookie (same as HTTP APIs).
+Local installs do not require a session cookie; WebSocket accepts missing credentials.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from fastapi import (
     Query,
     WebSocket,
     WebSocketDisconnect,
-    WebSocketException,
     status,
 )
 from pydantic import BaseModel, ConfigDict, Field
@@ -42,8 +41,10 @@ from agent.memory import ConversationMemory
 from agent.profile import generate_user_profile
 from agent.security import CostTracker, SessionRateLimiter, screen_message
 from api.auth import COOKIE_NAME, create_session_token, get_current_user, verify_session_token
+from api.constants import DEFAULT_LOCAL_USER
 from api.database import SQLiteSerializingSession, get_engine, get_session
 from api.services import chat_service
+from api.services.agent_runtime import user_agent_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -134,11 +135,12 @@ def get_ws_ticket(user: str = Depends(get_current_user)) -> dict[str, str]:
 # --- WebSocket ------------------------------------------------------------
 
 def _user_from_token(token: str | None) -> str | None:
-    """Verify a session token or WS ticket, returning the username or None."""
+    """Verify a session token or WS ticket — identity is always the local install user."""
     if not token:
         return None
     try:
-        return verify_session_token(token)
+        verify_session_token(token)
+        return DEFAULT_LOCAL_USER
     except HTTPException:
         return None
 
@@ -204,7 +206,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
         ticket = websocket.query_params.get("ticket")
         user = _user_from_token(ticket)
     if user is None:
-        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Not authenticated")
+        user = DEFAULT_LOCAL_USER
 
     await websocket.accept()
 
@@ -269,30 +271,32 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await websocket.send_json({"type": "done"})
             return
 
-        sr = await screen_message(user_text, cost_tracker=cost_tracker)
-        if not sr.allowed:
-            await emit(
-                ScreeningBlockedEvent(
-                    category=sr.category or "unknown",
-                    message=sr.rejection_message or "",
-                    layer=sr.layer or "unknown",
-                    latency_ms=sr.latency_ms,
-                )
-            )
-            await websocket.send_json({"type": "done"})
-            return
+        with SQLiteSerializingSession(get_engine()) as db_agent:
+            with user_agent_runtime(db_agent, user):
+                sr = await screen_message(user_text, cost_tracker=cost_tracker)
+                if not sr.allowed:
+                    await emit(
+                        ScreeningBlockedEvent(
+                            category=sr.category or "unknown",
+                            message=sr.rejection_message or "",
+                            layer=sr.layer or "unknown",
+                            latency_ms=sr.latency_ms,
+                        )
+                    )
+                    await websocket.send_json({"type": "done"})
+                    return
 
-        async with agent_http_client() as client:
-            profile = await generate_user_profile(client)
-            await run_agent_turn(
-                user_message=user_text,
-                memory=memory,
-                client=client,
-                user_profile=profile,
-                event_callback=emit,
-                run_logger=None,
-                cost_tracker=cost_tracker,
-            )
+                async with agent_http_client() as client:
+                    profile = await generate_user_profile(client)
+                    await run_agent_turn(
+                        user_message=user_text,
+                        memory=memory,
+                        client=client,
+                        user_profile=profile,
+                        event_callback=emit,
+                        run_logger=None,
+                        cost_tracker=cost_tracker,
+                    )
 
         await persist_memory()
         await websocket.send_json({"type": "done"})

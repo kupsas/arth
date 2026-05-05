@@ -8,8 +8,9 @@ Covers (via FastAPI TestClient, in-memory SQLite):
 
 Security checks embedded throughout:
   - User scoping: requests never see another user's data
-  - Auth required: endpoints return 401/403 when auth is bypassed (tested via
-    a separate no-auth client)
+  - Local trust: API accepts requests without an ``arth_session`` cookie and
+    treats them as the default single-user id (see ``api.auth``); Phase B.3
+    routes still respond normally (no cookie gate).
   - Input validation: invalid enums, oversized strings, malformed DSL strings
     all return 400 before touching the DB
 
@@ -64,18 +65,19 @@ def api_client(engine):
 
 @pytest.fixture(name="bare_client")
 def api_client_no_auth(engine):
-    """TestClient with the real get_current_user dependency (no override).
+    """TestClient with the real ``get_current_user`` dependency (no override).
 
-    Session still points to the in-memory DB so the app boots cleanly, but
-    no arth_session cookie is sent — every request should return 401.
+    Session still points to the in-memory DB. No ``arth_session`` cookie is sent;
+    the app resolves the user to the default local id (single-user / open-source
+    trust model), so protected routes return success codes — not HTTP 401.
     """
     def _override_session():
         with Session(engine) as session:
             yield session
 
     app.dependency_overrides[get_session] = _override_session
-    # Deliberately do NOT override get_current_user — the real implementation
-    # reads the cookie and raises 401 when it is absent.
+    # Deliberately do NOT override get_current_user — real auth resolves to the
+    # default local user when no cookie is present (local trust model).
     app.dependency_overrides.pop(get_current_user, None)
     yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.pop(get_session, None)
@@ -512,51 +514,51 @@ class TestSecurityInputValidation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 6. AUTH GUARD (B.6.4) — every B.3 endpoint requires authentication
+# 6. NO COOKIE GATE (local trust) — B.3 endpoints work without arth_session
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestAuthGuard:
-    """Verify that all Phase B.3 endpoints return HTTP 401 when no session
-    cookie is present.
+class TestLocalTrustNoCookie:
+    """Phase B.3 routes are **not** blocked when no session cookie is sent.
 
-    The ``bare_client`` fixture uses the real ``get_current_user`` dependency
-    (not overridden), so any request without an ``arth_session`` cookie hits
-    the 401 guard in ``api/auth.py``.
+    ``bare_client`` uses the real ``get_current_user`` (no override). In the
+    open-source default, that resolves to the fixed local user id instead of
+    returning HTTP 401, so UIs and scripts can call the API on a trusted LAN
+    without logging in first.
 
-    This satisfies the B.6.4 checklist item: "all new endpoints require auth".
+    We still expect sane HTTP semantics on an empty DB (list OK, missing ids 404).
     """
 
     # ── Goals hierarchy endpoints ─────────────────────────────────────────
 
-    def test_goals_list_requires_auth(self, bare_client):
-        assert bare_client.get("/api/goals").status_code == 401
+    def test_goals_list_without_cookie_ok(self, bare_client):
+        assert bare_client.get("/api/goals").status_code == 200
 
-    def test_goals_create_requires_auth(self, bare_client):
+    def test_goals_create_without_cookie_ok(self, bare_client):
         assert bare_client.post("/api/goals", json={
             "name": "X", "goal_type": "SAVINGS",
-        }).status_code == 401
+        }).status_code == 201
 
-    def test_goals_get_requires_auth(self, bare_client):
-        assert bare_client.get("/api/goals/1").status_code == 401
+    def test_goals_get_missing_without_cookie_404(self, bare_client):
+        assert bare_client.get("/api/goals/1").status_code == 404
 
-    def test_goals_patch_requires_auth(self, bare_client):
-        assert bare_client.patch("/api/goals/1", json={"name": "X"}).status_code == 401
+    def test_goals_patch_missing_without_cookie_404(self, bare_client):
+        assert bare_client.patch("/api/goals/1", json={"name": "X"}).status_code == 404
 
-    def test_goals_delete_requires_auth(self, bare_client):
-        assert bare_client.delete("/api/goals/1").status_code == 401
+    def test_goals_delete_missing_without_cookie_404(self, bare_client):
+        assert bare_client.delete("/api/goals/1").status_code == 404
 
     # ── LifeEvent endpoints ────────────────────────────────────────────────
 
-    def test_life_events_list_requires_auth(self, bare_client):
-        assert bare_client.get("/api/life-events").status_code == 401
+    def test_life_events_list_without_cookie_ok(self, bare_client):
+        assert bare_client.get("/api/life-events").status_code == 200
 
-    def test_life_events_create_requires_auth(self, bare_client):
+    def test_life_events_create_without_cookie_ok(self, bare_client):
         assert bare_client.post("/api/life-events", json={
             "event_key": "employed",
-        }).status_code == 401
+        }).status_code == 201
 
-    def test_life_events_patch_requires_auth(self, bare_client):
+    def test_life_events_patch_missing_without_cookie_404(self, bare_client):
         assert bare_client.patch("/api/life-events/1", json={
             "occurred": True,
-        }).status_code == 401
+        }).status_code == 404

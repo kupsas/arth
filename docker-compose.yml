@@ -1,0 +1,36 @@
+# Local stack: API + dashboard + persisted ./data volume.
+# Gmail OAuth: map port 8090 and add http://127.0.0.1:8090/ to your Desktop OAuth client.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+      - "8090:8090"
+    volumes:
+      - arth_data:/app/data
+    environment:
+      ARTH_GMAIL_OAUTH_BIND_HOST: "0.0.0.0"
+      ARTH_GMAIL_OAUTH_REDIRECT_HOST: "127.0.0.1"
+      ARTH_GMAIL_OAUTH_CALLBACK_PORT: "8090"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: same-origin
+        NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: same-origin
+      INTERNAL_API_URL: http://api:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    depends_on:
+      - api
+
+volumes:
+  arth_data:

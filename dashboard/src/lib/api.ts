@@ -1497,6 +1497,50 @@ export function fetchOnboardingClassifierStatus(): Promise<{
   return get("/api/onboarding/classifier-status");
 }
 
+/** GET /api/settings/agent-keys/status — env or stored keys for the conversational agent. */
+export type AgentKeysStatusResponse = {
+  has_any_api_key: boolean;
+  has_openai_api_key: boolean;
+  has_anthropic_api_key: boolean;
+  has_google_api_key: boolean;
+  stored_has_any_api_key: boolean;
+  stored_has_openai_api_key: boolean;
+  stored_has_anthropic_api_key: boolean;
+  stored_has_google_api_key: boolean;
+};
+
+export function fetchAgentKeysStatus(): Promise<AgentKeysStatusResponse> {
+  return get<AgentKeysStatusResponse>("/api/settings/agent-keys/status");
+}
+
+/** POST /api/settings/agent-keys — merge encrypted agent provider keys. */
+export function postAgentKeys(body: {
+  openai_api_key?: string;
+  anthropic_api_key?: string;
+  google_api_key?: string;
+}): Promise<{ ok: boolean; keys_updated: string[] }> {
+  return post("/api/settings/agent-keys", body);
+}
+
+/** GET /api/settings/agent-config */
+export type AgentConfigResponse = {
+  agent_model: string;
+  agent_fallback_chain: string;
+  defaults: { agent_model: string; agent_fallback_chain: string };
+};
+
+export function fetchAgentConfig(): Promise<AgentConfigResponse> {
+  return get<AgentConfigResponse>("/api/settings/agent-config");
+}
+
+/** POST /api/settings/agent-config */
+export function postAgentConfig(body: {
+  agent_model?: string | null;
+  agent_fallback_chain?: string | null;
+}): Promise<{ ok: boolean }> {
+  return post("/api/settings/agent-config", body);
+}
+
 /** GET /api/metrics/classification-stats */
 export function fetchClassificationStats(): Promise<ClassificationStatsResponse> {
   return get<ClassificationStatsResponse>("/api/metrics/classification-stats");

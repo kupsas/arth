@@ -1,0 +1,15 @@
+.git
+.github
+**/__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+dashboard/node_modules
+dashboard/.next
+data/*.db
+data/*.db-journal
+data/logs
+*.log
+.env
+.env.*

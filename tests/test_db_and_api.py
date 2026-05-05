@@ -77,7 +77,7 @@ def api_client(engine):
     # Bypass auth for all existing API tests — they test DB/API logic, not auth.
     # Auth-specific behaviour is tested in TestAuth below using a separate fixture.
     # Must match seeded Transaction.user_id and default account→user mapping.
-    app.dependency_overrides[get_current_user] = lambda: "sashank"
+    app.dependency_overrides[get_current_user] = lambda: "local"
 
     # Neuter init_db so the lifespan doesn't touch the production SQLite file.
     # The scheduler and startup maintenance are handled by the autouse fixture
@@ -147,7 +147,7 @@ def _seed_db_transaction(session: Session, **overrides) -> Transaction:
         "counterparty_category": "Swiggy",
         "raw_description": "UPI/123456/Swiggy/sbi@ybl",
         "is_reviewed": True,
-        "user_id": "sashank",
+        "user_id": "local",
     }
     defaults.update(overrides)
     txn = Transaction(**defaults)
@@ -349,7 +349,7 @@ class TestTransactionUserIsolation:
     """Rows for another Arth user must not appear in list or single-txn reads."""
 
     def test_list_and_get_hide_other_users_rows(self, client: TestClient, session: Session):
-        mine = _seed_db_transaction(session, content_hash="iso_mine", user_id="sashank")
+        mine = _seed_db_transaction(session, content_hash="iso_mine", user_id="local")
         theirs = _seed_db_transaction(
             session,
             content_hash="iso_theirs",
@@ -475,7 +475,7 @@ class TestPipelineTrigger:
         # Source configs are now DB-driven; seed one so the route can validate
         # the requested source_key and return 200 before the background job runs.
         session.add(UserPipelineSource(
-            user_id="sashank",
+            user_id="local",
             source_key="hdfc_savings",
             account_id="HDFC_SAL_3703",
             currency="INR",
@@ -674,10 +674,7 @@ class TestOnboardingGoalTemplates:
 
 @pytest.fixture(name="unauthed_client")
 def unauthed_api_client(engine):
-    """TestClient with DB overridden but auth NOT bypassed.
-
-    Used to test the actual login/logout/401 behaviour.
-    """
+    """TestClient with DB overridden; real ``get_current_user`` (no credential gate)."""
     def _override_session():
         with Session(engine) as session:
             yield session
@@ -702,78 +699,54 @@ def unauthed_api_client(engine):
 
 
 class TestAuth:
-    def test_protected_endpoint_rejects_without_cookie(self, unauthed_client: TestClient):
-        """Any protected endpoint must return 401 with no session cookie."""
+    def test_protected_endpoint_allows_without_cookie(self, unauthed_client: TestClient):
+        """Local installs do not require a session cookie."""
         resp = unauthed_client.get("/api/transactions")
-        assert resp.status_code == 401
+        assert resp.status_code == 200
 
     def test_health_is_public(self, unauthed_client: TestClient):
         """/health must be reachable without a session."""
         resp = unauthed_client.get("/health")
         assert resp.status_code == 200
 
-    def test_login_with_correct_credentials(self, unauthed_client: TestClient):
-        """POST /api/auth/login with correct credentials returns 200 + sets cookie."""
+    def test_login_sets_cookie(self, unauthed_client: TestClient):
+        """POST /api/auth/login always succeeds for local installs."""
         resp = unauthed_client.post(
             "/api/auth/login",
-            json={"username": "sashank", "password": "arth2026"},
+            json={"username": "anyone", "password": "anything"},
         )
         assert resp.status_code == 200
         assert resp.json()["authenticated"] is True
+        assert resp.json()["username"] == "local"
         assert "arth_session" in resp.cookies
 
-    def test_login_with_wrong_password(self, unauthed_client: TestClient):
-        """POST /api/auth/login with wrong password returns 401."""
-        resp = unauthed_client.post(
-            "/api/auth/login",
-            json={"username": "sashank", "password": "wrongpassword"},
-        )
-        assert resp.status_code == 401
-
-    def test_login_with_wrong_username(self, unauthed_client: TestClient):
-        """POST /api/auth/login with wrong username returns 401."""
-        resp = unauthed_client.post(
-            "/api/auth/login",
-            json={"username": "notauser", "password": "arth2026"},
-        )
-        assert resp.status_code == 401
-
-    def test_protected_endpoint_accessible_after_login(self, unauthed_client: TestClient):
-        """After logging in, protected endpoints return 200 (not 401)."""
-        unauthed_client.post(
-            "/api/auth/login",
-            json={"username": "sashank", "password": "arth2026"},
-        )
-        resp = unauthed_client.get("/api/transactions")
+    def test_me_without_login_returns_local_user(self, unauthed_client: TestClient):
+        """GET /api/auth/me works without a cookie."""
+        resp = unauthed_client.get("/api/auth/me")
         assert resp.status_code == 200
+        assert resp.json()["username"] == "local"
 
-    def test_me_returns_username_when_authenticated(self, unauthed_client: TestClient):
-        """GET /api/auth/me returns the username after login."""
+    def test_me_after_login_still_local(self, unauthed_client: TestClient):
         unauthed_client.post(
             "/api/auth/login",
-            json={"username": "sashank", "password": "arth2026"},
+            json={"username": "legacy", "password": "ignored"},
         )
         resp = unauthed_client.get("/api/auth/me")
         assert resp.status_code == 200
-        assert resp.json()["username"] == "sashank"
+        assert resp.json()["username"] == "local"
 
-    def test_me_returns_401_when_not_authenticated(self, unauthed_client: TestClient):
-        """GET /api/auth/me returns 401 with no session."""
-        resp = unauthed_client.get("/api/auth/me")
-        assert resp.status_code == 401
-
-    def test_logout_clears_session(self, unauthed_client: TestClient):
-        """After logout, protected endpoints return 401 again."""
+    def test_transactions_after_logout(self, unauthed_client: TestClient):
+        """Logout clears cookie but routes remain reachable without it."""
         unauthed_client.post(
             "/api/auth/login",
-            json={"username": "sashank", "password": "arth2026"},
+            json={"username": "legacy", "password": "ignored"},
         )
         unauthed_client.post("/api/auth/logout")
         resp = unauthed_client.get("/api/transactions")
-        assert resp.status_code == 401
+        assert resp.status_code == 200
 
-    def test_protected_endpoint_accepts_internal_agent_header(self, unauthed_client: TestClient):
-        """In-process agent uses ``X-Arth-Internal`` with a shared secret (no cookie)."""
+    def test_internal_agent_header_optional(self, unauthed_client: TestClient):
+        """X-Arth-Internal remains accepted for agent clients (identity is still local)."""
         from api.auth import agent_internal_token
 
         tok = agent_internal_token()
@@ -783,9 +756,9 @@ class TestAuth:
         )
         assert resp.status_code == 200
 
-    def test_internal_agent_header_wrong_secret_rejected(self, unauthed_client: TestClient):
+    def test_internal_agent_header_wrong_secret_still_ok_without_gate(self, unauthed_client: TestClient):
         resp = unauthed_client.get(
             "/api/transactions",
             headers={"X-Arth-Internal": "not-a-valid-token"},
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 200

@@ -7,19 +7,34 @@ POST   /api/settings/reminders/derive-anchors — preview auto-derived descripti
 POST   /api/settings/reminders                — create
 PATCH  /api/settings/reminders/{id}           — update
 DELETE /api/settings/reminders/{id}           — delete
+
+GET    /api/settings/agent-keys/status        — which agent LLM keys are available
+POST   /api/settings/agent-keys               — save/remove agent provider keys (encrypted)
+
+GET    /api/settings/agent-config             — agent model + fallback (stored vs defaults)
+POST   /api/settings/agent-config             — update stored overrides
 """
 
 from __future__ import annotations
 
 import datetime
+import json
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlmodel import Session, col, select
 
+from agent import config as agent_cfg
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import Reminder, Transaction
+from api.models import Reminder, Transaction, UserSecrets
+from api.services.agent_runtime import (
+    effective_agent_fallback_chain,
+    effective_agent_model,
+    user_agent_api_key_presence,
+    user_stored_agent_api_key_presence,
+)
 from api.reminder_anchor_derivation import (
     MAX_ANCHOR_LEN,
     MAX_DERIVED_ANCHORS,
@@ -326,3 +341,150 @@ def delete_reminder(
         raise HTTPException(status_code=404, detail="Reminder not found")
     session.delete(r)
     session.commit()
+
+
+# ── Agent chat — LLM keys + optional model overrides (``UserSecrets``) ───────
+
+
+class SettingsAgentApiKeyBody(BaseModel):
+    """Non-empty strings overwrite; empty string clears stored key for that provider."""
+
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    google_api_key: str | None = None
+
+
+class SettingsAgentConfigBody(BaseModel):
+    """Persist LiteLLM ``provider/model`` id and comma-separated fallback chain."""
+
+    agent_model: str | None = None
+    agent_fallback_chain: str | None = None
+
+
+@router.get("/agent-keys/status")
+def agent_keys_status(
+    *,
+    session: Session = Depends(get_session),
+    user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    ho, ha, hg = user_agent_api_key_presence(session, user)
+    so, sa, sg = user_stored_agent_api_key_presence(session, user)
+    return {
+        "has_any_api_key": ho or ha or hg,
+        "has_openai_api_key": ho,
+        "has_anthropic_api_key": ha,
+        "has_google_api_key": hg,
+        "stored_has_any_api_key": so or sa or sg,
+        "stored_has_openai_api_key": so,
+        "stored_has_anthropic_api_key": sa,
+        "stored_has_google_api_key": sg,
+    }
+
+
+@router.post("/agent-keys")
+def agent_keys_save(
+    body: SettingsAgentApiKeyBody,
+    *,
+    session: Session = Depends(get_session),
+    user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = session.exec(select(UserSecrets).where(UserSecrets.user_id == user)).first()
+    data: dict[str, str] = {}
+    if row and row.secrets_json:
+        try:
+            loaded = json.loads(row.secrets_json)
+            if isinstance(loaded, dict):
+                data = {str(k): str(v) for k, v in loaded.items()}
+        except json.JSONDecodeError:
+            data = {}
+
+    touched: list[str] = []
+    if body.openai_api_key is not None:
+        v = body.openai_api_key.strip()
+        if v:
+            data["OPENAI_API_KEY_FOR_SINGLE_AGENT"] = v
+            touched.append("OPENAI_API_KEY_FOR_SINGLE_AGENT")
+        else:
+            data.pop("OPENAI_API_KEY_FOR_SINGLE_AGENT", None)
+    if body.anthropic_api_key is not None:
+        v = body.anthropic_api_key.strip()
+        if v:
+            data["ANTHROPIC_API_KEY_FOR_SINGLE_AGENT"] = v
+            touched.append("ANTHROPIC_API_KEY_FOR_SINGLE_AGENT")
+        else:
+            data.pop("ANTHROPIC_API_KEY_FOR_SINGLE_AGENT", None)
+    if body.google_api_key is not None:
+        v = body.google_api_key.strip()
+        if v:
+            data["GOOGLE_API_KEY_FOR_SINGLE_AGENT"] = v
+            touched.append("GOOGLE_API_KEY_FOR_SINGLE_AGENT")
+        else:
+            data.pop("GOOGLE_API_KEY_FOR_SINGLE_AGENT", None)
+
+    payload = json.dumps(data)
+    if row is None:
+        row = UserSecrets(user_id=user, secrets_json=payload)
+    else:
+        row.secrets_json = payload
+        row.updated_at = datetime.datetime.now(datetime.UTC)
+    session.add(row)
+    session.commit()
+    return {"ok": True, "keys_updated": touched}
+
+
+@router.get("/agent-config")
+def agent_config_get(
+    *,
+    session: Session = Depends(get_session),
+    user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    chain = effective_agent_fallback_chain(session, user)
+    return {
+        "agent_model": effective_agent_model(session, user),
+        "agent_fallback_chain": ",".join(chain),
+        "defaults": {
+            "agent_model": agent_cfg.AGENT_MODEL,
+            "agent_fallback_chain": ",".join(agent_cfg.AGENT_FALLBACK_CHAIN),
+        },
+    }
+
+
+@router.post("/agent-config")
+def agent_config_save(
+    body: SettingsAgentConfigBody,
+    *,
+    session: Session = Depends(get_session),
+    user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = session.exec(select(UserSecrets).where(UserSecrets.user_id == user)).first()
+    data: dict[str, str] = {}
+    if row and row.secrets_json:
+        try:
+            loaded = json.loads(row.secrets_json)
+            if isinstance(loaded, dict):
+                data = {str(k): str(v) for k, v in loaded.items()}
+        except json.JSONDecodeError:
+            data = {}
+
+    if body.agent_model is not None:
+        v = body.agent_model.strip()
+        if v:
+            data["AGENT_MODEL"] = v
+        else:
+            data.pop("AGENT_MODEL", None)
+    if body.agent_fallback_chain is not None:
+        v = body.agent_fallback_chain.strip()
+        if v:
+            data["AGENT_FALLBACK_CHAIN"] = v
+        else:
+            data.pop("AGENT_FALLBACK_CHAIN", None)
+
+    payload = json.dumps(data)
+    if row is None:
+        row = UserSecrets(user_id=user, secrets_json=payload)
+    else:
+        row.secrets_json = payload
+        row.updated_at = datetime.datetime.now(datetime.UTC)
+    session.add(row)
+    session.commit()
+    return {"ok": True}

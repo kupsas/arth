@@ -437,11 +437,11 @@ def _process_email(
 # ─── Public entry point ────────────────────────────────────────────────────────
 
 def _default_scraper_user_id() -> str:
+    from api.constants import DEFAULT_LOCAL_USER
+
     return (
-        (os.environ.get("ARTH_SCRAPER_USER_ID") or os.environ.get("AUTH_USERNAME") or "sashank")
-        .strip()
-        or "sashank"
-    )
+        os.environ.get("ARTH_SCRAPER_USER_ID") or DEFAULT_LOCAL_USER
+    ).strip() or DEFAULT_LOCAL_USER
 
 
 def scrape_new_emails(

@@ -12,15 +12,21 @@ or use onboarding ``POST /api/onboarding/persist-sources`` after Gmail discovery
 """
 
 from pathlib import Path
+import os
 
 # ─── Repo root (two levels up from this file: scraper/config.py → repo root) ──
 REPO_ROOT = Path(__file__).parent.parent
 
 # ─── OAuth credential file paths ───────────────────────────────────────────────
-# credentials.json is downloaded once from GCP console (never committed to git).
-# token.json is created automatically on first run after OAuth consent.
+# gmail_credentials.json — OAuth desktop client (shipped with the repo for convenience).
+# gmail_token.json — created on first Google sign-in per machine (gitignored).
 GMAIL_CREDENTIALS_PATH = REPO_ROOT / "data" / "gmail_credentials.json"
 GMAIL_TOKEN_PATH       = REPO_ROOT / "data" / "gmail_token.json"
+
+# Desktop OAuth callback — fixed port so Docker can publish it and the dashboard can open Google in-browser.
+GMAIL_OAUTH_CALLBACK_PORT = int(os.getenv("ARTH_GMAIL_OAUTH_CALLBACK_PORT", "8090"))
+GMAIL_OAUTH_BIND_HOST = os.getenv("ARTH_GMAIL_OAUTH_BIND_HOST", "0.0.0.0").strip()
+GMAIL_OAUTH_REDIRECT_HOST = os.getenv("ARTH_GMAIL_OAUTH_REDIRECT_HOST", "127.0.0.1").strip()
 
 # ─── Scraper behaviour ─────────────────────────────────────────────────────────
 # On the very first run (no processed_emails rows yet), how far back should we
