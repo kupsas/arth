@@ -788,6 +788,155 @@ export async function uploadStatement(
   return res.json() as Promise<StatementUploadResult>;
 }
 
+/** GET /api/pipeline/runs/{id} — poll one statement import run (includes unknowns_count when completed). */
+export type PipelineRunDetailResponse = {
+  id: number
+  source_key: string
+  llm_model: string
+  txn_count: number
+  new_count: number
+  status: string
+  txn_date_min: string | null
+  txn_date_max: string | null
+  started_at: string
+  completed_at: string | null
+  error_message: string | null
+  unknowns_count?: number | null
+}
+
+export function fetchPipelineRun(
+  runId: number,
+  opts?: { signal?: AbortSignal },
+): Promise<PipelineRunDetailResponse> {
+  return get<PipelineRunDetailResponse>(
+    `/api/pipeline/runs/${runId}`,
+    undefined,
+    opts?.signal ? { signal: opts.signal } : undefined,
+  );
+}
+
+/** SSE payloads from ``GET /api/pipeline/runs/{id}/stream`` (statement upload progress). */
+export type PipelineUploadProgressPayload = Record<string, unknown>;
+
+/**
+ * ``GET /api/pipeline/runs/{runId}/stream`` — live progress while a statement file is parsed and classified.
+ * Each ``data:`` line is JSON with at least ``phase`` (``parsing`` | ``deduping`` | ``classifying`` | ``complete`` | ``error``).
+ */
+export async function streamPipelineRunProgress(
+  runId: number,
+  options?: {
+    signal?: AbortSignal
+    onProgress?: (snapshot: PipelineUploadProgressPayload) => void
+  },
+): Promise<{ last: PipelineUploadProgressPayload | null; endReason: "complete" | "error" | "timeout" | "closed" }> {
+  const signal = options?.signal
+  const onProgress = options?.onProgress
+  const url = buildApiUrl(`/api/pipeline/runs/${runId}/stream`)
+
+  let res: Response
+  try {
+    res = await fetch(url, { method: "GET", credentials: "include", signal })
+  } catch (e) {
+    if (signal?.aborted || isAbortLike(e)) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+    throw e
+  }
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`
+    return new Promise(() => {})
+  }
+
+  if (!res.ok) {
+    const raw = await res.text().catch(() => res.statusText)
+    throwApiHttpError(res.status, raw)
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) {
+    throw new ApiError(500, "No response body from pipeline run stream.")
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let last: PipelineUploadProgressPayload | null = null
+  let endReason: "complete" | "error" | "timeout" | "closed" = "closed"
+
+  try {
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch (e) {
+        if (signal?.aborted || isAbortLike(e)) {
+          throw new DOMException("Aborted", "AbortError")
+        }
+        throw e
+      }
+      const { done, value } = chunk
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      let sep: number
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, sep)
+        buffer = buffer.slice(sep + 2)
+        const lines = frame.split("\n")
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith("data:")) continue
+          const jsonStr = trimmed.replace(/^data:\s*/, "").trim()
+          if (!jsonStr) continue
+          let payload: PipelineUploadProgressPayload
+          try {
+            payload = JSON.parse(jsonStr) as PipelineUploadProgressPayload
+          } catch {
+            throw new ApiError(500, "Invalid pipeline SSE payload from server.")
+          }
+          last = payload
+          onProgress?.(payload)
+          const ph = String(payload.phase ?? "")
+          if (ph === "complete") endReason = "complete"
+          if (ph === "error") endReason = "error"
+          if (ph === "timeout") endReason = "timeout"
+        }
+      }
+    }
+
+    const tail = buffer.trim()
+    if (tail) {
+      const lines = tail.split("\n")
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith("data:")) continue
+        const jsonStr = trimmed.replace(/^data:\s*/, "").trim()
+        if (!jsonStr) continue
+        const payload = JSON.parse(jsonStr) as PipelineUploadProgressPayload
+        last = payload
+        onProgress?.(payload)
+      }
+    }
+  } catch (e) {
+    if (signal?.aborted || isAbortLike(e)) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+    throw e
+  }
+
+  throwIfAborted(signal)
+  if (last && String(last.phase) === "complete") {
+    return { last, endReason: "complete" }
+  }
+  if (last && String(last.phase) === "error") {
+    return { last, endReason: "error" }
+  }
+  if (last && String(last.phase) === "timeout") {
+    return { last, endReason: "timeout" }
+  }
+  return { last, endReason }
+}
+
 export interface UploadHoldingsOptions {
   sourceType?: string;
   pdfPassword?: string;
@@ -1190,6 +1339,8 @@ export type OnboardingUnknownTxnBrief = {
 
 export type OnboardingUnknownsResponse = {
   source: string | null
+  /** Present when listing unknowns for a single statement upload run. */
+  pipeline_run_id?: number | null
   offset: number
   limit: number
   total_transactions: number
@@ -1244,6 +1395,33 @@ export function postOnboardingClassify(body: {
   items: OnboardingClassifyItem[]
 }): Promise<OnboardingClassifyResponse> {
   return post("/api/onboarding/classify", body)
+}
+
+/** GET /api/pipeline/runs/{runId}/unknowns — same envelope as onboarding unknowns, scoped to one upload run. */
+export function fetchPipelineRunUnknowns(
+  runId: number,
+  params?: { limit?: number; offset?: number; signal?: AbortSignal },
+): Promise<OnboardingUnknownsResponse> {
+  const q = new URLSearchParams()
+  if (params?.limit != null) q.set("limit", String(params.limit))
+  if (params?.offset != null) q.set("offset", String(params.offset))
+  const qs = q.toString()
+  const path = qs
+    ? `/api/pipeline/runs/${runId}/unknowns?${qs}`
+    : `/api/pipeline/runs/${runId}/unknowns`
+  return get<OnboardingUnknownsResponse>(
+    path,
+    undefined,
+    params?.signal ? { signal: params.signal } : undefined,
+  )
+}
+
+/** POST /api/pipeline/runs/{runId}/classify — confirm labels for statement-upload rows only. */
+export function postPipelineRunClassify(
+  runId: number,
+  body: { items: OnboardingClassifyItem[] },
+): Promise<OnboardingClassifyResponse> {
+  return post(`/api/pipeline/runs/${runId}/classify`, body)
 }
 
 /** GET /api/onboarding/password-requirements — PDF password templates for discovered senders. */

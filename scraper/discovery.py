@@ -95,7 +95,7 @@ def discover_sources_iter(
             display_name=display_name,
             instrument_type=instrument_type,
             email_count_estimate=len(ids),
-            sample_message_ids=ids[:3],
+            sample_message_ids=ids[:5],
         )
 
 
@@ -109,7 +109,7 @@ def discover_sources(
 
     For every key in ``bank_senders_config`` we run ``from:<sender_email>`` with a
     single list call (up to ``list_max_results`` IDs). ``email_count_estimate`` is
-    the number of IDs returned (0 if none). The first three IDs are stored for
+    the number of IDs returned (0 if none). The first five IDs are stored for
     :func:`scraper.source_builder.persist_scraper_sources_from_discovery`.
 
     Returns:

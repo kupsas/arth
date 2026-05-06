@@ -170,3 +170,13 @@
     @apply font-sans;
   }
 }
+
+/* Indeterminate `<Progress />`: sweep a short segment (reads as “working”, not “done”). */
+@keyframes arth-progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}

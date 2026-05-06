@@ -10,7 +10,8 @@ interface ProgressProps extends React.HTMLAttributes<HTMLDivElement> {
 
 /**
  * Simple progress bar component.
- * When `value` is undefined the bar plays a pulse animation (indeterminate state).
+ * When `value` is undefined the bar shows a sliding segment (indeterminate state).
+ * Indeterminate uses a **partial** width segment — a full-width pulse looked like 100% complete.
  */
 function Progress({ value, className, ...props }: ProgressProps) {
   const isIndeterminate = value === undefined
@@ -22,6 +23,7 @@ function Progress({ value, className, ...props }: ProgressProps) {
       aria-valuenow={isIndeterminate ? undefined : value}
       aria-valuemin={0}
       aria-valuemax={100}
+      aria-busy={isIndeterminate ? true : undefined}
       className={cn(
         "relative h-2 w-full overflow-hidden rounded-full bg-secondary",
         className,
@@ -30,10 +32,11 @@ function Progress({ value, className, ...props }: ProgressProps) {
     >
       <div
         className={cn(
-          "h-full rounded-full bg-primary transition-all",
-          isIndeterminate && "animate-pulse w-full opacity-60",
+          "h-full rounded-full bg-primary transition-[width] duration-300 ease-out",
+          isIndeterminate &&
+            "absolute left-0 top-0 w-[38%] motion-safe:animate-[arth-progress-slide_1.35s_ease-in-out_infinite]",
         )}
-        style={isIndeterminate ? {} : { width: `${Math.min(Math.max(value ?? 0, 0), 100)}%` }}
+        style={isIndeterminate ? undefined : { width: `${Math.min(Math.max(value ?? 0, 0), 100)}%` }}
       />
     </div>
   )

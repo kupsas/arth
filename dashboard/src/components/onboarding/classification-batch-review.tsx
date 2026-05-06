@@ -54,7 +54,9 @@ import {
 } from "@/components/ui/tooltip";
 import {
   fetchOnboardingUnknowns,
+  fetchPipelineRunUnknowns,
   postOnboardingClassify,
+  postPipelineRunClassify,
   streamOnboardingBackfill,
   type OnboardingClassifyItem,
   type OnboardingUnknownTxnBrief,
@@ -87,15 +89,22 @@ const UBER_QUEUE_CATEGORY: CounterpartyCategory = "Transport & Fuel";
  */
 async function fetchAllUnknownRowsInQueue(
   scopedSource: string | undefined,
+  pipelineRunId?: number | null,
 ): Promise<OnboardingUnknownTxnBrief[]> {
   const acc: OnboardingUnknownTxnBrief[] = [];
   let offset = 0;
   while (true) {
-    const data = await fetchOnboardingUnknowns({
-      source: scopedSource,
-      limit: UNKNOWN_FULL_PAGE,
-      offset,
-    });
+    const data =
+      pipelineRunId != null && pipelineRunId > 0
+        ? await fetchPipelineRunUnknowns(pipelineRunId, {
+            limit: UNKNOWN_FULL_PAGE,
+            offset,
+          })
+        : await fetchOnboardingUnknowns({
+            source: scopedSource,
+            limit: UNKNOWN_FULL_PAGE,
+            offset,
+          });
     if (!data.transactions.length) break;
     acc.push(...data.transactions);
     if (data.transactions.length < UNKNOWN_FULL_PAGE) break;
@@ -127,6 +136,11 @@ export type ClassificationBatchReviewProps = {
   /** Optional heading override when ``source`` is set. */
   sourceLabel?: string;
   /**
+   * When set, this queue reads ``GET /api/pipeline/runs/{id}/unknowns`` (statement upload import).
+   * Do not pass ``source`` for API purposes — email unknowns use ``/api/onboarding/unknowns`` instead.
+   */
+  pipelineRunId?: number | null;
+  /**
    * Live ``unknowns_pending`` from the parent's backfill progress poll. When this value
    * changes (e.g. from 0 → 28), the component re-fetches its page so newly-discovered
    * unknowns appear without a manual reload.
@@ -138,7 +152,13 @@ export type ClassificationBatchReviewProps = {
    */
   unknownsTrigger?: number | string;
   /** After classify + SSE resume — parent may refresh backfill UI via ``onImportProgress``. */
-  onSubmitted?: () => void;
+  onSubmitted?: () => void
+  /**
+   * Called once when, after a successful save and list refresh, **no** rows remain in this queue
+   * (``pending_total === 0``). Use this to hide a statement-upload review card without breaking the
+   * email wizard (which still uses ``onSubmitted`` on every save for ``bfTick``).
+   */
+  onQueueCleared?: () => void;
   /** Forward live import counters while ``streamOnboardingBackfill`` runs after classification resume. */
   onImportProgress?: (snapshot: Record<string, unknown>) => void;
   /**
@@ -168,24 +188,39 @@ export type ClassificationBatchReviewProps = {
    * bulk shortcut and copy when the list scope is all accounts.
    */
   pauseThresholdForShortcuts?: number;
+  /**
+   * Last meaningful progress snapshot from the wizard (sticky). Used to populate a synthetic
+   * "processing" event with real counters so the progress card doesn't flash zero when
+   * classification is confirmed and the resume stream hasn't connected yet.
+   */
+  lastKnownProgress?: Record<string, unknown> | null;
 };
 
 export function ClassificationBatchReview({
   source,
   sourceLabel,
+  pipelineRunId = null,
   unknownsTrigger,
   onSubmitted,
+  onQueueCleared,
   onImportProgress,
   importAwaitingClassification = false,
   allMailSourcesImported = false,
   mailImportActivelyProcessing = false,
   hideClassificationRowsForImportLimbo = false,
   pauseThresholdForShortcuts,
+  lastKnownProgress = null,
 }: ClassificationBatchReviewProps) {
   const scopedSource = source?.trim() || undefined;
+  const reviewRunId = pipelineRunId != null && pipelineRunId > 0 ? pipelineRunId : null;
+  const statementRunMode = reviewRunId != null;
   const displayScope =
     sourceLabel?.trim() ||
-    (scopedSource ? humanizeSourceKey(scopedSource) : "All email accounts");
+    (statementRunMode
+      ? "This statement import"
+      : scopedSource
+        ? humanizeSourceKey(scopedSource)
+        : "All email accounts");
 
   const [page, setPage] = React.useState(0);
   const [loading, setLoading] = React.useState(true);
@@ -250,19 +285,26 @@ export function ClassificationBatchReview({
   }, []);
 
   /** Same reload path as after a successful classify — keeps pagination coherent when the last page empties. */
-  const reloadQueueAfterMutation = React.useCallback(async () => {
+  const reloadQueueAfterMutation = React.useCallback(async (): Promise<number> => {
     setLoading(true);
+    let lastPending = 0;
     try {
       let pi = page;
       while (true) {
         const offset = pi * PAGE_SIZE;
-        const data = await fetchOnboardingUnknowns({
-          source: scopedSource,
-          limit: PAGE_SIZE,
-          offset,
-        });
+        const data = statementRunMode
+          ? await fetchPipelineRunUnknowns(reviewRunId!, {
+              limit: PAGE_SIZE,
+              offset,
+            })
+          : await fetchOnboardingUnknowns({
+              source: scopedSource,
+              limit: PAGE_SIZE,
+              offset,
+            });
         setThreshold(data.unknown_threshold);
         setPendingTotal(data.pending_total);
+        lastPending = data.pending_total;
         const rowBatch = data.transactions;
         if (rowBatch.length || offset === 0 || data.pending_total === 0) {
           if (pi !== page) setPage(pi);
@@ -277,14 +319,15 @@ export function ClassificationBatchReview({
     } finally {
       setLoading(false);
     }
-  }, [page, scopedSource, mergeRowState]);
+    return lastPending;
+  }, [page, scopedSource, mergeRowState, statementRunMode, reviewRunId]);
 
   React.useEffect(() => {
     queueMicrotask(() => {
       setSelectedIds(new Set());
       setPage(0);
     });
-  }, [scopedSource]);
+  }, [scopedSource, reviewRunId]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -296,11 +339,16 @@ export function ClassificationBatchReview({
         // If this page is empty but work remains (e.g. after bulk-clear on the last page), walk back.
         while (true) {
           const offset = pi * PAGE_SIZE;
-          const data = await fetchOnboardingUnknowns({
-            source: scopedSource,
-            limit: PAGE_SIZE,
-            offset,
-          });
+          const data = statementRunMode
+            ? await fetchPipelineRunUnknowns(reviewRunId!, {
+                limit: PAGE_SIZE,
+                offset,
+              })
+            : await fetchOnboardingUnknowns({
+                source: scopedSource,
+                limit: PAGE_SIZE,
+                offset,
+              });
           if (cancelled) return;
           setThreshold(data.unknown_threshold);
           setPendingTotal(data.pending_total);
@@ -325,7 +373,7 @@ export function ClassificationBatchReview({
     return () => {
       cancelled = true;
     };
-  }, [page, scopedSource, mergeRowState, unknownsTrigger]);
+  }, [page, scopedSource, mergeRowState, unknownsTrigger, statementRunMode, reviewRunId]);
 
   /**
    * After Prev/Next, bring the review list back into view so you land on row 1 of the new page,
@@ -368,6 +416,9 @@ export function ClassificationBatchReview({
     items: OnboardingClassifyItem[],
     resolveSource: (txnId: number) => string | undefined,
   ) {
+    if (statementRunMode) {
+      return postPipelineRunClassify(reviewRunId!, { items });
+    }
     const result = await postOnboardingClassify({
       source: scopedSource ?? null,
       items,
@@ -378,6 +429,17 @@ export function ClassificationBatchReview({
       for (const it of items) {
         const sk = resolveSource(it.txn_id);
         if (sk) sources.add(sk);
+      }
+      // Signal the progress card immediately so it transitions from
+      // "Waiting for your review" to "Importing statement emails" before the
+      // resume stream connects (avoids 2-5s of visual stall). Carry forward
+      // the last known counters so the card doesn't flash zeros.
+      for (const sk of sources) {
+        onImportProgress?.({
+          ...(lastKnownProgress ?? {}),
+          source: sk,
+          status: "processing_statements",
+        } as Record<string, unknown>);
       }
       for (const sk of sources) {
         await streamOnboardingBackfill(sk, {
@@ -393,19 +455,22 @@ export function ClassificationBatchReview({
     if (!items.length) return;
     setBusy(true);
     setError(null);
+    // Optimistic: clear rows immediately so the UI feels instant.
+    setRows([]);
+    setPendingTotal(0);
+    setSelectedIds(new Set());
+    setBulkCategory(SELECT_NONE);
     try {
       await flushClassifyAndResume(items, (id) => sourceById[id]);
-      const doneIds = new Set(items.map((i) => i.txn_id));
-      setSelectedIds((prev) => {
-        const n = new Set(prev);
-        for (const id of doneIds) n.delete(id);
-        return n;
-      });
-      setBulkCategory(SELECT_NONE);
       onSubmitted?.();
-      await reloadQueueAfterMutation();
+      const remaining = await reloadQueueAfterMutation();
+      if (remaining === 0) {
+        onQueueCleared?.();
+      }
     } catch (e) {
       setError(getUserFacingErrorMessage(e) || "Couldn't save your changes.");
+      // Reload the real state so the user can retry.
+      void reloadQueueAfterMutation();
     } finally {
       setBusy(false);
     }
@@ -419,8 +484,13 @@ export function ClassificationBatchReview({
     setUberDialogOpen(false);
     setBusy(true);
     setError(null);
+    // Optimistic: clear rows immediately so the UI feels instant.
+    setRows([]);
+    setPendingTotal(0);
+    setSelectedIds(new Set());
+    setBulkCategory(SELECT_NONE);
     try {
-      const queueRows = await fetchAllUnknownRowsInQueue(scopedSource);
+      const queueRows = await fetchAllUnknownRowsInQueue(scopedSource, reviewRunId);
       if (!queueRows.length) {
         setError("Nothing left to review in this list right now.");
         return;
@@ -441,12 +511,14 @@ export function ClassificationBatchReview({
         const slice = items.slice(i, i + CLASSIFY_CHUNK_SIZE);
         await flushClassifyAndResume(slice, resolveSource);
       }
-      setSelectedIds(new Set());
-      setBulkCategory(SELECT_NONE);
       onSubmitted?.();
-      await reloadQueueAfterMutation();
+      const remaining = await reloadQueueAfterMutation();
+      if (remaining === 0) {
+        onQueueCleared?.();
+      }
     } catch (e) {
       setError(getUserFacingErrorMessage(e) || "Couldn't apply that bulk change.");
+      void reloadQueueAfterMutation();
     } finally {
       setBusy(false);
     }
@@ -491,6 +563,7 @@ export function ClassificationBatchReview({
    */
   const pauseBar = pauseThresholdForShortcuts ?? threshold ?? 20;
   const showUberQueueBulkShortcut =
+    !statementRunMode &&
     pendingTotal > 0 &&
     (importAwaitingClassification || allMailSourcesImported || pendingTotal >= pauseBar);
 
@@ -560,7 +633,7 @@ export function ClassificationBatchReview({
           Rows here are either missing labels or are auto-categorised Friends &amp; Family, Gifts &amp;
           Personal Transfers, or Miscellaneous (worth double-checking). Names you already saved in a
           prior round are skipped for that pattern.
-          {threshold != null && (
+          {!statementRunMode && threshold != null && (
             <>
               {" "}
               Import pauses when about {threshold} need review (lower if no optional AI key).
@@ -569,7 +642,7 @@ export function ClassificationBatchReview({
         </CardDescription>
       </CardHeader>
       <CardContent className="relative flex min-h-48 flex-col gap-3">
-        {mailImportActivelyProcessing && (
+        {mailImportActivelyProcessing && !statementRunMode && (
           <div
             className="absolute inset-0 z-20 flex flex-col items-center justify-start gap-2 rounded-b-lg bg-background/70 px-5 pb-6 pt-8 text-center shadow-[inset_0_0_0_1px_hsl(var(--border)/0.35)] backdrop-blur-[3px]"
             role="status"

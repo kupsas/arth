@@ -25,7 +25,9 @@ import threading
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from collections.abc import AsyncIterator
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -87,7 +89,10 @@ from scraper.pdf_passwords import (
     EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS,
     list_pdf_password_holder_names,
 )
-from scraper.source_builder import filter_redundant_nse_broker_sources, persist_scraper_sources_from_discovery
+from scraper.source_builder import (
+    filter_redundant_nse_broker_sources,
+    persist_scraper_sources_from_discovery,
+)
 from scraper.scheduler import resume_scheduler
 
 logger = logging.getLogger(__name__)
@@ -830,6 +835,15 @@ def _merge_and_save_backfill(
 
 _BACKFILL_LOCKS: dict[tuple[str, str], str] = {}
 
+# When the SSE client disconnects, ``onboarding_backfill_stream`` sets this Event so the
+# worker thread can stop between chunks instead of burning Gmail quota with no listener.
+_BACKFILL_CANCEL: dict[tuple[str, str], threading.Event] = {}
+
+
+class _BackfillCancelledError(BaseException):
+    """Client disconnected — stop the backfill worker without treating it as a user error."""
+
+
 # Per-user threading.Event: when unset (after ``clear()``), POST /classify holds the gate so the
 # onboarding backfill worker waits before ``commit`` — avoids SQLite "database is locked" when the
 # SSE stream and classify both write concurrently. Default is **set** (open); classify clears while
@@ -1007,6 +1021,7 @@ _BACKFILL_STREAM_DONE = object()
 @router.get("/backfill/{source}/stream")
 def onboarding_backfill_stream(
     source: str,
+    request: Request,
     *,
     resume_after_classification: bool = Query(default=False),
     resume_after_password: bool = Query(default=False),
@@ -1053,8 +1068,11 @@ def onboarding_backfill_stream(
 
     write_bind = session.get_bind()
     event_queue: queue.Queue[object] = queue.Queue()
+    # Shared with ``generate()`` so a disconnect can signal the worker between Gmail chunks.
+    cancel_evt = threading.Event()
 
     def worker() -> None:
+        _BACKFILL_CANCEL[lock_key] = cancel_evt
         _BACKFILL_LOCKS[lock_key] = req_id
         # Copy query flags into locals so the retry loop can clear them without ``nonlocal`` /
         # UnboundLocalError surprises on the first ``run_onboarding_backfill`` call.
@@ -1064,6 +1082,8 @@ def onboarding_backfill_stream(
         ad = after
         bd = before
         try:
+            if cancel_evt.is_set():
+                return
             try:
                 client = _gmail_client_connected()
             except HTTPException as e:
@@ -1074,14 +1094,41 @@ def onboarding_backfill_stream(
 
             flow = EmailImportFlowLog(request_id=req_id, user_id=current_user, source_key=source_key)
             flow.write("sse_stream_begin", f"resume_cls={ra_cls} resume_pwd={ra_pwd} resume_pause={rf_pause}")
+            # First byte / first event: ``run_onboarding_backfill`` can spend many minutes inside
+            # Gmail ``search_messages`` (metadata get per listed row) before any progress hook runs.
+            # Without this, browsers and the wizard see a "dead" stream until listing finishes.
+            #
+            # Use ``idle`` — **not** ``listing_alerts``. A synthetic ``listing_alerts`` snapshot
+            # made the Import UI treat the whole run as an alert-listing reconnect (indeterminate bar
+            # styled full-width), even while the orchestrator was actually listing statements first.
+            event_queue.put(
+                {
+                    "type": "status",
+                    "progress": {
+                        "source": source_key,
+                        "status": "idle",
+                        "current_phase": None,
+                        "emails_found": 0,
+                        "emails_processed": 0,
+                        "transactions_parsed": 0,
+                        "unknowns_pending": 0,
+                        "error_message": None,
+                    },
+                }
+            )
 
             while True:
+                if cancel_evt.is_set():
+                    flow.write("sse_stream_end", "client_cancelled")
+                    return
                 with SQLiteSerializingSession(write_bind) as stream_session:
                     row = _get_or_create_state(stream_session, current_user)
                     all_bf = _parse_json_object(row.backfill_progress_json, {})
                     existing = dict(all_bf.get(source_key) or {})
 
                     def _flush_backfill_progress_live(snapshot: dict[str, Any]) -> None:
+                        if cancel_evt.is_set():
+                            raise _BackfillCancelledError()
                         _get_classify_gate(current_user).wait(timeout=30)
                         _merge_and_save_backfill(stream_session, current_user, source_key, snapshot)
                         stream_session.commit()
@@ -1093,6 +1140,8 @@ def onboarding_backfill_stream(
                         )
 
                     def _emit_email_progress(slice_pub: dict[str, Any]) -> None:
+                        if cancel_evt.is_set():
+                            raise _BackfillCancelledError()
                         evt = {"type": "progress", **slice_pub}
                         event_queue.put(evt)
 
@@ -1113,6 +1162,9 @@ def onboarding_backfill_stream(
                             progress_commit_hook=_flush_backfill_progress_live,
                             emit_event=_emit_email_progress,
                         )
+                    except _BackfillCancelledError:
+                        flow.write("sse_stream_end", "client_cancelled")
+                        return
                     except ValueError as e:
                         event_queue.put({"type": "error", "detail": str(e), "terminal": True})
                         return
@@ -1152,17 +1204,27 @@ def onboarding_backfill_stream(
                     return
         finally:
             _BACKFILL_LOCKS.pop(lock_key, None)
+            _BACKFILL_CANCEL.pop(lock_key, None)
             event_queue.put(_BACKFILL_STREAM_DONE)
 
     threading.Thread(target=worker, daemon=True).start()
 
-    def generate() -> Any:
+    async def generate() -> AsyncIterator[bytes]:
         while True:
-            item = event_queue.get()
+            try:
+                item = event_queue.get(timeout=0.5)
+            except queue.Empty:
+                if await request.is_disconnected():
+                    cancel_evt.set()
+                    break
+                continue
             if item is _BACKFILL_STREAM_DONE:
                 break
             assert isinstance(item, dict)
             yield _sse_data_line(item)
+            if await request.is_disconnected():
+                cancel_evt.set()
+                break
 
     return StreamingResponse(
         generate(),

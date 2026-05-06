@@ -26,7 +26,7 @@ export function StepPasswordIngredients({
 
   const title = "We need a correct PDF password";
   const description =
-    "One statement could not be opened. Update the fields below (or fix your .env keys), then retry the import.";
+    "One statement could not be opened. Update the fields below, then retry the import.";
 
   return (
     <Card className="max-w-xl border-dashed">

@@ -39,10 +39,15 @@ _LAST4_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(?i)your\s+account\s+\*{1,4}(\d{4})\b"),
     # ICICI IMPS/NEFT: "Savings Account XXXX6118"
     re.compile(r"(?i)icici\s+bank\s+savings\s+account\s+[xX*]{2,}(\d{4})\b"),
+    # Same mask without the word "Savings" (seen on some credit / transfer alerts).
+    re.compile(r"(?i)your\s+icici\s+bank\s+account\s+[xX*]{2,}(\d{4})\b"),
     re.compile(r"(?i)savings\s+account\s+[xX]{3,}(\d{4})\b"),
     # Legacy HDFC email statement subject/body: "…HDFC Bank Account 3703 for…"
     re.compile(r"(?i)hdfc\s+bank\s+account\s+(\d{4})\s+for\b"),
     re.compile(r"(?i)bank\s+account\s+(\d{4})\s+for\s+the\s+period\b"),
+    # HDFC Smart/Combined Statement subject: "…A/c No. XXXXXXXX3703…" or "…A/c XXXXXXXX3703…"
+    # HDFC uses X-masking (not asterisks) in statement subjects, so \*{1,4}(\d{4}) never fires.
+    re.compile(r"(?i)\ba/c\s+(?:no\.?\s*)?[xX*]{2,}(\d{4})\b"),
 ]
 
 # ICICI often masks savings as XX118 (2 X + 3 digits) or XXXX118 (4 X + 3 digits) —
@@ -280,6 +285,37 @@ def _collect_last4s_from_text(
         if tail3:
             found |= _resolve_icici_tail3_to_last4(session, user_id, tail3, blob.lower())
 
+    # HDFC Combined/Smart Statement emails contain no account number in the subject
+    # (e.g. "HDFC Bank Combined Email Statement for January-2026") and the PDF body
+    # is an attachment — the email shell has nothing parseable. Fall back to whatever
+    # hdfc_savings last-4s are already in the DB (written by alert senders processed
+    # earlier in the same persist-sources run, since "alerts@hdfcbank.*" sorts before
+    # "hdfcbanksmartstatement@*" alphabetically and each sender is committed before
+    # the next one starts).
+    if pk == "hdfc_combined_statement" and not found and session is not None and user_id:
+        from api.models import ScraperAccountMapping
+
+        rows = session.exec(
+            select(ScraperAccountMapping).where(
+                ScraperAccountMapping.user_id == user_id,
+                ScraperAccountMapping.source_key == "hdfc_savings",
+            )
+        ).all()
+        for r in rows:
+            if len(r.last_4_digits) == 4 and r.last_4_digits.isdigit():
+                found.add(r.last_4_digits)
+        if found:
+            logger.debug(
+                "persist-sources: hdfc_combined_statement — no last-4 in email text; "
+                "resolved %s from existing hdfc_savings DB mappings",
+                sorted(found),
+            )
+        else:
+            logger.warning(
+                "persist-sources: hdfc_combined_statement — no last-4 in email text and "
+                "no hdfc_savings rows in DB yet; cannot infer account mapping"
+            )
+
     return found
 
 
@@ -427,9 +463,15 @@ def _fetch_sample_texts_for_sender(
     ``search_messages`` call entirely (saves one API round-trip per sender).
     Falls back to a fresh search only when no IDs were stored (e.g. old discovery
     data created before this optimisation was added).
+
+    **Important:** HDFC/CC and ICICI statement notifications often put the only
+    usable hints (product name → placeholder last-4, or account masks) in the
+    **Subject** line while the HTML body is a short “open attachment” shell.
+    We therefore prefix each sample with ``Subject: …`` via a cheap metadata fetch,
+    mirroring how unit tests pass ``[subject, html]`` pairs into inference.
     """
     sample_texts: list[str] = []
-    ids_to_fetch: list[str] = list(sample_message_ids[:3])
+    ids_to_fetch: list[str] = list(sample_message_ids[:5])
 
     if not ids_to_fetch:
         # Fallback: old discovery payload without sample_message_ids.
@@ -437,11 +479,9 @@ def _fetch_sample_texts_for_sender(
             hits = gmail_client.search_messages(
                 f"from:{sender_norm} after:2000/01/01",
                 paginate=False,
-                max_results_per_page=3,
+                max_results_per_page=5,
             )
-            ids_to_fetch = [m.id for m in hits[:3]]
-            for m in hits[:3]:
-                sample_texts.append(m.subject or "")
+            ids_to_fetch = [m.id for m in hits[:5]]
         except Exception:
             logger.warning(
                 "persist-sources: fallback search_messages failed for sender=%r",
@@ -452,8 +492,16 @@ def _fetch_sample_texts_for_sender(
 
     for mid in ids_to_fetch:
         try:
+            subj = ""
+            try:
+                meta = gmail_client.fetch_message_by_id(mid)
+                subj = (meta.subject or "").strip()
+            except Exception:
+                logger.debug("persist-sources: no metadata for id=%s", mid, exc_info=True)
             body = gmail_client.get_message_body(mid)
-            sample_texts.append(body[:8000])
+            prefix = f"Subject: {subj}\n\n" if subj else ""
+            remain = max(0, 8000 - len(prefix))
+            sample_texts.append(prefix + body[:remain])
         except Exception:
             logger.debug("persist-sources: no body for id=%s", mid, exc_info=True)
 
@@ -489,12 +537,17 @@ def persist_scraper_sources_from_discovery(
         raise ValueError("user_id must not be empty")
 
     mid = self_member_id(session, uid)
+    # ``self_member_id`` may INSERT ``FamilyMember`` (flush only). Commit now so we
+    # never hold an open SQLite transaction across slow Gmail network calls below —
+    # otherwise another thread (e.g. saving discovery JSON) waits until SQLite's
+    # busy timeout and surfaces ``database is locked``.
+    session.commit()
+
     processed = 0
     skipped = 0
     inferred_digits = 0
-    # Discovery payloads may list the same sender twice. Without a flush between
-    # senders, the second pass does not see the first pending INSERT, so we would
-    # try another INSERT and hit UNIQUE(user_id, sender_email).
+    # Discovery payloads may list the same sender twice. Commit after each sender so
+    # later iterations see prior UPSERTs and we avoid UNIQUE(user_id, sender_email).
     seen_sender: set[str] = set()
 
     for raw in sources:
@@ -542,7 +595,7 @@ def persist_scraper_sources_from_discovery(
         _delete_sender_rows(session, uid, sender_norm)
         _upsert_sender_with_accounts(session, uid, sender_norm, cfg, accounts, mid)
         seen_sender.add(sender_norm)
-        session.flush()
+        session.commit()
         processed += 1
 
     return {

@@ -220,11 +220,16 @@ class ICICISavingsParser(BaseParser):
         ):
             return None
 
+        # ICICI copy varies: "Savings Account", "Saving Account" (singular), and legacy
+        # PDFs split "Transaction" / "Remarks" / "Date" across lines so "transaction date"
+        # may not appear as one substring.
         savings_markers = (
             "statement of transactions in savings account" in tl,
+            "statement of transactions in saving account" in tl,
             "statement of transactions in ppf account" in tl
             and "statement of transactions in savings account" in tl,
             "transaction date" in tl and "remarks" in tl and "withdrawal" in tl,
+            "remarks" in tl and "withdrawal" in tl and "deposit" in tl and "s no" in tl,
             "particulars" in tl and "withdrawals" in tl and "deposits" in tl,
             "savings account" in tl and "withdrawal" in tl and "deposit" in tl,
         )

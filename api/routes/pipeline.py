@@ -9,7 +9,9 @@ POST /api/pipeline/upload    — upload a statement file and auto-run the pipeli
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import json
 import logging
 import shutil
 import tempfile
@@ -19,7 +21,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
@@ -29,6 +32,28 @@ from api.models import PipelineRun
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ── Upload-run SSE progress (in-memory; one writer per background import thread) ──
+_upload_progress_lock = threading.Lock()
+# run_id -> { phase, user_id, ... } — cleared when the upload thread finishes.
+_upload_progress: dict[int, dict[str, Any]] = {}
+
+
+def _upload_progress_set(run_id: int, payload: dict[str, Any]) -> None:
+    with _upload_progress_lock:
+        cur = _upload_progress.setdefault(run_id, {})
+        cur.update(payload)
+
+
+def _upload_progress_snapshot(run_id: int) -> dict[str, Any] | None:
+    with _upload_progress_lock:
+        row = _upload_progress.get(run_id)
+        return dict(row) if row else None
+
+
+def _upload_progress_clear(run_id: int) -> None:
+    with _upload_progress_lock:
+        _upload_progress.pop(run_id, None)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -58,6 +83,8 @@ class PipelineRunDetail(BaseModel):
     started_at: str
     completed_at: str | None
     error_message: str | None
+    # Classification review queue size for this upload (statement imports only).
+    unknowns_count: int | None = None
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -148,7 +175,7 @@ def list_pipeline_runs(
         .limit(page_size)
     )
     runs = session.exec(query).all()
-    return [_run_to_detail(r) for r in runs]
+    return [_run_to_detail(r, unknowns_count=None) for r in runs]
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -156,12 +183,329 @@ def list_pipeline_runs(
 # ───────────────────────────────────────────────────────────────────────────
 
 @router.get("/runs/{run_id}", response_model=PipelineRunDetail)
-def get_pipeline_run(run_id: int, *, session: Session = Depends(get_session)):
+def get_pipeline_run(
+    run_id: int,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
     """Get details of a single pipeline run (useful for polling status)."""
+    from pipeline import config
+
     run = session.get(PipelineRun, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Couldn't find that import run.")
-    return _run_to_detail(run)
+    user_sources = config.get_source_configs(current_user, session)
+    if run.source_key not in user_sources:
+        raise HTTPException(status_code=403, detail="That import run isn't linked to your account.")
+    unknowns: int | None = None
+    if run.status == "completed":
+        from scraper.onboarding_orchestrator import count_pipeline_run_classification_unknowns
+
+        unknowns = count_pipeline_run_classification_unknowns(
+            session, user_id=current_user, run_id=run_id
+        )
+    return _run_to_detail(run, unknowns_count=unknowns)
+
+
+@router.get("/runs/{run_id}/stream")
+async def stream_pipeline_run_progress(
+    run_id: int,
+    *,
+    current_user: str = Depends(get_current_user),
+):
+    """Server-Sent Events for one upload import: parse → dedupe → classify → complete."""
+    from pipeline import config
+
+    engine = get_engine()
+    with Session(engine) as session:
+        run = session.get(PipelineRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Couldn't find that import run.")
+        user_sources = config.get_source_configs(current_user, session)
+        if run.source_key not in user_sources:
+            raise HTTPException(status_code=403, detail="That import run isn't linked to your account.")
+
+    async def gen():
+        last_json: str | None = None
+        idle_ticks = 0
+        while True:
+            snap = _upload_progress_snapshot(run_id)
+            if snap is None:
+                with Session(engine) as s2:
+                    run2 = s2.get(PipelineRun, run_id)
+                    if run2 and run2.status in ("completed", "failed"):
+                        payload: dict[str, Any] = {
+                            "phase": "complete" if run2.status == "completed" else "error",
+                            "run_status": run2.status,
+                            "error_message": run2.error_message,
+                        }
+                        if run2.status == "completed":
+                            from scraper.onboarding_orchestrator import (
+                                count_pipeline_run_classification_unknowns,
+                            )
+
+                            payload["unknowns_count"] = count_pipeline_run_classification_unknowns(
+                                s2, user_id=current_user, run_id=run_id
+                            )
+                            payload["txn_count"] = run2.txn_count
+                            payload["new_count"] = run2.new_count
+                        line = json.dumps(payload)
+                        if line != last_json:
+                            yield f"data: {line}\n\n"
+                            last_json = line
+                        break
+                idle_ticks += 1
+                if idle_ticks > 600:
+                    yield f"data: {json.dumps({'phase': 'timeout', 'message': 'No progress updates — try refreshing the run.'})}\n\n"
+                    break
+            else:
+                if snap.get("user_id") != current_user:
+                    yield f"data: {json.dumps({'phase': 'error', 'message': 'Forbidden'})}\n\n"
+                    break
+                line = json.dumps(snap)
+                if line != last_json:
+                    yield f"data: {line}\n\n"
+                    last_json = line
+                if snap.get("phase") in ("complete", "error"):
+                    break
+            await asyncio.sleep(0.4)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _txn_brief_for_run(t: Any) -> dict[str, Any]:
+    """Match :func:`api.routes.onboarding._txn_brief` shape for the review queue UI."""
+    return {
+        "id": t.id,
+        "source_statement": t.source_statement,
+        "txn_date": t.txn_date.isoformat() if t.txn_date else None,
+        "amount": t.amount,
+        "direction": t.direction,
+        "channel": t.channel,
+        "raw_description": t.raw_description,
+        "txn_type": t.txn_type,
+        "upi_type": t.upi_type,
+        "counterparty": t.counterparty,
+        "counterparty_category": t.counterparty_category,
+        "spend_category": t.spend_category,
+    }
+
+
+@router.get("/runs/{run_id}/unknowns")
+def list_pipeline_run_unknowns(
+    run_id: int,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=500_000),
+) -> dict[str, Any]:
+    """Paged unknowns for one statement upload run (same envelope as onboarding unknowns)."""
+    from pipeline import config
+
+    from api.services.classifier_runtime import (
+        effective_onboarding_resume_threshold,
+        effective_onboarding_unknown_threshold,
+    )
+    from scraper.onboarding_orchestrator import (
+        count_pipeline_run_classification_unknowns,
+        list_pipeline_run_classification_unknown_transactions,
+    )
+
+    run = session.get(PipelineRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Couldn't find that import run.")
+    user_sources = config.get_source_configs(current_user, session)
+    if run.source_key not in user_sources:
+        raise HTTPException(status_code=403, detail="That import run isn't linked to your account.")
+
+    pending_total = count_pipeline_run_classification_unknowns(
+        session, user_id=current_user, run_id=run_id
+    )
+    rows = list_pipeline_run_classification_unknown_transactions(
+        session, user_id=current_user, run_id=run_id, limit=limit, offset=offset
+    )
+    resume_thresh = effective_onboarding_resume_threshold(session, current_user)
+    return {
+        "source": None,
+        "pipeline_run_id": run_id,
+        "offset": offset,
+        "limit": limit,
+        "total_transactions": len(rows),
+        "pending_total": pending_total,
+        "transactions": [_txn_brief_for_run(x) for x in rows],
+        "groups": [],
+        "unknown_threshold": effective_onboarding_unknown_threshold(session, current_user),
+        "resume_threshold": resume_thresh,
+    }
+
+
+class PipelineRunClassifyItem(BaseModel):
+    """One user correction for a statement-upload row."""
+
+    txn_id: int
+    counterparty: str = Field(min_length=1)
+    counterparty_category: str = Field(min_length=1)
+    spend_category: str | None = None
+    txn_type: str | None = None
+    upi_type: str | None = None
+    apply_to_future: bool = False
+    merchant_rule_keyword: str | None = Field(
+        default=None,
+        description="Optional narration substring for the merchant rule (else counterparty is used).",
+    )
+
+
+class PipelineRunClassifyBody(BaseModel):
+    items: list[PipelineRunClassifyItem]
+
+
+@router.post("/runs/{run_id}/classify")
+def pipeline_run_classify(
+    run_id: int,
+    body: PipelineRunClassifyBody,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Apply corrections to transactions from one upload run (statement rows only)."""
+    from pipeline import config
+
+    from api.routes.onboarding import (
+        _get_classify_gate,
+        _upsert_friend_contact,
+        _upsert_self_contact,
+    )
+    from api.routes.transactions import upsert_user_merchant_correction_rule
+    from api.services.classifier_runtime import effective_onboarding_resume_threshold
+    from api.services.onboarding_merchant_propagation import (
+        propagate_merchant_keyword_hits,
+        transaction_to_canonical,
+    )
+    from pipeline.rules_classifier import apply_spend_category_heuristics
+    from scraper.onboarding_orchestrator import count_pipeline_run_classification_unknowns
+
+    from api.models import Transaction
+
+    run = session.get(PipelineRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Couldn't find that import run.")
+    user_sources = config.get_source_configs(current_user, session)
+    if run.source_key not in user_sources:
+        raise HTTPException(status_code=403, detail="That import run isn't linked to your account.")
+
+    updated = 0
+    rules = 0
+    contacts_created = 0
+    keywords_for_propagation: list[str] = []
+    auto_propagated = 0
+
+    gate = _get_classify_gate(current_user)
+    gate.clear()
+    try:
+        with session.no_autoflush:
+            for item in body.items:
+                txn = session.get(Transaction, item.txn_id)
+                if not txn or txn.user_id != current_user:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="We couldn't find that transaction — it may have been removed. Try refreshing?",
+                    )
+                if txn.pipeline_run_id != run_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="That transaction is not from this statement import.",
+                    )
+                if txn.source_type != "statement":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Only statement-upload rows can be updated here.",
+                    )
+                prior_counterparty = (txn.counterparty or "").strip()
+                txn.counterparty = item.counterparty.strip()
+                txn.counterparty_category = item.counterparty_category.strip()
+                if item.spend_category is not None:
+                    txn.spend_category = item.spend_category.strip() or None
+                if item.txn_type is not None:
+                    txn.txn_type = item.txn_type.strip() or None
+                if item.upi_type is not None:
+                    txn.upi_type = item.upi_type.strip() or None
+                txn.classification_source = "USER_REVIEWED"
+                txn.is_reviewed = True
+                txn.updated_at = datetime.datetime.now(datetime.UTC)
+                if txn.spend_category is None and txn.direction == "OUTFLOW":
+                    canon = transaction_to_canonical(txn)
+                    apply_spend_category_heuristics(canon)
+                    txn.spend_category = canon.spend_category.value if canon.spend_category else None
+                session.add(txn)
+                updated += 1
+
+                cat_upper = item.counterparty_category.strip()
+                cp_label = item.counterparty.strip()
+
+                if cat_upper == "Friends and Family":
+                    _upsert_friend_contact(
+                        session,
+                        current_user,
+                        cp_label,
+                        extra_aliases=[prior_counterparty] if prior_counterparty else None,
+                    )
+                    contacts_created += 1
+                elif cat_upper == "Self Transfer":
+                    _upsert_self_contact(session, current_user, cp_label)
+                    contacts_created += 1
+
+                if item.apply_to_future:
+                    kw_src = (item.merchant_rule_keyword or item.counterparty).strip().upper()
+                    if len(kw_src) >= 2:
+                        upsert_user_merchant_correction_rule(
+                            session,
+                            current_user,
+                            keyword=kw_src,
+                            display_name=cp_label,
+                            counterparty_category=cat_upper,
+                        )
+                        rules += 1
+                        keywords_for_propagation.append(kw_src)
+
+        session.commit()
+
+        auto_propagated = propagate_merchant_keyword_hits(
+            session,
+            current_user,
+            keywords=keywords_for_propagation,
+            exclude_txn_ids={it.txn_id for it in body.items},
+        )
+        if auto_propagated:
+            session.commit()
+    finally:
+        gate.set()
+
+    remaining = count_pipeline_run_classification_unknowns(
+        session, user_id=current_user, run_id=run_id
+    )
+
+    resume_thresh = effective_onboarding_resume_threshold(session, current_user)
+
+    return {
+        "status": "ok",
+        "updated": updated,
+        "rules_upserted": rules,
+        "contacts_created": contacts_created,
+        "remaining_unknowns": remaining,
+        "resume_threshold": resume_thresh,
+        "should_resume": False,
+        "auto_propagated": auto_propagated,
+    }
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -303,7 +647,7 @@ def _run_pipeline_background(
 # Helpers
 # ───────────────────────────────────────────────────────────────────────────
 
-def _run_to_detail(run: PipelineRun) -> PipelineRunDetail:
+def _run_to_detail(run: PipelineRun, *, unknowns_count: int | None = None) -> PipelineRunDetail:
     return PipelineRunDetail(
         id=run.id,
         source_key=run.source_key,
@@ -316,6 +660,7 @@ def _run_to_detail(run: PipelineRun) -> PipelineRunDetail:
         started_at=run.started_at.isoformat() if run.started_at else "",
         completed_at=run.completed_at.isoformat() if run.completed_at else None,
         error_message=run.error_message,
+        unknowns_count=unknowns_count,
     )
 
 
@@ -721,15 +1066,18 @@ def _run_upload_background(
     file after processing (success or failure).
     """
     from pipeline import config
+    from pipeline.db_writer import compute_content_hash
     from pipeline.llm_classifier import classify_llm
+    from pipeline.models import CanonicalTransaction
     from pipeline.parsers import PARSER_REGISTRY
+    from pipeline.review_confidence import compute_review_confidence, should_auto_review_email
     from pipeline.rules_classifier import classify_rules
     from pipeline.transformer import transform
-    from pipeline.db_writer import compute_content_hash
 
     from api.models import Transaction
     from api.services.account_user_map import user_id_for_account
     from api.services.user_classification import pipeline_config_for_account_owner
+    from scraper.onboarding_orchestrator import count_pipeline_run_classification_unknowns
     from sqlmodel import select as _select
 
     if llm_model:
@@ -737,10 +1085,21 @@ def _run_upload_background(
 
     engine = get_engine()
 
+    _upload_progress_set(
+        run_id,
+        {
+            "user_id": user_id,
+            "phase": "parsing",
+            "parsed_count": 0,
+            "total_count": 0,
+        },
+    )
+
     with Session(engine) as session:
         run = session.get(PipelineRun, run_id)
         if not run:
             input_file.unlink(missing_ok=True)
+            _upload_progress_clear(run_id)
             return
 
         try:
@@ -752,6 +1111,15 @@ def _run_upload_background(
             parser = parser_cls()
 
             parsed = parser.parse(input_file)
+            _upload_progress_set(
+                run_id,
+                {
+                    "phase": "parsing",
+                    "parsed_count": len(parsed),
+                    "total_count": len(parsed),
+                },
+            )
+
             canonical = transform(
                 parsed,
                 account_id=source_cfg["account_id"],
@@ -760,13 +1128,73 @@ def _run_upload_background(
             )
             ucfg = pipeline_config_for_account_owner(session, source_cfg["account_id"])
             classify_rules(canonical, ucfg)
-            classify_llm(canonical)
+
+            # How many rows are new (not already in DB by content_hash)? Build the list we will
+            # classify and insert so we do not spend LLM calls on rows that will be skipped.
+            #
+            # NOTE (follow-up): This is exact ``content_hash`` dedupe per account/user only. The
+            # email import path can still reconcile near-duplicate rows via ``db_writer`` helpers
+            # (e.g. date ±1 day, same amount/direction). Unifying upload background work with
+            # ``write_to_db`` would close that gap for statement vs email double-counts.
+            unique_new = 0
+            new_canonical: list[CanonicalTransaction] = []
+            for txn in canonical:
+                content_hash = compute_content_hash(txn)
+                row_uid = user_id_for_account(txn.account_id)
+                existing = session.exec(
+                    _select(Transaction).where(
+                        Transaction.content_hash == content_hash,
+                        Transaction.account_id == txn.account_id,
+                        Transaction.user_id == row_uid,
+                    )
+                ).first()
+                if existing is None:
+                    unique_new += 1
+                    new_canonical.append(txn)
+
+            _upload_progress_set(
+                run_id,
+                {
+                    "phase": "deduping",
+                    "total_count": len(canonical),
+                    "unique_count": unique_new,
+                },
+            )
+
+            llm_state: dict[str, int] = {"done": 0, "total": 0}
+            classify_total = len(new_canonical)
+
+            def on_llm_batch(done: int, total: int) -> None:
+                llm_state["done"], llm_state["total"] = done, total
+                if total > 0:
+                    _upload_progress_set(
+                        run_id,
+                        {
+                            "phase": "classifying",
+                            "classified_count": done,
+                            "total_classify": total,
+                            "total_count": classify_total,
+                        },
+                    )
+
+            if new_canonical:
+                classify_llm(new_canonical, on_batch_complete=on_llm_batch)
+            if llm_state["total"] == 0:
+                _upload_progress_set(
+                    run_id,
+                    {
+                        "phase": "classifying",
+                        "classified_count": classify_total,
+                        "total_classify": classify_total,
+                        "total_count": len(canonical),
+                    },
+                )
 
             new_count = 0
             date_min = None
             date_max = None
 
-            for txn in canonical:
+            for txn in new_canonical:
                 content_hash = compute_content_hash(txn)
                 row_uid = user_id_for_account(txn.account_id)
                 existing = session.exec(
@@ -779,12 +1207,16 @@ def _run_upload_background(
                 if existing is not None:
                     continue
 
+                review_conf = compute_review_confidence(txn)
+                auto_ok = should_auto_review_email(review_conf)
+
                 db_txn = Transaction(
                     content_hash=content_hash,
                     txn_date=txn.txn_date,
                     account_id=txn.account_id,
                     user_id=row_uid,
                     source_statement=statement_src,
+                    source_type="statement",
                     direction=txn.direction.value,
                     amount=float(txn.amount),
                     currency=txn.currency,
@@ -808,7 +1240,8 @@ def _run_upload_background(
                     closing_balance=float(txn.closing_balance) if txn.closing_balance else None,
                     value_date=txn.value_date,
                     notes=txn.notes,
-                    is_reviewed=True,
+                    is_reviewed=auto_ok,
+                    review_confidence=review_conf,
                     pipeline_run_id=run_id,
                 )
                 session.add(db_txn)
@@ -827,6 +1260,27 @@ def _run_upload_background(
             run.completed_at = datetime.datetime.now(datetime.UTC)
             session.commit()
 
+            unknowns = count_pipeline_run_classification_unknowns(
+                session, user_id=user_id, run_id=run_id
+            )
+            total_classify_final = llm_state["total"] or classify_total
+            classified_final = (
+                llm_state["done"] if llm_state["total"] else classify_total
+            )
+            _upload_progress_set(
+                run_id,
+                {
+                    "phase": "complete",
+                    "classified_count": classified_final,
+                    "total_classify": total_classify_final,
+                    "total_count": len(canonical),
+                    "unique_count": unique_new,
+                    "unknowns_count": unknowns,
+                    "new_count": new_count,
+                    "txn_count": len(canonical),
+                },
+            )
+
         except Exception:
             logger.exception(
                 "Background upload import failed (run_id=%s source=%s)",
@@ -837,7 +1291,22 @@ def _run_upload_background(
             run.error_message = traceback.format_exc()
             run.completed_at = datetime.datetime.now(datetime.UTC)
             session.commit()
+            _upload_progress_set(
+                run_id,
+                {
+                    "phase": "error",
+                    "error_message": run.error_message or "Import failed",
+                },
+            )
         finally:
             # Always clean up the temp file
             input_file.unlink(missing_ok=True)
             logger.info("Upload temp file cleaned up: %s", input_file.name)
+            # Keep progress briefly for SSE consumers; clear after delay in a daemon thread.
+            def _delayed_clear() -> None:
+                import time
+
+                time.sleep(120)
+                _upload_progress_clear(run_id)
+
+            threading.Thread(target=_delayed_clear, daemon=True).start()

@@ -78,6 +78,37 @@ ALERT_PRE_STATEMENT_EXPAND_MIN_RESULTS = 5
 _DEFAULT_LOOKBACK_YEARS = 15
 
 
+def _onboarding_gmail_list_max_messages() -> int | None:
+    """Optional cap on how many Gmail rows we pull metadata for per search (onboarding only).
+
+    Listing uses ``messages().list`` then one ``messages().get(metadata)`` per hit — a second
+    noisy sender can mean thousands of API calls with no log line until the call returns.
+    Set ``ARTH_ONBOARDING_GMAIL_LIST_MAX_MESSAGES`` (integer) to bound worst-case latency; unset = no cap.
+    """
+    raw = (os.environ.get("ARTH_ONBOARDING_GMAIL_LIST_MAX_MESSAGES") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(50, int(raw))
+    except ValueError:
+        return None
+
+
+def _gmail_list_metadata_progress_cb(
+    import_flow_log: EmailImportFlowLog | None, *, label: str
+) -> Callable[[int, int], None] | None:
+    if import_flow_log is None:
+        return None
+
+    def _cb(done: int, total: int) -> None:
+        import_flow_log.write(
+            "gmail_list_metadata_progress",
+            f"{label} fetched_metadata={done}/{total}",
+        )
+
+    return _cb
+
+
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
@@ -357,6 +388,48 @@ def list_all_classification_unknown_transactions(
     )
 
 
+def count_pipeline_run_classification_unknowns(
+    session: Session,
+    *,
+    user_id: str,
+    run_id: int,
+) -> int:
+    """Count statement rows from one upload run that still need the classification review queue."""
+    q = (
+        select(func.count())
+        .select_from(Transaction)
+        .where(Transaction.user_id == user_id)
+        .where(Transaction.pipeline_run_id == run_id)
+        .where(Transaction.source_type == "statement")
+        .where(_CLASSIFICATION_UNKNOWN_PREDICATE)
+    )
+    return int(session.exec(q).one())
+
+
+def list_pipeline_run_classification_unknown_transactions(
+    session: Session,
+    *,
+    user_id: str,
+    run_id: int,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[Transaction]:
+    """Same criteria as :func:`count_pipeline_run_classification_unknowns`, oldest first."""
+    lim = max(1, min(int(limit), 500))
+    off = max(0, int(offset))
+    q = (
+        select(Transaction)
+        .where(Transaction.user_id == user_id)
+        .where(Transaction.pipeline_run_id == run_id)
+        .where(Transaction.source_type == "statement")
+        .where(_CLASSIFICATION_UNKNOWN_PREDICATE)
+        .order_by(col(Transaction.txn_date).asc(), col(Transaction.id).asc())
+        .offset(off)
+        .limit(lim)
+    )
+    return list(session.exec(q).all())
+
+
 def _list_classification_unknown_transactions_impl(
     session: Session,
     *,
@@ -454,13 +527,24 @@ def _gather_alert_message_items(
             f"source_key={source_key} alert_senders={len(alert_senders)} after={after_s} before={before_s}",
         )
 
+    _list_cap = _onboarding_gmail_list_max_messages()
     for raw_sender in alert_senders:
         for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
+            if import_flow_log:
+                import_flow_log.write(
+                    "gmail_list_api_begin",
+                    f"phase=alert sender={raw_sender!r} query={query!r} max_messages_cap={_list_cap!r}",
+                )
+            lbl = f"phase=alert sender={raw_sender!r}"
             batch = client.search_messages(
                 query,
                 paginate=True,
                 max_results_per_page=100,
-                max_total=None,
+                max_total=_list_cap,
+                on_metadata_progress=_gmail_list_metadata_progress_cb(
+                    import_flow_log, label=lbl
+                ),
+                metadata_progress_every=50,
             )
             if import_flow_log:
                 import_flow_log.write(
@@ -516,7 +600,9 @@ def _collect_pending_queue(
 
     already_done = _get_processed_ids(session)
     after_s = after.strftime("%Y/%m/%d")
-    before_s = before.strftime("%Y/%m/%d")
+    before_s = before.strftime("%Y/%m/%d"        )
+
+    _list_cap = _onboarding_gmail_list_max_messages()
 
     stmt_msgs: dict[str, Any] = {}
     alert_msgs: dict[str, Any] = {}
@@ -526,16 +612,26 @@ def _collect_pending_queue(
             "gmail_search_plan",
             f"source_key={source_key} statement_senders={len(stmt_senders)} "
             f"alert_senders={len(alert_senders)} defer_alert_listing={defer_alerts} "
-            f"after={after_s} before={before_s}",
+            f"after={after_s} before={before_s} max_messages_cap={_list_cap!r}",
         )
 
     for raw_sender in stmt_senders:
         for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
+            if import_flow_log:
+                import_flow_log.write(
+                    "gmail_list_api_begin",
+                    f"phase=statement sender={raw_sender!r} query={query!r} max_messages_cap={_list_cap!r}",
+                )
+            lbl = f"phase=statement sender={raw_sender!r}"
             batch = client.search_messages(
                 query,
                 paginate=True,
                 max_results_per_page=100,
-                max_total=None,
+                max_total=_list_cap,
+                on_metadata_progress=_gmail_list_metadata_progress_cb(
+                    import_flow_log, label=lbl
+                ),
+                metadata_progress_every=50,
             )
             if import_flow_log:
                 import_flow_log.write(
@@ -549,11 +645,21 @@ def _collect_pending_queue(
     if not defer_alerts:
         for raw_sender in alert_senders:
             for query in _gmail_queries_for_sender_date_window(bank, raw_sender, after_s, before_s):
+                if import_flow_log:
+                    import_flow_log.write(
+                        "gmail_list_api_begin",
+                        f"phase=alert sender={raw_sender!r} query={query!r} max_messages_cap={_list_cap!r}",
+                    )
+                lbl = f"phase=alert sender={raw_sender!r}"
                 batch = client.search_messages(
                     query,
                     paginate=True,
                     max_results_per_page=100,
-                    max_total=None,
+                    max_total=_list_cap,
+                    on_metadata_progress=_gmail_list_metadata_progress_cb(
+                        import_flow_log, label=lbl
+                    ),
+                    metadata_progress_every=50,
                 )
                 if import_flow_log:
                     import_flow_log.write(

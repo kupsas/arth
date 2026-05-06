@@ -108,6 +108,15 @@ BANK_SENDERS: dict[str, dict] = {
         "instrument_type": "savings",
         "discovery_subject_patterns": _PAT_HDFC_ALERT,
         "expected_cadence": "per_transaction",
+        # Without this, onboarding runs ``from:alerts@…`` alone — tens of thousands of
+        # marketing / OTP / non-transaction mails match, then one metadata GET per row.
+        # Keywords align with :mod:`parsers.alerts.hdfc` ``can_parse`` subject gates.
+        "gmail_subject_filter_keywords": [
+            "UPI txn",
+            "Account update for your HDFC Bank A/c",
+            "debited via Credit Card",
+            "A payment was made using your Credit Card",
+        ],
     },
     "alerts@hdfcbank.bank.in": {
         "parser_key": "hdfc_bank",
@@ -116,6 +125,12 @@ BANK_SENDERS: dict[str, dict] = {
         "instrument_type": "savings",
         "discovery_subject_patterns": _PAT_HDFC_ALERT,
         "expected_cadence": "per_transaction",
+        "gmail_subject_filter_keywords": [
+            "UPI txn",
+            "Account update for your HDFC Bank A/c",
+            "debited via Credit Card",
+            "A payment was made using your Credit Card",
+        ],
     },
     # Note: ICICI transaction alerts come from the .bank.in domain (NOT .com).
     # customercare@icicibank.com sends MAB reminders and marketing — not transaction alerts.

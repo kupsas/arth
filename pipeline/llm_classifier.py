@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,30 +64,46 @@ class LLMResponse:
 # Public API
 # ---------------------------------------------------------------------------
 
-def classify_llm(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]:
+def classify_llm(
+    txns: list[CanonicalTransaction],
+    *,
+    on_batch_complete: Callable[[int, int], None] | None = None,
+) -> list[CanonicalTransaction]:
     """Run LLM classification on transactions that still have gaps.
 
     Supports three modes via ``LLM_MODEL``:
       - ``"none"``  — skip LLM entirely (rules-only)
       - ``"auto"``  — use the fallback chain (try models in order)
       - a specific model key — use exactly that model, no fallback
+
+    ``on_batch_complete(processed, total)`` is invoked after each batch (including
+    cache hits) so upload progress UIs can show LLM work advancing.
     """
     # Read at call time so CLI overrides (config.LLM_MODEL = "none") are respected
     llm_model = _cfg.LLM_MODEL
 
     if llm_model == "none":
+        if on_batch_complete:
+            on_batch_complete(0, 0)
         return txns
 
     if not _has_any_provider_api_key():
         logger.info(
             "LLM: no provider API keys — skipping LLM classification (graceful rules-only degradation)"
         )
+        if on_batch_complete:
+            on_batch_complete(0, 0)
         return txns
 
     work = _build_work_items(txns)
     if not work:
         logger.debug("LLM: all fields already filled — nothing to do")
+        if on_batch_complete:
+            on_batch_complete(0, 0)
         return txns
+
+    total_work = len(work)
+    processed = 0
 
     num_batches = (len(work) + LLM_BATCH_SIZE - 1) // LLM_BATCH_SIZE
     logger.info("LLM: %d transactions need classification, batching into %d calls",
@@ -115,6 +132,9 @@ def classify_llm(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]
         cache = _load_cache_for_key(cache_key)
         if cache is not None:
             _apply_results(txns, indices, items, cache)
+            processed += len(batch)
+            if on_batch_complete:
+                on_batch_complete(processed, total_work)
             continue
 
         results = _call_with_fallback(model_chain, items)
@@ -123,6 +143,9 @@ def classify_llm(txns: list[CanonicalTransaction]) -> list[CanonicalTransaction]
             _apply_results(txns, indices, items, results)
         else:
             logger.warning("LLM: all models failed for batch starting at index %d", batch_start)
+        processed += len(batch)
+        if on_batch_complete:
+            on_batch_complete(processed, total_work)
 
     return txns
 

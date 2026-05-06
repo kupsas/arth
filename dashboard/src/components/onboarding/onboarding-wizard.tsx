@@ -5,7 +5,7 @@
  *
  * - Owns high-level step navigation + a progress indicator.
  * - Runs the Gmail → discovery → identity → optional LLM keys → sequential backfill
- *   (with Server-Sent Events live email import) → optional broker portfolio snapshot → gap review → goals → summary.
+ *   (with Server-Sent Events live email import) → review (transactions + gaps) → goals → summary.
  * - The same component is mounted full-screen from ``/setup`` **and** inside the
  *   Settings sheet for **Connect account** — pass ``mode`` + ``className`` only.
  */
@@ -24,8 +24,7 @@ import {
   type BackfillProgressSnapshot,
 } from "@/components/onboarding/step-email-import"
 import { StepDiscovery } from "@/components/onboarding/step-discovery"
-import { StepGapDetection } from "@/components/onboarding/step-gap-detection"
-import { StepPortfolioSummary } from "@/components/onboarding/step-portfolio-summary"
+import { StepReview } from "@/components/onboarding/step-review"
 import { StepPasswordIngredients } from "@/components/onboarding/step-password-ingredients"
 import { StepSummary } from "@/components/onboarding/step-summary"
 import { StepUploadFallback } from "@/components/onboarding/step-upload-fallback"
@@ -38,6 +37,7 @@ import {
   patchOnboardingState,
   postOnboardingBackfillResume,
   postOnboardingPersistSources,
+  postOnboardingPortfolioDerive,
   streamOnboardingBackfill,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -59,7 +59,6 @@ export type WizardStepId =
   | "preclass"
   | "apikey"
   | "backfill"
-  | "portfolio_summary"
   | "gaps"
   | "goals"
   | "summary"
@@ -71,7 +70,6 @@ const ALL_WIZARD_STEP_IDS = [
   "preclass",
   "apikey",
   "backfill",
-  "portfolio_summary",
   "gaps",
   "goals",
   "summary",
@@ -106,26 +104,53 @@ function recordToBackfillSnapshot(
   }
 }
 
-/** Progress pills: inserts **Portfolio** after Import mail when discovery included a broker source. */
-function buildOnboardingStepMeta(
-  includePortfolio: boolean,
-): { id: WizardStepId; label: string }[] {
-  const rows: { id: WizardStepId; label: string }[] = [
+/**
+ * After you save labels, the wizard bumps ``bfTick`` so the mail SSE restarts. The new stream
+ * often emits a bare ``idle`` row (zeros) before real progress — without a fallback, the card
+ * flashes **Getting ready** even though import is mid-flight.
+ */
+function snapshotWorthPreservingForMailCard(shot: BackfillProgressSnapshot): boolean {
+  if (shot.status === "error") return false
+  // ``idle`` is always a connect/reconnect artifact — never overwrite a real snapshot with it.
+  if (shot.status === "idle") return false
+  if (shot.emails_found > 0 || shot.transactions_parsed > 0) return true
+  switch (shot.status) {
+    case "needs_classification":
+    case "processing":
+    case "processing_statements":
+    case "processing_alerts":
+    case "paused":
+    case "needs_password":
+    case "complete":
+      return true
+    default:
+      return false
+  }
+}
+
+/**
+ * True when ``shot`` is a transient reconnect artifact (``null`` or any ``idle``).
+ * The server replays the last-known counters in the first ``idle`` tick after reconnecting,
+ * so we cannot distinguish "real idle" from "stale idle" by counter values — treat all idle
+ * as transient when the sticky display is available.
+ */
+function isTransientReconnectSnapshot(shot: BackfillProgressSnapshot | null): boolean {
+  if (shot == null) return true
+  return shot.status === "idle"
+}
+
+/** Progress pills for the onboarding wizard (Review merges former Portfolio + Coverage). */
+function buildOnboardingStepMeta(): { id: WizardStepId; label: string }[] {
+  return [
     { id: "welcome", label: "Gmail" },
     { id: "discovery", label: "Find accounts" },
     { id: "preclass", label: "Config" },
     { id: "apikey", label: "Smart labels (opt.)" },
-    { id: "backfill", label: "Import mail" },
-  ]
-  if (includePortfolio) {
-    rows.push({ id: "portfolio_summary", label: "Portfolio" })
-  }
-  rows.push(
-    { id: "gaps", label: "Coverage" },
+    { id: "backfill", label: "Get your data" },
+    { id: "gaps", label: "Review" },
     { id: "goals", label: "Goals" },
     { id: "summary", label: "Done" },
-  )
-  return rows
+  ]
 }
 
 /**
@@ -134,6 +159,10 @@ function buildOnboardingStepMeta(
  * ``completed`` means the user finished — start a fresh connect-account flow at welcome.
  */
 function panelFromServerStep(step: string): WizardStepId {
+  /** Legacy step merged into Review (single ``gaps`` panel now). */
+  if (step === "portfolio_summary") {
+    return "gaps"
+  }
   if (step === "classification") {
     return "backfill"
   }
@@ -171,10 +200,7 @@ export function OnboardingWizard({
     () => (sourcesQ.data ?? []).some((s) => (s.instrument_type || "").toLowerCase() === "broker"),
     [sourcesQ.data],
   )
-  const stepMeta = React.useMemo(
-    () => buildOnboardingStepMeta(hasBrokerSource),
-    [hasBrokerSource],
-  )
+  const stepMeta = React.useMemo(() => buildOnboardingStepMeta(), [])
   /**
    * Server-resumed step from ``GET /state`` (null while the query is still loading).
    * We derive the visible step below so we **do not** need a hydration effect that calls
@@ -183,11 +209,8 @@ export function OnboardingWizard({
   const serverPanel = React.useMemo((): WizardStepId | null => {
     if (stateQ.isLoading) return null
     const step = stateQ.data?.current_step ?? "welcome"
-    if (step === "portfolio_summary" && !hasBrokerSource) {
-      return "gaps"
-    }
     return panelFromServerStep(step)
-  }, [stateQ.isLoading, stateQ.data, hasBrokerSource])
+  }, [stateQ.isLoading, stateQ.data])
   /**
    * Once the user moves forward/back in the wizard, this override wins over ``serverPanel``
    * for the rest of the session (same as “we already hydrated from the server” before).
@@ -200,20 +223,64 @@ export function OnboardingWizard({
   const [bfTick, setBfTick] = React.useState(0)
   const [bfProgress, setBfProgress] = React.useState<BackfillProgressSnapshot | null>(null)
   /**
+   * Last “real” mail snapshot (non-empty idle). Shown on **Import mail** while the live row is
+   * null/empty-idle during an SSE reconnect so the UI does not pretend import restarted from zero.
+   */
+  const [stickyMailImportProgress, setStickyMailImportProgress] =
+    React.useState<BackfillProgressSnapshot | null>(null)
+
+  const applyBfProgress = React.useCallback((shot: BackfillProgressSnapshot | null) => {
+    setBfProgress(shot)
+    if (shot && snapshotWorthPreservingForMailCard(shot)) {
+      setStickyMailImportProgress(shot)
+    }
+  }, [])
+  /**
    * True while the SSE import stream is connected — drives the Import mail card hint only.
    * Do **not** use this to lock the classification queue (see ``mailImportActivelyProcessing``).
    */
   const [bfChunkPosting, setBfChunkPosting] = React.useState(false)
+  /**
+   * Bumped on every SSE effect cleanup so a **stale** ``run()`` ``finally`` (after ``abort()``)
+   * cannot call ``setBfChunkPosting(false)`` after a newer run already set it ``true``. Without
+   * this, switching sources or refetching ``sourcesQ.data`` could flash the review overlay off.
+   */
+  const backfillStreamGenerationRef = React.useRef(0)
   const [bfError, setBfError] = React.useState<string | null>(null)
   const [resumeBusy, setResumeBusy] = React.useState(false)
   const [persistRetryBusy, setPersistRetryBusy] = React.useState(false)
   /**
-   * Set when the user tries to move past **Import mail** but ``GET /has-data`` reports zero
+   * Set when the user tries to move past **Get your data** but ``GET /has-data`` reports zero
    * transactions — we highlight the statement upload card and keep them on this step.
    */
   const [txnGateBlocked, setTxnGateBlocked] = React.useState(false)
 
+  /**
+   * True while a statement upload left rows in the run-scoped **Review labels** queue (or the upload
+   * panel is still in its post-import "finish review first" state). Hides **Continue to review** so
+   * we do not skip ahead of mandatory human labels.
+   */
+  const [statementUploadReviewGate, setStatementUploadReviewGate] = React.useState(false)
+
+  /**
+   * Two-phase "Get your data" step:
+   * - Phase 1 (false): email import is running — only show email progress UI, no upload cards.
+   * - Phase 2 (true): email import finished or was skipped — hide email UI, show statement upload only.
+   */
+  const [mailPhaseComplete, setMailPhaseComplete] = React.useState(false)
+
   const queryClient = useQueryClient()
+
+  /**
+   * When Phase 2 of **Get your data** starts and the user has a broker source, derive holdings in
+   * the background so the Review step's portfolio card has data ready (or nearly ready).
+   */
+  React.useEffect(() => {
+    if (!mailPhaseComplete || !hasBrokerSource) return
+    void postOnboardingPortfolioDerive().catch(() => {
+      /* non-fatal — StepReview still polls the snapshot */
+    })
+  }, [mailPhaseComplete, hasBrokerSource])
 
   /** Saved Config identity from the server — **Continue** stays off until first name is stored (via **Save config**). */
   const preSavedQ = useOnboardingPreclassificationSaved({
@@ -246,33 +313,35 @@ export function OnboardingWizard({
     }
   }, [queryClient])
 
-  /** Skip mail → Coverage / Portfolio, but only if at least one transaction exists for this user. */
+  /**
+   * Skip remaining mail → Phase 2 (upload screen).
+   * Fetches transaction count to determine whether the upload is required (gate-blocked)
+   * or optional (email import already produced rows).
+   */
   const handleSkipTowardCoverage = React.useCallback(async () => {
     setBfError(null)
     try {
       const hd = await fetchOnboardingHasData()
       if (hd.transaction_count === 0) {
         setTxnGateBlocked(true)
-        window.requestAnimationFrame(() => {
-          document
-            .getElementById("onboarding-statement-fallback")
-            ?.scrollIntoView({ behavior: "smooth", block: "center" })
-        })
-        return
+      } else {
+        setTxnGateBlocked(false)
       }
-      setTxnGateBlocked(false)
-      setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+      setMailPhaseComplete(true)
       await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
     } catch (e) {
       setBfError(
         getUserFacingErrorMessage(e) || "Couldn't verify your imported data. Try again.",
       )
     }
-  }, [hasBrokerSource, queryClient])
+  }, [queryClient])
 
   React.useEffect(() => {
     if (panel !== "backfill") {
       setTxnGateBlocked(false)
+      // Leaving mail import — always drop “stream open” so the review overlay logic resets.
+      setBfChunkPosting(false)
+      setStickyMailImportProgress(null)
     }
   }, [panel])
 
@@ -316,17 +385,17 @@ export function OnboardingWizard({
         try {
           const unknownSnap = await fetchOnboardingUnknowns({ limit: 1, offset: 0 })
           if (unknownSnap.pending_total === 0) {
-            setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+            setUserPanel("gaps")
             await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
           }
         } catch {
-          /* non-fatal — user can use Continue to coverage */
+          /* non-fatal — user can use Continue to review */
         }
       }
     } catch {
       /* non-fatal — user can retry */
     }
-  }, [queryClient, allMailSourcesFinished, hasBrokerSource, backfillSourcesLen])
+  }, [queryClient, allMailSourcesFinished, backfillSourcesLen])
 
   /** Matches server ``effective_onboarding_unknown_threshold`` (pause ~20). */
   const unknownPauseThreshold = classifierStatusQ.data?.unknown_threshold ?? 20
@@ -348,26 +417,28 @@ export function OnboardingWizard({
   const importStreamAwaitingSnapshot = bfChunkPosting && bfProgress === null
 
   /**
-   * Between accounts the backlog may still be tiny — hide the txn rows until we know it is worth
-   * showing or the stream has attached (avoids flashing rows then “Connecting…” above).
+   * Hide classification rows while the **first** source is connecting and there is nothing
+   * to show yet. On source switches (``bfSourceIdx > 0``), rows from the previous source
+   * stay visible under the translucent overlay so the user sees something useful and —
+   * critically — cannot accidentally save labels while the importer is writing to the DB.
    */
   const hideClassificationRowsForImportLimbo =
+    bfSourceIdx === 0 &&
     importStreamAwaitingSnapshot &&
     (globalPendingUnknowns === undefined || globalPendingUnknowns < unknownPauseThreshold)
 
   /**
-   * Dim the classification queue while mail is **actively being parsed** into the DB, so saves
-   * do not race with the importer. With SSE, ``bfChunkPosting`` stays true for the whole HTTP
-   * stream — do **not** key off that flag here. Never block during gates. If the combined queue
-   * is already at/over the pause threshold, keep the table interactive while the next source
-   * connects so rows do not “vanish” when the stream attaches.
+   * Dim the classification queue while the SSE mail import stream is open, preventing saves
+   * that would race with the importer’s DB writes.
+   *
+   * Driven by ``bfChunkPosting`` (stream connected) rather than individual status strings.
+   * The **only** things that drop the overlay are:
+   *   - ``allMailSourcesFinished`` — nothing left to import.
+   *   - Gate states (``needs_classification``, ``needs_password``, ``paused``) — the server
+   *     has stopped writing and is waiting for the user.
    */
   const mailImportActivelyProcessing = React.useMemo(() => {
-    // Never dim once all sources are done.
     if (allMailSourcesFinished) return false
-
-    // User-action gates: import has paused and is waiting for the user to act.
-    // These are the ONLY states that legitimately drop the overlay.
     const st = bfProgress?.status
     if (
       st === "needs_classification" ||
@@ -376,24 +447,27 @@ export function OnboardingWizard({
     ) {
       return false
     }
+    if (
+      st === "processing" ||
+      st === "processing_statements" ||
+      st === "processing_alerts"
+    ) {
+      return true
+    }
+    return bfChunkPosting
+  }, [allMailSourcesFinished, bfProgress, bfChunkPosting])
 
-    // Bug fix 1: source-switch limbo — bfProgress is null while the new SSE stream
-    // starts (setBfProgress(null) fires on bfSourceIdx change before the first event).
-    // importStreamAwaitingSnapshot = bfChunkPosting && bfProgress === null; keep the
-    // overlay so it never blinks out between accounts.
-    if (importStreamAwaitingSnapshot) return true
-
-    // Bug fix 2: listing_alerts phase — Gmail alert scanning is slow but the importer
-    // is still writing to the DB; removing the overlay here caused visible flicker.
-    // Bug fix 3: pending count >= pause-threshold no longer drops the overlay — the
-    // overlay is a DB-race guard, not a "you have enough to review" hint.
-    return (
-      bfProgress != null &&
-      (st === "processing" ||
-        st === "processing_statements" ||
-        st === "processing_alerts")
-    )
-  }, [allMailSourcesFinished, bfProgress, importStreamAwaitingSnapshot])
+  /**
+   * Mail card display only — logic and overlays still use raw ``bfProgress``. When the stream
+   * reconnects and the server sends an empty ``idle`` row, hold the previous headline/%/counts.
+   */
+  const emailImportDisplayProgress = React.useMemo(() => {
+    if (bfProgress?.status === "error") return bfProgress
+    if (stickyMailImportProgress != null && isTransientReconnectSnapshot(bfProgress)) {
+      return stickyMailImportProgress
+    }
+    return bfProgress
+  }, [bfProgress, stickyMailImportProgress])
 
   // Persist coarse wizard position so a refresh mid-flow still shows the same step name.
   // Skip while onboarding state is still loading and the user has not navigated yet — otherwise
@@ -405,7 +479,7 @@ export function OnboardingWizard({
     })
   }, [panel, stateQ.isLoading, userPanel])
 
-  // When entering backfill from earlier setup steps, restart the source queue.
+  // When entering backfill from earlier setup steps, restart the source queue and reset phase.
   React.useEffect(() => {
     const prev = prevPanelRef.current
     prevPanelRef.current = panel
@@ -413,18 +487,24 @@ export function OnboardingWizard({
     if (prev === "backfill") return
     setBfSourceIdx(0)
     setBfProgress(null)
+    setStickyMailImportProgress(null)
     setBfError(null)
+    setMailPhaseComplete(false)
   }, [panel])
 
   // Avoid showing the previous source's numbers on the new tab until the first SSE events arrive.
   React.useEffect(() => {
     setBfProgress(null)
+    setStickyMailImportProgress(null)
   }, [bfSourceIdx])
 
   // ── Gmail import: one SSE stream per effect run (per-email progress; gates end the stream) ──
   React.useEffect(() => {
     if (panel !== "backfill") return
     if (!sourcesQ.data?.length) return
+
+    /** Owns this effect invocation — survives across awaits inside ``run()``. */
+    const generationAtMount = backfillStreamGenerationRef.current
 
     const ac = new AbortController()
     const { signal } = ac
@@ -437,7 +517,7 @@ export function OnboardingWizard({
       }
 
       /**
-       * Wizard rule: do not send someone to Coverage with **zero** transactions — they would
+       * Wizard rule: do not send someone to **Review** with **zero** transactions — they would
        * only see empty charts. Mail import alone might yield nothing; statement upload fixes that.
        */
       async function requireTransactionsOrGate(): Promise<boolean> {
@@ -463,7 +543,7 @@ export function OnboardingWizard({
           await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
           return
         }
-        setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+        setUserPanel("gaps")
         await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
         return
       }
@@ -479,13 +559,13 @@ export function OnboardingWizard({
           signal,
           onProgress: (snap) => {
             const shot = recordToBackfillSnapshot(snap)
-            if (shot) setBfProgress(shot)
+            if (shot) applyBfProgress(shot)
           },
         })
         if (signal.aborted) return
 
         const shot = recordToBackfillSnapshot(streamResult.lastProgress)
-        if (shot) setBfProgress(shot)
+        if (shot) applyBfProgress(shot)
 
         const st = shot?.status ?? ""
 
@@ -528,11 +608,12 @@ export function OnboardingWizard({
               await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
               return
             }
-            if (!(await requireTransactionsOrGate())) {
-              await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
-              return
-            }
-            setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+            // Always transition to Phase 2 (upload screen) regardless of transaction count.
+            // requireTransactionsOrGate sets txnGateBlocked when there are 0 transactions,
+            // which drives the gateBlocked copy in StepUploadFallback.
+            await requireTransactionsOrGate()
+            if (signal.aborted) return
+            setMailPhaseComplete(true)
             await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
             return
           }
@@ -546,7 +627,25 @@ export function OnboardingWizard({
       } catch (e) {
         if (signal.aborted) return
         if (e instanceof ApiError && e.status === 409) {
-          await new Promise((r) => setTimeout(r, 2000))
+          // Wait before retry, but if the user left the backfill step, ``ac.abort()`` fires —
+          // we must not wake up and bump ``bfTick`` or the effect keeps hammering 409s forever.
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const id = setTimeout(() => {
+                signal.removeEventListener("abort", onAbort)
+                resolve()
+              }, 2000)
+              const onAbort = () => {
+                clearTimeout(id)
+                signal.removeEventListener("abort", onAbort)
+                reject(new DOMException("Aborted", "AbortError"))
+              }
+              signal.addEventListener("abort", onAbort)
+            })
+          } catch {
+            return
+          }
+          if (signal.aborted) return
           setBfTick((t) => t + 1)
           return
         }
@@ -556,15 +655,24 @@ export function OnboardingWizard({
         // Do NOT clear bfChunkPosting when we intentionally advanced to the next source.
         // The new source's run() has already called setBfChunkPosting(true) by this point;
         // clearing it here would clobber that and leave the overlay in a gap state.
-        if (!advancingSource) setBfChunkPosting(false)
+        //
+        // Also skip when this ``run`` lost a race: cleanup calls ``abort()``, then a newer
+        // effect bumps ``backfillStreamGenerationRef`` — our ``finally`` must not clear posting.
+        const willClear = !advancingSource && generationAtMount === backfillStreamGenerationRef.current;
+        if (willClear) {
+          setBfChunkPosting(false)
+        }
       }
     }
 
     void run()
     return () => {
+      // Invalidate any in-flight ``run()`` from this mount so its ``finally`` cannot turn off
+      // ``bfChunkPosting`` after the next effect's ``setBfChunkPosting(true)``.
+      backfillStreamGenerationRef.current += 1
       ac.abort()
     }
-  }, [panel, bfSourceIdx, bfTick, sourcesQ.data, hasBrokerSource, queryClient])
+  }, [panel, bfSourceIdx, bfTick, sourcesQ.data, queryClient, applyBfProgress])
 
 
   const stepIndex = stepMeta.findIndex((s) => s.id === panel)
@@ -581,7 +689,7 @@ export function OnboardingWizard({
         resume_from_pause: true,
         onProgress: (snap) => {
           const shot = recordToBackfillSnapshot(snap)
-          if (shot) setBfProgress(shot)
+          if (shot) applyBfProgress(shot)
         },
       })
       setBfTick((t) => t + 1)
@@ -604,7 +712,7 @@ export function OnboardingWizard({
         resume_after_password: true,
         onProgress: (snap) => {
           const shot = recordToBackfillSnapshot(snap)
-          if (shot) setBfProgress(shot)
+          if (shot) applyBfProgress(shot)
         },
       })
       setBfTick((t) => t + 1)
@@ -616,16 +724,18 @@ export function OnboardingWizard({
     }
   }
 
+  /** Phase 2 "Continue" — advance to Review when transactions already exist. */
+  const handleContinueFromUploadPhase = React.useCallback(async () => {
+    setUserPanel("gaps")
+    await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+  }, [queryClient])
+
   function goBack() {
     if (panel === "welcome") {
       onExitFirstStep?.()
       return
     }
     if (panel === "gaps") {
-      setUserPanel(hasBrokerSource ? "portfolio_summary" : "backfill")
-      return
-    }
-    if (panel === "portfolio_summary") {
       setUserPanel("backfill")
       return
     }
@@ -770,7 +880,8 @@ export function OnboardingWizard({
                 just connected, wait a moment and refresh this page.
               </p>
             )}
-            {!!sourcesQ.data?.length && (
+            {/* Phase 1 — email import running. No upload UI of any kind. */}
+            {!!sourcesQ.data?.length && !mailPhaseComplete && (
               <>
                 {/* TODO: Add a "paste exact PDF password" path when ingredients are not enough; see
                     ``onboarding_orchestrator`` needs_password (UserSecrets override, not .env/DB). */}
@@ -782,14 +893,13 @@ export function OnboardingWizard({
                 )}
                 <StepEmailImport
                   title={activeSourceLabel ?? activeSourceKey ?? "…"}
-                  progress={bfProgress}
+                  progress={emailImportDisplayProgress}
                   error={bfError}
                   sources={sourcesQ.data}
                   activeSourceIndex={bfSourceIdx}
                   onResumeFromPause={bfProgress?.status === "paused" ? handleResumePause : undefined}
                   resumeBusy={resumeBusy}
                   importBusy={bfChunkPosting}
-                  showStatementUploadLink
                 />
                 <ClassificationBatchReview
                   importAwaitingClassification={bfProgress?.status === "needs_classification"}
@@ -797,13 +907,12 @@ export function OnboardingWizard({
                   mailImportActivelyProcessing={mailImportActivelyProcessing}
                   hideClassificationRowsForImportLimbo={hideClassificationRowsForImportLimbo}
                   pauseThresholdForShortcuts={unknownPauseThreshold}
+                  lastKnownProgress={stickyMailImportProgress as unknown as Record<string, unknown>}
                   unknownsTrigger={`${bfSourceIdx}:${bfProgress?.status ?? "none"}:${bfProgress?.unknowns_pending ?? 0}`}
-                  onSubmitted={() => {
-                    setBfTick((t) => t + 1)
-                  }}
+                  onSubmitted={() => setBfTick((t) => t + 1)}
                   onImportProgress={(snap) => {
                     const shot = recordToBackfillSnapshot(snap)
-                    if (shot) setBfProgress(shot)
+                    if (shot) applyBfProgress(shot)
                   }}
                 />
                 <Button
@@ -812,26 +921,41 @@ export function OnboardingWizard({
                   size="sm"
                   onClick={() => void handleSkipTowardCoverage()}
                 >
-                  Skip remaining mail → gap check
+                  Skip remaining mail → review
                 </Button>
               </>
             )}
-            {!sourcesQ.isLoading && !persistSourcesWait && (
-              <StepUploadFallback
-                gateBlocked={txnGateBlocked}
-                mailImportBusy={mailImportActivelyProcessing}
-                onImportComplete={() => void handleStatementImportComplete()}
-              />
+
+            {/* Phase 2 — email import done or skipped. Only upload UI, no email progress. */}
+            {mailPhaseComplete && !sourcesQ.isLoading && !persistSourcesWait && (
+              <>
+                <StepUploadFallback
+                  gateBlocked={txnGateBlocked}
+                  onImportComplete={() => void handleStatementImportComplete()}
+                  onStatementReviewGateChange={setStatementUploadReviewGate}
+                />
+                {!txnGateBlocked && !statementUploadReviewGate && (
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      onClick={() => void handleContinueFromUploadPhase()}
+                    >
+                      Continue to review
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
-            {!sourcesQ.data?.length && !persistSourcesWait && (
+
+            {/* No email sources at all — skip straight to Phase 2. */}
+            {!sourcesQ.data?.length && !sourcesQ.isLoading && !persistSourcesWait && !mailPhaseComplete && (
               <Button type="button" variant="secondary" onClick={() => void handleSkipTowardCoverage()}>
-                Continue to coverage
+                Continue to review
               </Button>
             )}
           </div>
         )}
-        {panel === "portfolio_summary" && <StepPortfolioSummary />}
-        {panel === "gaps" && <StepGapDetection />}
+        {panel === "gaps" && <StepReview hasBrokerSource={hasBrokerSource} />}
         {panel === "goals" && <GoalTemplateWizard />}
         {panel === "summary" && <StepSummary onDone={onFinished} />}
       </div>
@@ -844,16 +968,6 @@ export function OnboardingWizard({
           <div className="flex flex-wrap items-center justify-end gap-2">
             {panel === "preclass" && (
               <>
-                {!preclassConfigHasFirstNameSaved && !preSavedQ.isLoading && (
-                  <p
-                    id="preclass-continue-hint"
-                    className="basis-full text-right text-sm text-muted-foreground sm:basis-auto sm:mr-auto sm:text-left"
-                  >
-                    Add your first name above, then tap <strong>Save config</strong> once — after that,{" "}
-                    <strong>Continue</strong> is ready. We use it to recognise how your bank spells you in
-                    transaction descriptions and PDFs.
-                  </p>
-                )}
                 <Button
                   type="button"
                   onClick={() => setUserPanel("apikey")}
@@ -871,11 +985,6 @@ export function OnboardingWizard({
             {panel === "apikey" && (
               <Button type="button" onClick={() => setUserPanel("backfill")}>
                 Start importing mail
-              </Button>
-            )}
-            {panel === "portfolio_summary" && (
-              <Button type="button" onClick={() => setUserPanel("gaps")}>
-                Continue to coverage
               </Button>
             )}
             {panel === "gaps" && (

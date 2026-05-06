@@ -2,7 +2,7 @@
 Parser for the HDFC savings account statement (.txt export).
 
 Format quirks handled here (and ONLY here):
-  - Blank first line, header on line 2, data from line 3 onward.
+  - Optional blank or title lines before the CSV header — we locate the header by content.
   - Comma-delimited with heavy whitespace padding on every field.
   - Truncated header names (e.g. "Value Dat" instead of "Value Date").
   - Dates in DD/MM/YY format — parsed with explicit strptime, no guessing.
@@ -22,6 +22,24 @@ from pipeline.models import ParsedTransaction
 from parsers.uploads.base import BaseParser
 
 logger = logging.getLogger(__name__)
+
+
+def _find_hdfc_savings_txt_header_index(raw_lines: list[str]) -> int | None:
+    """Return the 0-based line index of the comma-separated CSV header row.
+
+    HDFC sometimes ships a blank line or a title before the header; the header row
+    contains ``Date`` plus ``Narration`` or ``Transaction`` (case-insensitive). We must
+    **not** treat the first data row (which also has commas) as the header — that bug
+    made :meth:`HDFCSavingsParser.detect` return ``None`` for normal exports.
+    """
+    for i, raw in enumerate(raw_lines):
+        s = raw.strip()
+        if not s:
+            continue
+        low = s.lower()
+        if "date" in low and ("narration" in low or "transaction" in low):
+            return i
+    return None
 
 
 class HDFCSavingsParser(BaseParser):
@@ -46,16 +64,17 @@ class HDFCSavingsParser(BaseParser):
             sample = path.read_text(encoding="utf-8", errors="replace")[:12000]
         except OSError:
             return None
-        lines = [ln.strip() for ln in sample.splitlines() if ln.strip()]
-        if len(lines) < 2:
+        raw_lines = sample.splitlines()
+        hi = _find_hdfc_savings_txt_header_index(raw_lines)
+        if hi is None:
             return None
-        # Skip optional blank line — header often row 2.
-        header_line = lines[1] if len(lines) > 1 and "," in lines[1] else lines[0]
-        hl = header_line.lower()
-        if "date" not in hl or ("narration" not in hl and "transaction" not in hl):
+        # Need at least one plausible data row after the header.
+        tail = [raw_lines[j].strip() for j in range(hi + 1, len(raw_lines)) if raw_lines[j].strip()]
+        if not tail:
             return None
         hint: str | None = None
-        for ln in lines[:25]:
+        nonempty = [ln.strip() for ln in raw_lines if ln.strip()]
+        for ln in nonempty[:25]:
             m = re.search(r"(?:account|a/c)\s*(?:no\.?|number)\s*[:\s]*(\d{6,})", ln, re.I)
             if m:
                 hint = m.group(1)[-4:]
@@ -95,10 +114,19 @@ class HDFCSavingsParser(BaseParser):
         with open(file_path, encoding="utf-8") as fh:
             lines = fh.readlines()
 
-        # Line 1 is blank, line 2 is the header — data starts at line 3 (index 2)
-        for line_num, raw_line in enumerate(lines[2:], start=3):
+        hi = _find_hdfc_savings_txt_header_index(lines)
+        if hi is None:
+            logger.warning("hdfc_savings: no CSV header row in %s", file_path.name)
+            return []
+
+        # All physical lines after the header row are candidates; skip blanks and the header
+        # if it somehow repeats.
+        for line_num, raw_line in enumerate(lines[hi + 1 :], start=hi + 2):
             line = raw_line.strip()
             if not line:
+                continue
+            low = line.lower()
+            if "date" in low and ("narration" in low or "transaction" in low):
                 continue
 
             parsed = self._parse_line(line, line_num, file_path.name)
@@ -161,11 +189,13 @@ class HDFCSavingsParser(BaseParser):
         s = s.strip()
         if not s:
             return None
-        try:
-            return datetime.datetime.strptime(s, "%d/%m/%y").date()
-        except ValueError:
-            logger.warning("hdfc_savings: could not parse date %r on line %d", s, line_num)
-            return None
+        for fmt in ("%d/%m/%y", "%d/%m/%Y"):
+            try:
+                return datetime.datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        logger.warning("hdfc_savings: could not parse date %r on line %d", s, line_num)
+        return None
 
     @staticmethod
     def _parse_amount(s: str) -> Decimal:

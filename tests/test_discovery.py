@@ -58,7 +58,7 @@ def test_discover_sources_empty_mailbox() -> None:
 
 
 def test_discover_sources_finds_ids_and_caps_estimate() -> None:
-    """``email_count_estimate`` is len(ids) from a single list call; first 3 IDs are samples."""
+    """``email_count_estimate`` is len(ids) from a single list call; first 5 IDs are samples."""
     client = MagicMock()
     ids = [f"m{i}" for i in range(10)]
     client.list_message_ids.return_value = ids
@@ -73,7 +73,7 @@ def test_discover_sources_finds_ids_and_caps_estimate() -> None:
     assert len(out) == 1
     r = out[0]
     assert r.email_count_estimate == 10
-    assert r.sample_message_ids == ["m0", "m1", "m2"]
+    assert r.sample_message_ids == ["m0", "m1", "m2", "m3", "m4"]
     client.list_message_ids.assert_called_once_with("from:alerts@hdfcbank.net", max_results=100)
 
 

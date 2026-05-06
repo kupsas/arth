@@ -62,15 +62,23 @@ class HDFCCombinedStatementEmailParser(BaseStatementEmailParser):
                 "in onboarding.",
             )
 
-        # Single savings account in config: last four digits of the account number (3703).
-        if "3703" not in self.accounts:
+        # Pick the first savings account from the accounts dict (sorted for determinism).
+        # We never hardcode "3703" here — the last-4 is resolved from the DB at runtime
+        # via scraper_account_mappings (written during onboarding persist-sources).
+        savings_accounts = {
+            k: v
+            for k, v in self.accounts.items()
+            if v.get("source_key") == "hdfc_savings"
+        }
+        if not savings_accounts:
             logger.error(
-                "HDFC combined statement parser has no account mapping for configured HDFC "
-                "savings tail — check BANK_SENDERS."
+                "HDFC combined statement parser has no account mapping for hdfc_savings — "
+                "re-run onboarding persist-sources to rebuild scraper_account_mappings."
             )
             return []
 
-        entry = self.accounts["3703"]
+        last4 = sorted(savings_accounts.keys())[0]
+        entry = savings_accounts[last4]
         account_id = entry["account_id"]
         source_key = entry["source_key"]
 

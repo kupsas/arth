@@ -57,11 +57,6 @@ export type StepEmailImportProps = {
    * not the same as blocking the classification queue (see wizard ``mailImportActivelyProcessing``).
    */
   importBusy?: boolean
-  /**
-   * When true, show a bottom link that scrolls to the inline statement upload card on the
-   * parent page (``#onboarding-statement-fallback``).
-   */
-  showStatementUploadLink?: boolean
 }
 
 /** Map orchestrator status strings to short, user-facing labels. */
@@ -148,7 +143,6 @@ export function StepEmailImport({
   onResumeFromPause,
   resumeBusy,
   importBusy,
-  showStatementUploadLink = false,
 }: StepEmailImportProps) {
   /**
    * After statement emails finish, the server switches status to ``processing_alerts`` and sets
@@ -161,10 +155,22 @@ export function StepEmailImport({
     progress?.status === "processing_alerts" &&
     progress?.current_phase === "listing_alerts"
 
-  const pct =
-    progress && !isAlertListingReconnect && progress.emails_found > 0
-      ? Math.min(100, Math.round((100 * progress.emails_processed) / progress.emails_found))
-      : null
+  /**
+   * Prefer email counters when the queue size is known. When Gmail uses **date windows** for
+   * alerts, ``windows_total`` / ``windows_completed`` can move before ``emails_found`` catches up.
+   */
+  const pct = (() => {
+    if (!progress || isAlertListingReconnect) return null
+    const wt = progress.windows_total
+    const wc = progress.windows_completed ?? 0
+    if (wt != null && wt > 0 && progress.emails_found === 0) {
+      return Math.min(100, Math.round((100 * wc) / wt))
+    }
+    if (progress.emails_found > 0) {
+      return Math.min(100, Math.round((100 * progress.emails_processed) / progress.emails_found))
+    }
+    return null
+  })()
 
   const idx = activeSourceIndex ?? 0
   const activeKey = sources?.[idx]?.source_key
@@ -243,16 +249,38 @@ export function StepEmailImport({
                 <h3 className="text-base font-semibold leading-snug">
                   {statusLabel(progress?.status)}
                 </h3>
-                {progress && !isAlertListingReconnect && (
+                {progress && !isAlertListingReconnect && progress.emails_found > 0 && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     {progress.emails_processed.toLocaleString()} /{" "}
                     {progress.emails_found.toLocaleString()} messages ·{" "}
                     {progress.transactions_parsed.toLocaleString()} transactions parsed
                   </p>
                 )}
+                {progress &&
+                  !isAlertListingReconnect &&
+                  progress.emails_found === 0 &&
+                  (progress.windows_total ?? 0) > 0 && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Still pulling message lists from Gmail — numbers appear after each batch.{" "}
+                      {progress.transactions_parsed > 0 && (
+                        <>
+                          {progress.transactions_parsed.toLocaleString()} transactions imported so far.
+                        </>
+                      )}
+                    </p>
+                  )}
                 {(!progress || isAlertListingReconnect) && (
-                  <p className="mt-1 text-xs text-muted-foreground">Connecting to the API…</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Connecting…</p>
                 )}
+                {progress &&
+                  !isAlertListingReconnect &&
+                  progress.emails_found === 0 &&
+                  (progress.windows_total ?? 0) === 0 &&
+                  progress.status === "idle" && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Scanning your mail — this can take a minute…
+                    </p>
+                  )}
               </div>
             </div>
             <div className="shrink-0 text-right">
@@ -295,16 +323,6 @@ export function StepEmailImport({
         </CardContent>
       </Card>
 
-      {showStatementUploadLink && (
-        <p className="text-center text-sm text-muted-foreground">
-          <a
-            href="#onboarding-statement-fallback"
-            className="font-medium text-primary underline underline-offset-2 hover:text-primary/90"
-          >
-            Have a statement file? Upload it here
-          </a>
-        </p>
-      )}
     </div>
   )
 }

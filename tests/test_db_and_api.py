@@ -449,6 +449,15 @@ class TestPipelineRunsList:
 
 class TestPipelineRunDetail:
     def test_found(self, client: TestClient, session: Session):
+        session.add(
+            UserPipelineSource(
+                user_id="local",
+                source_key="icici_savings",
+                account_id="ICICI_TEST_1",
+                currency="INR",
+                statement_folder="ICICI_Savings",
+            )
+        )
         run = PipelineRun(source_key="icici_savings", llm_model="auto", status="running")
         session.add(run)
         session.commit()
@@ -456,7 +465,9 @@ class TestPipelineRunDetail:
 
         resp = client.get(f"/api/pipeline/runs/{run.id}")
         assert resp.status_code == 200
-        assert resp.json()["source_key"] == "icici_savings"
+        body = resp.json()
+        assert body["source_key"] == "icici_savings"
+        assert "unknowns_count" in body
 
     def test_not_found(self, client: TestClient):
         resp = client.get("/api/pipeline/runs/9999")

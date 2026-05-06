@@ -88,6 +88,18 @@ def test_icici_bank_imps_body_finds_xxxx_last4(infer_session: tuple[Session, str
     assert acct["6118"]["source_key"] == "icici_savings"
 
 
+def test_icici_bank_alert_without_savings_word_still_finds_last4(infer_session: tuple[Session, str]) -> None:
+    """Some ICICI templates say “ICICI Bank Account XXXX…” without the word Savings."""
+    session, uid = infer_session
+    body = (
+        "Amount credited to your ICICI Bank Account XXXX6118 on 01-Jan-2026. "
+        "Reference ID 123456."
+    )
+    cfg = {"parser_key": "icici_bank"}
+    acct = _infer_accounts_dict(cfg, ["Credit notification", body], session=session, user_id=uid)
+    assert "6118" in acct
+
+
 def test_icici_xx118_resolves_via_user_pipeline_source(infer_session: tuple[Session, str]) -> None:
     """ICICI often shows XX118 — last three digits of last-four 6118."""
     session, uid = infer_session
@@ -125,6 +137,18 @@ def test_hdfc_cc_statement_swiggy_subject_maps_last4(infer_session: tuple[Sessio
     acct = _infer_accounts_dict(
         cfg, [subj, "<html><body>PDF in attachment</body></html>"], session=session, user_id=uid
     )
+    assert "1905" in acct
+
+
+def test_hdfc_cc_statement_swiggy_subject_prefixed_like_gmail_fetch_maps_last4(
+    infer_session: tuple[Session, str],
+) -> None:
+    """Production persist-sources prefixes ``Subject:`` onto the HTML body before inference."""
+    session, uid = infer_session
+    cfg = {"parser_key": "hdfc_cc_statement"}
+    subj = "Your HDFC Bank Credit Card statement (Swiggy HDFC Bank Credit Card)"
+    combined = f"Subject: {subj}\n\n<html><body>PDF in attachment</body></html>"
+    acct = _infer_accounts_dict(cfg, [combined], session=session, user_id=uid)
     assert "1905" in acct
 
 

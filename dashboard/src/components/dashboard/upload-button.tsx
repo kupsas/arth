@@ -25,7 +25,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
-import { uploadHoldingsStatement, uploadStatement } from "@/lib/api"
+import { fetchPipelineRun, streamPipelineRunProgress, uploadHoldingsStatement, uploadStatement } from "@/lib/api"
 import { ApiError } from "@/lib/api"
 import { buildApiUrl } from "@/lib/api-base"
 import { holdingsCoverageKey } from "@/hooks/use-onboarding-gaps"
@@ -43,6 +43,13 @@ type UploadState =
   | { phase: "idle" }
   | { phase: "uploading" }
   | { phase: "polling"; runId: number; sourceKey: string }
+  /** Onboarding: live SSE from ``/api/pipeline/runs/{id}/stream`` while the server classifies. */
+  | {
+      phase: "sse_wait"
+      runId: number
+      sourceKey: string
+      progress: Record<string, unknown> | null
+    }
   | { phase: "type_pick"; file: File; options: StatementUploadOption[]; serverMessage: string }
   | { phase: "account_pick"; file: File; options: StatementUploadOption[]; serverMessage: string }
   /** Encrypted PDF — ask user for password (same file is re-uploaded until unlock succeeds) */
@@ -53,6 +60,17 @@ type UploadState =
       passwordInvalid: boolean
     }
   | { phase: "soft_fail"; kind: "no_match" | "no_source"; message: string; contact?: boolean }
+  /**
+   * Onboarding statement step: import finished but some rows still need labels in the queue below.
+   * No "Upload another" until the parent clears the queue and bumps ``reviewResetNonce`` (we then go idle).
+   */
+  | {
+      phase: "review_pending"
+      txnCount: number
+      newCount: number
+      unknownsCount: number
+      sourceKey: string
+    }
   | { phase: "done"; txnCount: number; newCount: number; sourceKey: string }
   | { phase: "holdings_done"; summary: string }
   | { phase: "holdings_type_pick"; file: File; options: StatementUploadOption[]; serverMessage: string }
@@ -84,6 +102,41 @@ async function pollRunStatus(
     }
   }
   onError("Timed out waiting for the import to finish. Check the Runs page for status.")
+}
+
+function statementSseProgressUi(progress: Record<string, unknown> | null): {
+  percent: number | undefined
+  caption: string
+} {
+  const ph = (progress?.phase as string) || ""
+  if (ph === "parsing") {
+    const total = Number(progress?.total_count ?? progress?.parsed_count ?? 0)
+    return {
+      percent: undefined,
+      caption:
+        total > 0
+          ? `Read ${total} transaction row(s) from your statement…`
+          : "Reading your statement…",
+    }
+  }
+  if (ph === "deduping") {
+    const u = Number(progress?.unique_count ?? 0)
+    const t = Number(progress?.total_count ?? 0)
+    return {
+      percent: undefined,
+      caption: t > 0 ? `Found ${t} row(s) · ${u} new after dedupe` : "Removing duplicates…",
+    }
+  }
+  if (ph === "classifying") {
+    const done = Number(progress?.classified_count ?? 0)
+    const tot = Number(progress?.total_classify ?? 0)
+    const pct = tot > 0 ? Math.min(100, Math.round((done / tot) * 100)) : undefined
+    return {
+      percent: pct,
+      caption: tot > 0 ? `Classifying: ${done} / ${tot}` : "Applying rules and AI labels…",
+    }
+  }
+  return { percent: undefined, caption: "Working on your file…" }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,6 +207,10 @@ function UploadDialog({
   variant,
   disabled = false,
   compactProgressCopy = false,
+  statementReviewMode = false,
+  onStatementRunReady,
+  /** Increment when the onboarding review queue is cleared so we can return the drop zone to idle. */
+  reviewResetNonce = 0,
 }: {
   onImportComplete?: () => void
   variant: "transactions" | "holdings"
@@ -161,6 +218,19 @@ function UploadDialog({
   disabled?: boolean
   /** Onboarding: hide internal run ids and use shorter progress copy. */
   compactProgressCopy?: boolean
+  /**
+   * Onboarding statement step: after upload, follow SSE progress then surface the run id for the
+   * inline review queue (parent renders ``ClassificationBatchReview``).
+   */
+  statementReviewMode?: boolean
+  onStatementRunReady?: (info: {
+    runId: number
+    sourceKey: string
+    txnCount: number
+    newCount: number
+    unknownsCount: number
+  }) => void
+  reviewResetNonce?: number
 }) {
   const queryClient = useQueryClient()
   const [state, setState] = React.useState<UploadState>({ phase: "idle" })
@@ -187,6 +257,24 @@ function UploadDialog({
     setState({ phase: "idle" })
   }
 
+  /**
+   * Parent bumps ``reviewResetNonce`` after the user finishes the statement-run review queue.
+   * When we were waiting on that review, snap back to the drop zone (same hygiene as ``goIdle``).
+   */
+  React.useEffect(() => {
+    if (!statementReviewMode || reviewResetNonce <= 0) return
+    let clearedReviewPending = false
+    setState((prev) => {
+      if (prev.phase !== "review_pending") return prev
+      clearedReviewPending = true
+      return { phase: "idle" }
+    })
+    if (clearedReviewPending) {
+      pdfSessionPasswordRef.current = undefined
+      setPdfPasswordInput("")
+    }
+  }, [reviewResetNonce, statementReviewMode])
+
   async function runTxnUpload(
     file: File,
     opts?: { sourceKey?: string; sourceType?: string; pdfPassword?: string },
@@ -201,20 +289,140 @@ function UploadDialog({
         ...(mergedPw ? { pdfPassword: mergedPw } : {}),
       })
       if (result.outcome === "success" && result.run_id != null && result.source_key) {
+        const runId = result.run_id
+        const srcKey = result.source_key
         rememberWorkingPdfPassword(mergedPw)
+        if (statementReviewMode) {
+          setState({
+            phase: "sse_wait",
+            runId,
+            sourceKey: srcKey,
+            progress: null,
+          })
+          try {
+            const { last, endReason } = await streamPipelineRunProgress(runId, {
+              onProgress: (snap) => {
+                setState((prev) =>
+                  prev.phase === "sse_wait" && prev.runId === runId
+                    ? { ...prev, progress: snap }
+                    : prev,
+                )
+              },
+            })
+            if (endReason === "error" || String(last?.phase) === "error") {
+              setState({
+                phase: "error",
+                message: String(last?.error_message ?? "That import didn't finish. Try again?"),
+              })
+              return
+            }
+            let txnCount = Number(last?.txn_count ?? last?.total_count ?? 0)
+            let newCount = Number(last?.new_count ?? 0)
+            let unknownsCount = Number(last?.unknowns_count ?? 0)
+            if (endReason !== "complete" || !txnCount) {
+              const detail = await fetchPipelineRun(runId)
+              txnCount = detail.txn_count
+              newCount = detail.new_count
+              unknownsCount = detail.unknowns_count ?? 0
+              if (detail.status === "failed") {
+                setState({
+                  phase: "error",
+                  message: detail.error_message ?? "That import didn't finish. Try again?",
+                })
+                return
+              }
+            }
+            onStatementRunReady?.({
+              runId,
+              sourceKey: srcKey,
+              txnCount,
+              newCount,
+              unknownsCount,
+            })
+            queryClient.invalidateQueries({ queryKey: metricsKeys.all })
+            queryClient.invalidateQueries({ queryKey: ["transactions"] })
+            /**
+             * If anything still needs labels, the parent mounts the review card. Do **not** call
+             * ``onImportComplete`` yet (wizard would treat mail as quiet and could jump ahead).
+             * Parent calls ``onImportComplete`` from ``onQueueCleared`` after the queue is empty.
+             */
+            if (unknownsCount > 0) {
+              setState({
+                phase: "review_pending",
+                txnCount,
+                newCount,
+                unknownsCount,
+                sourceKey: srcKey,
+              })
+            } else {
+              setState({
+                phase: "done",
+                txnCount,
+                newCount,
+                sourceKey: srcKey,
+              })
+              onImportComplete?.()
+            }
+          } catch (err) {
+            const msg = err instanceof ApiError ? err.message : "Couldn't follow import progress."
+            setState({ phase: "polling", runId, sourceKey: srcKey })
+            pollRunStatus(
+              runId,
+              (txnCount, newCount) => {
+                void (async () => {
+                  let unknownsCount = 0
+                  try {
+                    const detail = await fetchPipelineRun(runId)
+                    unknownsCount = detail.unknowns_count ?? 0
+                  } catch {
+                    unknownsCount = 0
+                  }
+                  onStatementRunReady?.({
+                    runId,
+                    sourceKey: srcKey,
+                    txnCount,
+                    newCount,
+                    unknownsCount,
+                  })
+                  queryClient.invalidateQueries({ queryKey: metricsKeys.all })
+                  queryClient.invalidateQueries({ queryKey: ["transactions"] })
+                  if (unknownsCount > 0) {
+                    setState({
+                      phase: "review_pending",
+                      txnCount,
+                      newCount,
+                      unknownsCount,
+                      sourceKey: srcKey,
+                    })
+                  } else {
+                    setState({
+                      phase: "done",
+                      txnCount,
+                      newCount,
+                      sourceKey: srcKey,
+                    })
+                    onImportComplete?.()
+                  }
+                })()
+              },
+              (e2) => setState({ phase: "error", message: e2 || msg }),
+            )
+          }
+          return
+        }
         setState({
           phase: "polling",
-          runId: result.run_id,
-          sourceKey: result.source_key,
+          runId,
+          sourceKey: srcKey,
         })
         pollRunStatus(
-          result.run_id,
+          runId,
           (txnCount, newCount) => {
             setState({
               phase: "done",
               txnCount,
               newCount,
-              sourceKey: result.source_key ?? "",
+              sourceKey: srcKey,
             })
             queryClient.invalidateQueries({ queryKey: metricsKeys.all })
             queryClient.invalidateQueries({ queryKey: ["transactions"] })
@@ -371,6 +579,29 @@ function UploadDialog({
         </div>
       )}
 
+      {state.phase === "sse_wait" && (
+        <div className="flex flex-col items-center gap-3 py-8 text-center">
+          {(() => {
+            const ui = statementSseProgressUi(state.progress)
+            return (
+              <>
+                <Progress value={ui.percent} className="w-full" />
+                <p className="text-sm font-medium">{ui.caption}</p>
+              </>
+            )
+          })()}
+          <p className="text-xs text-muted-foreground">
+            {compactProgressCopy
+              ? "Hang tight — large statements can take a minute."
+              : "Hang tight — we parse, dedupe, then classify each row."}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Account:{" "}
+            <span className="font-medium text-foreground">{humanizeSourceKey(state.sourceKey)}</span>
+          </p>
+        </div>
+      )}
+
       {state.phase === "polling" && (
         <div className="flex flex-col items-center gap-3 py-8 text-center">
           <Progress value={undefined} className="w-full animate-pulse" />
@@ -487,6 +718,26 @@ function UploadDialog({
         </div>
       )}
 
+      {state.phase === "review_pending" && (
+        <div className="flex flex-col items-center gap-3 py-6 text-center">
+          <div className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary text-2xl">
+            ✓
+          </div>
+          <p className="text-sm font-semibold">Imported — a few labels need you</p>
+          <p className="text-xs text-muted-foreground max-w-sm">
+            We saved {state.txnCount} transaction{state.txnCount === 1 ? "" : "s"}
+            {state.newCount > 0 ? ` (${state.newCount} new)` : ""} for your{" "}
+            <span className="font-medium text-foreground">{humanizeSourceKey(state.sourceKey)}</span>{" "}
+            account.{" "}
+            {state.unknownsCount} row{state.unknownsCount === 1 ? "" : "s"} still need a quick look in{" "}
+            <strong>Review labels</strong> below — finish that, then you can upload another file.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Dashboard metrics have been refreshed.
+          </p>
+        </div>
+      )}
+
       {state.phase === "done" && (
         <div className="flex flex-col items-center gap-3 py-6 text-center">
           <div className="flex size-14 items-center justify-center rounded-full bg-green-500/10 text-green-600 text-2xl">
@@ -546,10 +797,27 @@ function UploadDialog({
 export function StatementUploadPanel({
   onImportComplete,
   disabled = false,
+  statementReviewMode = false,
+  onStatementRunReady,
+  reviewResetNonce = 0,
 }: {
   onImportComplete?: () => void
   /** True while onboarding mail import is actively writing — avoids racing SQLite with upload import. */
   disabled?: boolean
+  /**
+   * When true (onboarding statement step), use SSE progress and notify the parent when the run is
+   * ready so it can show the classification review card below this panel.
+   */
+  statementReviewMode?: boolean
+  onStatementRunReady?: (info: {
+    runId: number
+    sourceKey: string
+    txnCount: number
+    newCount: number
+    unknownsCount: number
+  }) => void
+  /** Parent increments this after the run-scoped review queue is cleared so the drop zone returns. */
+  reviewResetNonce?: number
 }) {
   return (
     <UploadDialog
@@ -557,6 +825,9 @@ export function StatementUploadPanel({
       variant="transactions"
       disabled={disabled}
       compactProgressCopy
+      statementReviewMode={statementReviewMode}
+      onStatementRunReady={onStatementRunReady}
+      reviewResetNonce={reviewResetNonce}
     />
   )
 }

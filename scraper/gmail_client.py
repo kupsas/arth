@@ -42,7 +42,7 @@ import webbrowser
 import wsgiref.simple_server
 import wsgiref.util
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
@@ -430,6 +430,8 @@ class GmailClient:
         paginate: bool = False,
         max_results_per_page: int = 100,
         max_total: int | None = None,
+        on_metadata_progress: Callable[[int, int], None] | None = None,
+        metadata_progress_every: int = 50,
     ) -> list[GmailMessage]:
         """Search Gmail with an arbitrary query string (same syntax as the web UI).
 
@@ -446,6 +448,10 @@ class GmailClient:
                 (max 500 per Gmail API docs; we default to 100).
             max_total: When paginating, stop after this many messages (``None`` =
                 no cap). Ignored when ``paginate`` is False.
+            on_metadata_progress: Optional callback ``(done_count, total)`` while fetching
+                per-message metadata (can be thousands of Gmail API calls). Used by onboarding
+                so ``email-import.log`` / SSE consumers see liveness during long listings.
+            metadata_progress_every: How often to invoke ``on_metadata_progress`` (1 = every row).
 
         Returns:
             Newest-first list of :class:`GmailMessage` (metadata only).
@@ -494,8 +500,16 @@ class GmailClient:
 
         logger.info("Found %d email(s) matching query (paginate=%s)", len(raw_messages), paginate)
 
+        total_meta = len(raw_messages)
+        if on_metadata_progress and total_meta > 0:
+            try:
+                on_metadata_progress(0, total_meta)
+            except Exception:
+                pass
+
         result: list[GmailMessage] = []
-        for raw in raw_messages:
+        every = max(1, int(metadata_progress_every))
+        for idx, raw in enumerate(raw_messages):
             try:
                 msg = (
                     self._service.users()
@@ -512,6 +526,12 @@ class GmailClient:
             except HttpError as e:
                 logger.warning("Failed to fetch metadata for message %s: %s", raw["id"], e)
                 continue
+            done = idx + 1
+            if on_metadata_progress and (done % every == 0 or done == total_meta):
+                try:
+                    on_metadata_progress(done, total_meta)
+                except Exception:
+                    pass
 
         return result
 

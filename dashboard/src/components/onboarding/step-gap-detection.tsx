@@ -1,14 +1,10 @@
 "use client"
 
 /**
- * Onboarding: Step 6 — **Gap detection + manual statement upload** (Track 2 Phase 4a–b).
+ * Onboarding: **Gap detection** (legacy standalone step).
  *
- * 1) Fetches `GET /api/onboarding/gaps` (monthly / quarterly heuristics per source).
- * 2) Reuses the dashboard `UploadButton` — after a successful `POST /api/pipeline/upload`
- *    run, the parent can refresh gap analysis.
- *
- * This component is self-contained so Phase 5 can mount it in the full wizard
- * *or* you can import it in Settings (Connect account) with the same behaviour.
+ * The main wizard now uses {@link StepReview} instead. This file remains for any
+ * out-of-band reuse and mirrors the same UX: one transaction upload + read-only gap rows.
  */
 
 import { useQueryClient } from "@tanstack/react-query"
@@ -24,32 +20,23 @@ import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 export function StepGapDetection() {
   const queryClient = useQueryClient()
   const { data, isLoading, isError, error, refetch } = useOnboardingGaps()
-  const {
-    data: holdingsCov,
-    isLoading: holdingsCovLoading,
-    refetch: refetchHoldingsCov,
-  } = useHoldingsCoverage()
+  const { refetch: refetchHoldingsCov } = useHoldingsCoverage()
 
-  // After the pipeline run finishes, pull fresh gap heuristics from the server.
   const onUploadComplete = React.useCallback(() => {
     void refetch()
     void queryClient.invalidateQueries({ queryKey: [...holdingsCoverageKey] })
     void refetchHoldingsCov()
   }, [queryClient, refetch, refetchHoldingsCov])
 
-  const showPortfolioFallback =
-    !holdingsCovLoading && holdingsCov && !holdingsCov.has_holding_data
-
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
         <h2 className="text-2xl font-semibold tracking-tight">Check coverage</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          We look for long stretches of months with <strong>no</strong> parsed
-          activity on sources that are supposed to be monthly. Credit-card gaps
-          only show if <strong>three or more</strong> consecutive months are
-          empty — a quiet month or two is normal. Upload a bank/Credit Card PDF
-          to fill a hole, then the list below refreshes.
+          We look for long stretches of months with <strong>no</strong> parsed activity on sources
+          that are supposed to be monthly. Credit-card gaps only show if{" "}
+          <strong>three or more</strong> consecutive months are empty. Use the upload below — we
+          detect statement types automatically.
         </p>
       </div>
 
@@ -59,22 +46,6 @@ export function StepGapDetection() {
           Files are analysed automatically — your statement never leaves your browser session until upload.
         </span>
       </div>
-
-      {showPortfolioFallback && (
-        <Card className="border-dashed">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Portfolio statements</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-muted-foreground">
-            <p>
-              We didn&apos;t find any broker or mutual-fund emails to build your portfolio yet.
-              If you have ICICI Direct / NSE / PPF PDFs or CSVs on disk, upload them here —
-              we&apos;ll detect the format.
-            </p>
-            <UploadButton variant="holdings" onImportComplete={onUploadComplete} />
-          </CardContent>
-        </Card>
-      )}
 
       {isLoading && <p className="text-sm text-muted-foreground">Analysing your ledger…</p>}
 
@@ -127,20 +98,10 @@ export function StepGapDetection() {
                       {r.gaps.map((g) => (
                         <li
                           key={g.period_label + g.kind}
-                          className={cn(
-                            "rounded-lg border p-3 space-y-2",
-                            "bg-muted/30",
-                          )}
+                          className={cn("rounded-lg border p-3", "bg-muted/30")}
                         >
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <span className="font-medium">{g.period_label}</span>
-                            <UploadButton
-                              variant="transactions"
-                              className="text-xs"
-                              onImportComplete={onUploadComplete}
-                            />
-                          </div>
-                          <p className="text-xs text-muted-foreground leading-relaxed">{g.reason}</p>
+                          <span className="font-medium text-sm">{g.period_label}</span>
+                          <p className="text-xs text-muted-foreground leading-relaxed mt-1">{g.reason}</p>
                         </li>
                       ))}
                     </ul>

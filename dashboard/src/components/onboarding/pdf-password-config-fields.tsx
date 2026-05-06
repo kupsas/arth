@@ -178,24 +178,14 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
             <p className="text-sm text-muted-foreground mt-1">
               {mode === "wizard"
                 ? "Derived from your name and aliases above, plus the fields below — stored encrypted on this device."
-                : "One statement could not be opened. Update the fields below (or fix your .env keys), then retry the import."}
+                : "One statement could not be opened. Update the fields below, then retry the import."}
             </p>
-            {blockingParserKey && (
-              <p className="text-xs text-muted-foreground mt-2">
-                Hint: template key <span className="font-mono">{blockingParserKey}</span>
-              </p>
-            )}
           </div>
         )}
 
         {loadError && (
           <p className="text-sm text-destructive" role="alert">
             {loadError}
-          </p>
-        )}
-        {suppressIntro && blockingParserKey && (
-          <p className="text-xs text-muted-foreground">
-            Hint: template key <span className="font-mono">{blockingParserKey}</span>
           </p>
         )}
         {requirements && requirements.length === 0 && mode === "wizard" && (
@@ -214,9 +204,6 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
               onChange={(e) => setPan(e.target.value)}
               placeholder="ABCDE1234F"
             />
-            {needsPanPdfSource(sources) || neededFields.has("pan") ? (
-              <p className="text-xs text-muted-foreground">Used for NSE “trades executed” and similar PDFs.</p>
-            ) : null}
           </div>
         )}
 
@@ -224,11 +211,6 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
           <div className="space-y-2">
             <Label htmlFor="arth-dob">{FIELD_LABELS.dob_iso}</Label>
             <Input id="arth-dob" type="date" value={dobIso} onChange={(e) => setDobIso(e.target.value)} />
-            {needsProfileNameDobPdfStyle(sources) && (
-              <p className="text-xs text-muted-foreground">
-                With each saved name variant → DDMM (e.g. 5 Jan → <span className="font-mono">0501</span>).
-              </p>
-            )}
           </div>
         )}
 
@@ -242,10 +224,6 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
               onChange={(e) => setHdfcCustomerId(e.target.value)}
               placeholder="Digits only"
             />
-            <p className="text-xs text-muted-foreground">
-              Only for HDFC <strong>savings</strong> (combined email statement). Not used for HDFC credit card–only
-              mailboxes.
-            </p>
           </div>
         )}
 
