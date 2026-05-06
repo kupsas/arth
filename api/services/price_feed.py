@@ -777,18 +777,23 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
                 close, row_date = fb
                 source = "nse_cached"
                 logger.debug(
-                    "NSE bhav missing for %s on %s — using cached close %.4f from %s",
+                    "Using last saved price for %s — that day's exchange list had no row "
+                    "(close %.4f from %s)",
                     sym,
-                    d,
                     close,
                     row_date,
                 )
             else:
                 logger.warning(
-                    "No NSE bhav close for %s on %s and no rows in ``prices`` — "
-                    "holding unchanged until next run",
+                    "Couldn't refresh the live price for %s (%s) — your holding stays "
+                    "at its last value until we get data.",
                     sym,
-                    d,
+                    d.strftime("%d %b %Y"),
+                )
+                logger.debug(
+                    "Price gap — symbol=%s session_date=%s (no daily price on file yet)",
+                    sym,
+                    d.isoformat(),
                 )
                 continue
         price_rows.append(

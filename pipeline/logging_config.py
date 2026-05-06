@@ -229,4 +229,8 @@ def setup_logging(*, log_level: int | None = None) -> None:
     for lib in _NOISY_LIBS:
         logging.getLogger(lib).setLevel(logging.WARNING)
 
+    # IMF SDMX library logs HTTP URLs at INFO and benign XML reader notes at WARNING;
+    # keep only real failures on the terminal (ERROR+).
+    logging.getLogger("sdmx").setLevel(logging.ERROR)
+
     logging.getLogger(__name__).debug("Logging initialised — file: %s", _LOG_FILE)
