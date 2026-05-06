@@ -28,8 +28,8 @@ from api.services.holding_enrichment import enrich_single_equity_classification
 from api.services.holdings_sync import ensure_holding_for_transaction, sync_holding_from_transactions
 from api.models import Holding, HoldingValueSnapshot, InvestmentTransaction, Liability
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY, parse_bike_loan_txt, parse_term_insurance_pdf
-from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn, ParsedLiability
-from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME, PLATFORM as NPS_CRA_PLATFORM
+from parsers.holdings.base import ParsedHolding, ParsedInvestmentTxn, ParsedLiability
+from parsers.holdings.nps import NPS_CANONICAL_HOLDING_NAME, PLATFORM as NPS_CRA_PLATFORM
 from pipeline.investment_txn_linking import (
     find_holding_id_for_parsed_txn,
     link_unlinked_investment_transactions,

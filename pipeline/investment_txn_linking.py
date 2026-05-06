@@ -18,8 +18,8 @@ from sqlmodel import Session, col, select
 
 from api.models import Holding, InvestmentTransaction
 from api.services.price_feed import canonical_nse_symbol
-from pipeline.holding_parsers.base import ParsedInvestmentTxn
-from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME
+from parsers.holdings.base import ParsedInvestmentTxn
+from parsers.holdings.nps import NPS_CANONICAL_HOLDING_NAME
 from pipeline.models import AssetClass
 
 logger = logging.getLogger(__name__)

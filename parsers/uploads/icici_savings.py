@@ -55,7 +55,7 @@ import pdfplumber
 
 from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
-from pipeline.parsers.base import BaseParser
+from parsers.uploads.base import BaseParser
 
 # ---------------------------------------------------------------------------
 # Column x-coordinate boundaries (from empirical measurement)

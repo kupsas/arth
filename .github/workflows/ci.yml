@@ -54,13 +54,13 @@ jobs:
       # ruff is fast (written in Rust) and catches unused imports, naming
       # issues, and style problems.  Errors here fail the build immediately.
       - name: Lint with ruff
-        run: ruff check pipeline/ api/ scraper/ agent/ tests/
+        run: ruff check pipeline/ api/ scraper/ agent/ tests/ parsers/
 
       # ── 5. Type-check (mypy) ──────────────────────────────────────────────
       # mypy reads mypy.ini at the repo root for per-module settings.
       # Third-party libraries without stubs are silenced via ignore_missing_imports.
       - name: Type-check with mypy
-        run: mypy pipeline/ api/ scraper/ agent/
+        run: mypy pipeline/ api/ scraper/ agent/ parsers/
 
       # ── 5b. AI prompts: every YAML under prompts/ must parse (catches bad edits before runtime)
       - name: Validate prompt YAML files

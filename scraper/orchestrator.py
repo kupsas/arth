@@ -41,7 +41,8 @@ from pipeline.rules_classifier import classify_rules
 from pipeline.transformer import transform
 from scraper.config import BANK_SENDERS, SCRAPER_LOOKBACK_DAYS
 from scraper.config_loader import all_sender_emails, get_bank_senders_config
-from scraper.email_parsers import BaseEmailParser, build_email_parser_registry
+from parsers.alerts.base import BaseEmailParser
+from parsers.email_registry import build_email_parser_registry
 from scraper.email_router import _normalise_sender, find_parser
 from scraper.gmail_client import GmailClient, GmailMessage
 from scraper.secrets_context import statement_secrets_context

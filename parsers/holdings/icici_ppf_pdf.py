@@ -2,8 +2,8 @@
 ICICI PPF ledger from a **combined** account PDF (annual or monthly email).
 
 When page 1 stacks a **PPF** transaction table above **Savings**, we parse the PPF
-vertical band only (via :mod:`pipeline.parsers.icici_savings` word layout), while
-:class:`~pipeline.parsers.icici_savings.ICICISavingsParser` parses the savings band.
+vertical band only (via :mod:`parsers.uploads.icici_savings` word layout), while
+:class:`~parsers.uploads.icici_savings.ICICISavingsParser` parses the savings band.
 Rows are mapped to :class:`ParsedInvestmentTxn` using the same rules as :func:`parse_icici_ppf_csv`.
 """
 
@@ -16,11 +16,11 @@ from pathlib import Path
 import pdfplumber
 
 from pipeline.detection import DetectionResult, PARSER_LABELS
-from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn, parse_indian_amount
-from pipeline.holding_parsers.icici_ppf import PPF_RATE_ANNUAL_DEFAULT
+from parsers.holdings.base import ParsedHolding, ParsedInvestmentTxn, parse_indian_amount
+from parsers.holdings.icici_ppf import PPF_RATE_ANNUAL_DEFAULT
 from pipeline.models import AssetClass, CompoundingFrequency, InvestmentTxnType, LiquidityClass, ValuationMethod
 from pipeline.models import ParsedTransaction
-from pipeline.parsers.icici_savings import (
+from parsers.uploads.icici_savings import (
     ICICISavingsParser,
     combined_ppf_y_window_page1,
 )
@@ -41,7 +41,7 @@ def parse_icici_ppf_from_combined_pdf(
     """Extract PPF rows from page 1 of a **combined** ICICI PDF (annual or monthly email).
 
     Works when the first page stacks a PPF transaction table above a Savings table.
-    Savings rows are **not** returned here — use :class:`~pipeline.parsers.icici_savings.ICICISavingsParser`
+    Savings rows are **not** returned here — use :class:`~parsers.uploads.icici_savings.ICICISavingsParser`
     on the same file (it automatically restricts to the Savings band when both exist).
 
     Returns empty lists if there is no detectable PPF band (e.g. savings-only statement).

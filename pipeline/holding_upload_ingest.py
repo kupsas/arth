@@ -14,13 +14,13 @@ from sqlmodel import Session
 
 from pipeline.holding_pipeline import ingest_holdings, ingest_investment_transactions
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY
-from pipeline.holding_parsers.icici_direct_contract_note import parse_icici_direct_trade_pdf
-from pipeline.holding_parsers.icici_direct_equity_statement_pdf import (
+from parsers.holdings.icici_direct_contract_note import parse_icici_direct_trade_pdf
+from parsers.holdings.icici_direct_equity_statement_pdf import (
     parse_icici_direct_equity_statement_pdf,
 )
-from pipeline.holding_parsers.icici_direct_mf import derive_mf_holdings
-from pipeline.holding_parsers.icici_direct_mf_statement_pdf import parse_icici_direct_mf_statement_pdf
-from pipeline.holding_parsers.icici_ppf_pdf import parse_icici_ppf_from_combined_pdf
+from parsers.holdings.icici_direct_mf import derive_mf_holdings
+from parsers.holdings.icici_direct_mf_statement_pdf import parse_icici_direct_mf_statement_pdf
+from parsers.holdings.icici_ppf_pdf import parse_icici_ppf_from_combined_pdf
 
 logger = logging.getLogger(__name__)
 

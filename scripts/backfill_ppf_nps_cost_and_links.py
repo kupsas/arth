@@ -31,7 +31,7 @@ from sqlmodel import Session, select
 
 from api.database import get_engine, init_db
 from api.models import Holding, InvestmentTransaction
-from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME, PLATFORM as NPS_CRA_PLATFORM
+from parsers.holdings.nps import NPS_CANONICAL_HOLDING_NAME, PLATFORM as NPS_CRA_PLATFORM
 from pipeline.investment_txn_linking import link_unlinked_investment_transactions
 from pipeline.models import AssetClass, InvestmentTxnType
 

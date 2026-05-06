@@ -5,7 +5,7 @@ Optional ICICI ↔ NSE symbol overrides (manual JSON).
   the primary ISIN → symbol source for new imports.
 - **Overrides** in ``data/icici_nse_symbol_overrides.json`` (gitignored — copy from
   ``*.example.json``) pin exceptions: ISINs missing from bhav (delisted), or ICICI short
-  codes not in :data:`pipeline.holding_parsers.icici_direct_equity.ICICI_SHORT_TO_NSE`.
+  codes not in :data:`parsers.holdings.icici_direct_equity.ICICI_SHORT_TO_NSE`.
 
 NSE *Trades executed* PDFs already carry the **NSE ``TckrSymb``** (same string bhavcopy uses).
 If a PDF ever shows an alias, add a row under ``icici_short_to_nse`` so

@@ -145,11 +145,11 @@ def _normalise_sample_chunks(parser_key: str, sample_texts: list[str]) -> str:
             continue
         looks_html = "<" in t and ">" in t
         if looks_html and pk in ("hdfc_bank", "hdfc_cc_statement", "hdfc_combined_statement"):
-            from scraper.email_parsers.hdfc_bank import _extract_hdfc_body_text
+            from parsers.alerts.hdfc import _extract_hdfc_body_text
 
             chunks.append(_extract_hdfc_body_text(t))
         elif looks_html and pk in ("icici_bank", "icici_statement"):
-            from scraper.email_parsers.icici_bank import _extract_icici_body_text
+            from parsers.alerts.icici import _extract_icici_body_text
 
             chunks.append(_extract_icici_body_text(t))
         else:

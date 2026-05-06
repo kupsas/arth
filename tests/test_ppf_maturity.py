@@ -14,7 +14,7 @@ from api.services.ppf_maturity import (
     earliest_ppf_contribution_date,
     effective_ppf_maturity_date,
 )
-from pipeline.holding_parsers.icici_ppf import parse_icici_ppf_csv
+from parsers.holdings.icici_ppf import parse_icici_ppf_csv
 from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
 from pipeline.ppf_maturity import indian_fy_end_containing
 

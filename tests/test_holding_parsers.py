@@ -15,17 +15,17 @@ from sqlmodel import Session, SQLModel, create_engine
 os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode("ascii"))
 
 from api.models import Holding  # noqa: E402
-from pipeline.holding_parsers.base import parse_icici_number  # noqa: E402
-from pipeline.holding_parsers.icici_direct_equity import (  # noqa: E402
+from parsers.holdings.base import parse_icici_number  # noqa: E402
+from parsers.holdings.icici_direct_equity import (  # noqa: E402
     parse_annual_trade_csv,
     parse_icici_direct_equity_dir,
     parse_portfolio_summary_csv,
     resolve_icici_direct_nse_symbol,
 )
-from pipeline.holding_parsers.icici_direct_mf import parse_icici_direct_mf_path  # noqa: E402
-from pipeline.holding_parsers.icici_ppf import parse_icici_ppf_csv  # noqa: E402
-from pipeline.holding_parsers.liabilities import parse_bike_loan_txt  # noqa: E402
-from pipeline.holding_parsers.nps import (  # noqa: E402
+from parsers.holdings.icici_direct_mf import parse_icici_direct_mf_path  # noqa: E402
+from parsers.holdings.icici_ppf import parse_icici_ppf_csv  # noqa: E402
+from parsers.holdings.liabilities import parse_bike_loan_txt  # noqa: E402
+from parsers.holdings.nps import (  # noqa: E402
     NPS_CANONICAL_HOLDING_NAME,
     parse_nps_statement,
 )
@@ -118,7 +118,7 @@ def test_nps_contribution_section_employee_buy() -> None:
 
 def test_nps_as_of_phrase_also_sets_snapshot_metadata() -> None:
     """Some CRA exports say 'as of' instead of 'as on' — same date pattern."""
-    from pipeline.holding_parsers.nps import _statement_as_on_max
+    from parsers.holdings.nps import _statement_as_on_max
 
     lines = [
         "Header",
@@ -166,7 +166,7 @@ def _engine():
 
 
 def test_ingest_holdings_round_trip_encrypted_folio(engine) -> None:
-    from pipeline.holding_parsers.base import ParsedHolding
+    from parsers.holdings.base import ParsedHolding
 
     ph = ParsedHolding(
         name="Quant SMALL CAP",
@@ -226,8 +226,8 @@ def test_resolve_icici_direct_nse_symbol_bhav_wins_over_isin_override(
 
 def test_derive_equity_holdings_fifo_icici_direct_only() -> None:
     """FIFO-style quantity after a partial sell; MF platform rows ignored."""
-    from pipeline.holding_parsers.base import ParsedInvestmentTxn
-    from pipeline.holding_parsers.derived_equity import derive_equity_holdings
+    from parsers.holdings.base import ParsedInvestmentTxn
+    from parsers.holdings.derived_equity import derive_equity_holdings
 
     d1 = date(2024, 1, 1)
     d2 = date(2024, 2, 1)

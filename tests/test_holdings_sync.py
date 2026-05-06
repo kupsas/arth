@@ -17,7 +17,7 @@ from api.services.holdings_sync import (  # noqa: E402
     ensure_holding_for_transaction,
     sync_holding_from_transactions,
 )
-from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME  # noqa: E402
+from parsers.holdings.nps import NPS_CANONICAL_HOLDING_NAME  # noqa: E402
 from pipeline.models import (  # noqa: E402
     AssetClass,
     InvestmentTxnType,

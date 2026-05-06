@@ -26,10 +26,10 @@ python3 -m pip install -q pip-audit
 python3 -m pip_audit
 
 echo "==> ruff"
-python3 -m ruff check pipeline/ api/ scraper/ agent/ tests/
+python3 -m ruff check pipeline/ api/ scraper/ agent/ tests/ parsers/
 
 echo "==> mypy"
-python3 -m mypy pipeline/ api/ scraper/ agent/
+python3 -m mypy pipeline/ api/ scraper/ agent/ parsers/
 
 echo "==> validate prompts/*.yaml"
 python3 -c "

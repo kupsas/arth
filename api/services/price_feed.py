@@ -39,7 +39,7 @@ from sqlmodel import Session, col, func, select
 
 from api.models import Holding, Price
 from pipeline.config import REPO_ROOT
-from pipeline.holding_parsers.icici_direct_equity import ICICI_SHORT_TO_NSE
+from parsers.holdings.icici_direct_equity import ICICI_SHORT_TO_NSE
 from pipeline.icici_symbol_overrides import merge_with_disk
 from pipeline.models import AssetClass, ValuationMethod
 

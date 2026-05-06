@@ -9,7 +9,7 @@ We extract plain text / tables with ``pdfplumber``. Live NSE mail uses **Capital
 grids (``trade_details_*.pdf``): columns include Symbol, Buy/Sell as **B**/**S**, Trade No
 (YYYYMMDD embedded), Quantity, Price — not the older one-line ``SYMBOL BUY qty rate`` text.
 Symbol resolution uses :func:`resolve_icici_direct_nse_symbol` so ``holdings.symbol`` matches
-NSE bhav keys like CSV imports (:mod:`pipeline.holding_parsers.icici_direct_equity`).
+NSE bhav keys like CSV imports (:mod:`parsers.holdings.icici_direct_equity`).
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ import pdfplumber
 
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.detection import DetectionResult, PARSER_LABELS
-from pipeline.holding_parsers.base import ParsedInvestmentTxn
-from pipeline.holding_parsers.icici_direct_equity import resolve_icici_direct_nse_symbol
+from parsers.holdings.base import ParsedInvestmentTxn
+from parsers.holdings.icici_direct_equity import resolve_icici_direct_nse_symbol
 from pipeline.models import InvestmentTxnType
 
 logger = logging.getLogger(__name__)

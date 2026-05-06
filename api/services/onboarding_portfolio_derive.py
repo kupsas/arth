@@ -17,9 +17,9 @@ from sqlmodel import Session, col, select
 
 from api.models import Holding, HoldingValueSnapshot, InvestmentTransaction
 from api.services.holding_enrichment import enrich_single_equity_classification
-from pipeline.holding_parsers.base import ParsedInvestmentTxn
-from pipeline.holding_parsers.derived_equity import derive_equity_holdings
-from pipeline.holding_parsers.icici_direct_mf import derive_mf_holdings
+from parsers.holdings.base import ParsedInvestmentTxn
+from parsers.holdings.derived_equity import derive_equity_holdings
+from parsers.holdings.icici_direct_mf import derive_mf_holdings
 from pipeline.holding_pipeline import ingest_holdings
 from pipeline.investment_txn_linking import link_unlinked_investment_transactions, parse_mf_txn_notes
 from pipeline.models import AssetClass

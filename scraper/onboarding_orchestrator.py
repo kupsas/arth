@@ -43,7 +43,7 @@ from api.services.email_import_flow_log import EmailImportFlowLog
 from scraper.config import BANK_SENDERS
 from scraper.config_loader import BankSendersConfig, get_bank_senders_config
 from scraper.email_router import _normalise_sender
-from scraper.email_parsers import build_email_parser_registry
+from parsers.email_registry import build_email_parser_registry
 from scraper.gap_detector import (
     compute_alert_backfill_windows,
     filter_onboarding_alert_ids_after_statements,

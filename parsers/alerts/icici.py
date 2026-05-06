@@ -35,7 +35,7 @@ from decimal import Decimal
 from bs4 import BeautifulSoup
 
 from pipeline.models import ParsedTransaction
-from scraper.email_parsers.base import BaseEmailParser
+from parsers.alerts.base import BaseEmailParser
 
 logger = logging.getLogger(__name__)
 

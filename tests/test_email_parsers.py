@@ -26,12 +26,12 @@ from pathlib import Path
 import pytest
 
 from tests.email_parser_test_accounts import HDFC_ALERT_ACCOUNTS, ICICI_INSTA_ACCOUNTS
-from scraper.email_parsers.hdfc_bank import (
+from parsers.alerts.hdfc import (
     HDFCAccountUpdateParser,
     HDFCCreditCardAlertParser,
     HDFCUPIAlertParser,
 )
-from scraper.email_parsers.icici_bank import ICICINetBankingParser
+from parsers.alerts.icici import ICICINetBankingParser
 
 # ─── Shared constants ─────────────────────────────────────────────────────────
 

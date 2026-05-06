@@ -39,8 +39,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline import config
-from pipeline.parsers.hdfc_cc import HDFCCreditCardParser
-from pipeline.parsers.icici_savings import ICICISavingsParser
+from parsers.uploads.hdfc_cc import HDFCCreditCardParser
+from parsers.uploads.icici_savings import ICICISavingsParser
 from pipeline.transformer import transform
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ ICICI Securities **Mutual Fund Account Statement** email (password-protected PDF
 Same password family as ICICI Bank statements — :func:`~scraper.pdf_passwords.resolve_icici_statement_pdf_password_candidates`.
 
 Emits ``ParsedInvestmentTxn`` rows plus ``ParsedHolding`` rows derived via
-:func:`pipeline.holding_parsers.icici_direct_mf.derive_mf_holdings` for the
+:func:`parsers.holdings.icici_direct_mf.derive_mf_holdings` for the
 transactions observed on this statement (snapshot consistent with CSV ingest).
 """
 
@@ -16,12 +16,12 @@ import logging
 import pikepdf
 import pipeline.config  # noqa: F401
 
-from pipeline.holding_parsers.icici_direct_mf import derive_mf_holdings
-from pipeline.holding_parsers.icici_direct_mf_statement_pdf import (
+from parsers.holdings.icici_direct_mf import derive_mf_holdings
+from parsers.holdings.icici_direct_mf_statement_pdf import (
     parse_icici_direct_mf_statement_pdf,
 )
 from pipeline.models import ParsedTransaction
-from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
+from parsers.statements.base_broker import BaseBrokerStatementParser
 from scraper.pdf_passwords import (
     StatementPasswordRequired,
     resolve_icici_statement_pdf_password_candidates,

@@ -60,9 +60,9 @@ from sqlmodel import Session, col, select  # noqa: E402
 from api.database import get_engine, init_db  # noqa: E402
 from api.models import Transaction  # noqa: E402
 from pipeline.models import ParsedTransaction  # noqa: E402
-from pipeline.parsers.hdfc_cc_pdf import HDFCCreditCardPdfParser  # noqa: E402
-from pipeline.parsers.hdfc_savings_pdf import HDFCSavingsPdfParser  # noqa: E402
-from pipeline.parsers.icici_savings import ICICISavingsParser  # noqa: E402
+from parsers.uploads.hdfc_cc_pdf import HDFCCreditCardPdfParser  # noqa: E402
+from parsers.uploads.hdfc_savings_pdf import HDFCSavingsPdfParser  # noqa: E402
+from parsers.uploads.icici_savings import ICICISavingsParser  # noqa: E402
 from scraper.gmail_client import GmailClient  # noqa: E402
 from scraper.pdf_utils import decrypt_pdf  # noqa: E402
 

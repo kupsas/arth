@@ -1,11 +1,11 @@
-"""Routing tests for :class:`scraper.email_parsers.hdfc_cc_statement.HDFCCCStatementEmailParser`."""
+"""Routing tests for :class:`parsers.statements.hdfc_cc.HDFCCCStatementEmailParser`."""
 
 from __future__ import annotations
 
 import pytest
 
 from tests.email_parser_test_accounts import HDFC_CC_STATEMENT_ACCOUNTS
-from scraper.email_parsers.hdfc_cc_statement import HDFCCCStatementEmailParser
+from parsers.statements.hdfc_cc import HDFCCCStatementEmailParser
 
 
 @pytest.fixture

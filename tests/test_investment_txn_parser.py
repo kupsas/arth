@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pipeline.holding_parsers.icici_direct_equity import parse_annual_trade_csv
+from parsers.holdings.icici_direct_equity import parse_annual_trade_csv
 from pipeline.models import InvestmentTxnType
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "holdings"

@@ -58,11 +58,11 @@ from sqlmodel import Session, select  # noqa: E402
 from api.database import get_engine, init_db  # noqa: E402
 from api.models import InvestmentTransaction  # noqa: E402
 from api.services.price_feed import canonical_nse_symbol  # noqa: E402
-from pipeline.holding_parsers.base import ParsedInvestmentTxn  # noqa: E402
-from pipeline.holding_parsers.icici_direct_equity_statement_pdf import (  # noqa: E402
+from parsers.holdings.base import ParsedInvestmentTxn  # noqa: E402
+from parsers.holdings.icici_direct_equity_statement_pdf import (  # noqa: E402
     parse_icici_direct_equity_statement_pdf,
 )
-from pipeline.holding_parsers.icici_direct_mf_statement_pdf import (  # noqa: E402
+from parsers.holdings.icici_direct_mf_statement_pdf import (  # noqa: E402
     parse_icici_direct_mf_statement_pdf,
 )
 

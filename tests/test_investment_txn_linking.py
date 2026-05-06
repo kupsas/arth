@@ -14,15 +14,15 @@ from sqlmodel import Session, SQLModel, create_engine, select
 os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode("ascii"))
 
 from api.models import Holding, InvestmentTransaction  # noqa: E402
-from pipeline.holding_parsers.base import ParsedInvestmentTxn  # noqa: E402
-from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME  # noqa: E402
+from parsers.holdings.base import ParsedInvestmentTxn  # noqa: E402
+from parsers.holdings.nps import NPS_CANONICAL_HOLDING_NAME  # noqa: E402
 from pipeline.investment_txn_linking import (  # noqa: E402
     find_holding_id_for_parsed_txn,
     find_holding_id_for_stored_txn,
     link_unlinked_investment_transactions,
     parse_mf_txn_notes,
 )
-from pipeline.holding_parsers.icici_direct_mf import parse_icici_direct_mf_path  # noqa: E402
+from parsers.holdings.icici_direct_mf import parse_icici_direct_mf_path  # noqa: E402
 from pipeline.holding_pipeline import ingest_holdings, ingest_investment_transactions  # noqa: E402
 from pipeline.models import (  # noqa: E402
     AssetClass,

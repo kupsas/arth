@@ -3,7 +3,7 @@ HDFC Bank **credit card statement PDF** emails (Swiggy 1905, Diners 5778, etc.).
 
 From addresses vary by product era (``.net`` vs ``.bank.in``) — both are registered in
 ``scraper/config.py``.  We decrypt with ``HDFC_CC_STATEMENT_PASSWORD``, parse with
-:class:`~pipeline.parsers.hdfc_cc_pdf.HDFCCreditCardPdfParser`, then stamp the correct
+:class:`~parsers.uploads.hdfc_cc_pdf.HDFCCreditCardPdfParser`, then stamp the correct
 ``account_id`` / ``source_key`` for the card inferred from the subject (and PDF text
 as a fallback).
 
@@ -27,8 +27,8 @@ import pikepdf
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 
 from pipeline.models import ParsedTransaction
-from pipeline.parsers.hdfc_cc_pdf import HDFCCreditCardPdfParser
-from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from parsers.uploads.hdfc_cc_pdf import HDFCCreditCardPdfParser
+from parsers.statements.base import BaseStatementEmailParser
 from scraper.pdf_passwords import (
     StatementPasswordRequired,
     resolve_hdfc_cc_pdf_password_candidates,

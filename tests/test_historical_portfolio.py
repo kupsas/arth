@@ -9,7 +9,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from api.models import Holding, HoldingValueSnapshot, InvestmentTransaction, Price
 from api.services.historical_portfolio import historical_price_symbol_universe, price_coverage_report
 from api.services.net_worth import compute_net_worth_history
-from pipeline.holding_parsers.base import ParsedHolding
+from parsers.holdings.base import ParsedHolding
 from pipeline.holding_pipeline import ingest_holdings
 from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
 

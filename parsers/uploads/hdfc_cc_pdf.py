@@ -18,7 +18,7 @@ CSV export. There are **two** PDF generations:
 Purchases use ``C 2,640.30``; credits (payments, cashback) use ``+ C 500.00`` — the
 literal ``+`` before ``C`` marks an inflow (same semantics as the CSV's ``Cr`` column).
 
-Output matches :class:`~pipeline.parsers.hdfc_cc.HDFCCreditCardParser` (same
+Output matches :class:`~parsers.uploads.hdfc_cc.HDFCCreditCardParser` (same
 ``ParsedTransaction`` shape and ``metadata`` keys) so downstream transform/rules/LLM
 see identical rows whether the source was CSV or PDF.
 
@@ -40,8 +40,8 @@ import pdfplumber
 
 from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
-from pipeline.parsers.base import BaseParser
-from pipeline.parsers.hdfc_cc import HDFCCreditCardParser
+from parsers.uploads.base import BaseParser
+from parsers.uploads.hdfc_cc import HDFCCreditCardParser
 
 logger = logging.getLogger(__name__)
 

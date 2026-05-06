@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from pipeline.parsers import icici_savings as mod
+from parsers.uploads import icici_savings as mod
 
 
 def test_combined_ppf_y_window_monthly_pp_f_then_savings_headers() -> None:

@@ -5,7 +5,7 @@ Normalize ``investment_transactions.symbol`` for **ICICI Direct** equity rows.
 Legacy imports often stored ICICI broker short codes (``TATMOT``, ``HDFBAN``, …) in
 ``symbol``. This script rewrites them to NSE tickers using the same mapping as price
 refresh: :func:`api.services.price_feed.canonical_nse_symbol` (built from
-:data:`pipeline.holding_parsers.icici_direct_equity.ICICI_SHORT_TO_NSE` plus optional
+:data:`parsers.holdings.icici_direct_equity.ICICI_SHORT_TO_NSE` plus optional
 ``data/icici_nse_symbol_overrides.json``).
 
 **Skipped:** ``account_platform != \"ICICI Direct\"`` (including ``ICICI Direct MF``) and

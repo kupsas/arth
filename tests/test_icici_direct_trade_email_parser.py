@@ -1,10 +1,10 @@
-"""Routing tests for :class:`scraper.email_parsers.icici_direct_trade.ICICIDirectTradeEmailParser`."""
+"""Routing tests for :class:`parsers.statements.icici_direct_trade.ICICIDirectTradeEmailParser`."""
 
 from __future__ import annotations
 
 import pytest
 
-from scraper.email_parsers.icici_direct_trade import ICICIDirectTradeEmailParser
+from parsers.statements.icici_direct_trade import ICICIDirectTradeEmailParser
 
 
 @pytest.fixture

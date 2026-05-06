@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from scraper.email_parsers.icici_direct_equity_statement import (
+from parsers.statements.icici_direct_equity import (
     ICICIDirectEquityStatementEmailParser,
 )
-from scraper.email_parsers.icici_direct_mf_statement import (
+from parsers.statements.icici_direct_mf import (
     ICICIDirectMFStatementEmailParser,
 )
 

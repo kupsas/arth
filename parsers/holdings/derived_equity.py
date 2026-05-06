@@ -1,7 +1,7 @@
 """
 Derive :class:`ParsedHolding` snapshots from ICICI Direct **equity** ledger rows.
 
-Mirrors :func:`pipeline.holding_parsers.icici_direct_mf.derive_mf_holdings` but groups by
+Mirrors :func:`parsers.holdings.icici_direct_mf.derive_mf_holdings` but groups by
 NSE ``symbol`` (no folio). Only rows with ``account_platform == \"ICICI Direct\"`` are
 included — **not** ``ICICI Direct MF``.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn
+from parsers.holdings.base import ParsedHolding, ParsedInvestmentTxn
 from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
 
 # Equity cash-market ledger from ICICI Securities (CSV, contract notes, transaction statements).

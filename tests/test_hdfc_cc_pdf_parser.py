@@ -1,11 +1,11 @@
-"""Unit tests for :mod:`pipeline.parsers.hdfc_cc_pdf` line parsing."""
+"""Unit tests for :mod:`parsers.uploads.hdfc_cc_pdf` line parsing."""
 
 from __future__ import annotations
 
 from decimal import Decimal
 
-from pipeline.parsers.hdfc_cc import HDFCCreditCardParser
-from pipeline.parsers.hdfc_cc_pdf import _parse_one_line
+from parsers.uploads.hdfc_cc import HDFCCreditCardParser
+from parsers.uploads.hdfc_cc_pdf import _parse_one_line
 
 
 def test_parse_domestic_purchase() -> None:
@@ -37,7 +37,7 @@ def test_parse_international_usd_inr() -> None:
         "08/03/2026 | 18:25 CURSOR, AI POWERED IDENEW YORK "
         "USD 23.60 C 2,170.79 l"
     )
-    from pipeline.parsers.hdfc_cc_pdf import _normalize_leading_pipe
+    from parsers.uploads.hdfc_cc_pdf import _normalize_leading_pipe
 
     pt = _parse_one_line(
         _normalize_leading_pipe(line),

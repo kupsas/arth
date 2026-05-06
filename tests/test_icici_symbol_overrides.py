@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.holding_parsers.icici_direct_equity import ICICI_SHORT_TO_NSE
+from parsers.holdings.icici_direct_equity import ICICI_SHORT_TO_NSE
 from pipeline.icici_symbol_overrides import (
     invalidate_overrides_cache,
     load_overrides,

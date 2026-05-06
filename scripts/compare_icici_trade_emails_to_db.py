@@ -3,7 +3,7 @@
 Compare **ICICI Direct / NSE trade PDFs** from Gmail against ``investment_transactions``.
 
 1. Downloads PDFs in the Gmail **received** window, parses raw legs, then applies
-   :func:`pipeline.holding_parsers.icici_direct_contract_note.aggregate_icici_direct_trades`
+   :func:`parsers.holdings.icici_direct_contract_note.aggregate_icici_direct_trades`
    **once** over all legs (same as production: one CSV-like row per date / side / symbol).
 
 2. Loads DB rows for ``account_platform == \"ICICI Direct\"`` with ``txn_date`` in the
@@ -41,11 +41,11 @@ from sqlmodel import Session, select  # noqa: E402
 from api.database import get_engine, init_db  # noqa: E402
 from api.models import InvestmentTransaction  # noqa: E402
 from api.services.price_feed import canonical_nse_symbol  # noqa: E402
-from pipeline.holding_parsers.icici_direct_contract_note import (  # noqa: E402
+from parsers.holdings.icici_direct_contract_note import (  # noqa: E402
     aggregate_icici_direct_trades,
     parse_icici_direct_trade_pdf,
 )
-from scraper.email_parsers.icici_direct_trade import (  # noqa: E402
+from parsers.statements.icici_direct_trade import (  # noqa: E402
     _nse_trades_pdf_password,
     classify_icici_direct_subject,
 )

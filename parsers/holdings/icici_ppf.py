@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from pipeline.detection import DetectionResult, PARSER_LABELS
-from pipeline.holding_parsers.base import (
+from parsers.holdings.base import (
     BaseHoldingParser,
     ParsedHolding,
     ParsedInvestmentTxn,

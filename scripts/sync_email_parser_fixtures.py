@@ -32,12 +32,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from tests.email_parser_test_accounts import HDFC_ALERT_ACCOUNTS, ICICI_INSTA_ACCOUNTS
-from scraper.email_parsers.hdfc_bank import (  # noqa: E402
+from parsers.alerts.hdfc import (  # noqa: E402
     HDFCAccountUpdateParser,
     HDFCCreditCardAlertParser,
     HDFCUPIAlertParser,
 )
-from scraper.email_parsers.icici_bank import ICICINetBankingParser  # noqa: E402
+from parsers.alerts.icici import ICICINetBankingParser  # noqa: E402
 from scraper.gmail_client import GmailClient  # noqa: E402
 
 logger = logging.getLogger(__name__)

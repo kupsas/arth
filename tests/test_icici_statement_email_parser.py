@@ -1,11 +1,11 @@
-"""Unit tests for :class:`scraper.email_parsers.icici_statement.ICICIStatementEmailParser` routing."""
+"""Unit tests for :class:`parsers.statements.icici.ICICIStatementEmailParser` routing."""
 
 from __future__ import annotations
 
 import pytest
 
 from tests.email_parser_test_accounts import ICICI_STATEMENT_ACCOUNTS
-from scraper.email_parsers.icici_statement import ICICIStatementEmailParser
+from parsers.statements.icici import ICICIStatementEmailParser
 
 
 @pytest.fixture

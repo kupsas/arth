@@ -8,7 +8,7 @@ parse subjects that clearly identify the **combined** product).
 Steps:
   1. Match subject (see :meth:`HDFCCombinedStatementEmailParser.can_parse`).
   2. Decrypt attachment with passwords from :mod:`scraper.pdf_passwords` (see ``.env``).
-  3. Parse with :class:`~pipeline.parsers.hdfc_savings_pdf.HDFCSavingsPdfParser`.
+  3. Parse with :class:`~parsers.uploads.hdfc_savings_pdf.HDFCSavingsPdfParser`.
   4. Stamp ``account_id`` / ``source_key`` for savings **3703** from the scraper config
      (same tail-key pattern as InstaAlerts).
 """
@@ -23,8 +23,8 @@ import pikepdf
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 
 from pipeline.models import ParsedTransaction
-from pipeline.parsers.hdfc_savings_pdf import HDFCSavingsPdfParser
-from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from parsers.uploads.hdfc_savings_pdf import HDFCSavingsPdfParser
+from parsers.statements.base import BaseStatementEmailParser
 from scraper.pdf_passwords import (
     StatementPasswordRequired,
     resolve_hdfc_combined_pdf_password_candidates,

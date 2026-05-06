@@ -16,8 +16,8 @@ from __future__ import annotations
 import re
 import logging
 
-from scraper.email_parsers import EMAIL_PARSER_REGISTRY
-from scraper.email_parsers.base import BaseEmailParser
+from parsers.email_registry import EMAIL_PARSER_REGISTRY
+from parsers.alerts.base import BaseEmailParser
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def find_parser(
         raw_sender: The raw "From" header value (may include display name).
         subject:    The email subject line.
         registry:   Optional per-user parser list map (from
-                    :func:`scraper.email_parsers.build_email_parser_registry`).
+                    :func:`parsers.email_registry.build_email_parser_registry`).
                     Defaults to the static :data:`EMAIL_PARSER_REGISTRY`.
 
     Returns:

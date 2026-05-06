@@ -44,7 +44,7 @@ def _label_for(source_type: str) -> str:
 
 
 def detect_transaction_file(path: Path) -> list[DetectionResult]:
-    """Run ``detect()`` on each unique parser class in :data:`pipeline.parsers.PARSER_REGISTRY`."""
+    """Run ``detect()`` on each unique parser class in :data:`parsers.uploads.PARSER_REGISTRY`."""
     from pipeline.parsers import PARSER_REGISTRY
 
     results: list[DetectionResult] = []
@@ -76,10 +76,10 @@ def detect_holding_file(path: Path) -> list[DetectionResult]:
             results.append(res)
 
     # PDF helpers not tied to HOLDING_PARSER_REGISTRY rows (statement PDFs, contract notes).
-    from pipeline.holding_parsers import icici_direct_contract_note as cn_mod
-    from pipeline.holding_parsers import icici_direct_equity_statement_pdf as eq_pdf_mod
-    from pipeline.holding_parsers import icici_direct_mf_statement_pdf as mf_pdf_mod
-    from pipeline.holding_parsers import icici_ppf_pdf as ppf_pdf_mod
+    from parsers.holdings import icici_direct_contract_note as cn_mod
+    from parsers.holdings import icici_direct_equity_statement_pdf as eq_pdf_mod
+    from parsers.holdings import icici_direct_mf_statement_pdf as mf_pdf_mod
+    from parsers.holdings import icici_ppf_pdf as ppf_pdf_mod
 
     for fn in (
         eq_pdf_mod.detect_icici_equity_statement_pdf,
@@ -96,12 +96,12 @@ def detect_holding_file(path: Path) -> list[DetectionResult]:
 
 
 def parser_class_for_transaction_source_type(source_type: str) -> type[Any] | None:
-    """Map logical detection key to :class:`~pipeline.parsers.base.BaseParser` subclass."""
-    from pipeline.parsers.hdfc_cc import HDFCCreditCardParser
-    from pipeline.parsers.hdfc_cc_pdf import HDFCCreditCardPdfParser
-    from pipeline.parsers.hdfc_savings import HDFCSavingsParser
-    from pipeline.parsers.hdfc_savings_pdf import HDFCSavingsPdfParser
-    from pipeline.parsers.icici_savings import ICICISavingsParser
+    """Map logical detection key to :class:`~parsers.uploads.base.BaseParser` subclass."""
+    from parsers.uploads.hdfc_cc import HDFCCreditCardParser
+    from parsers.uploads.hdfc_cc_pdf import HDFCCreditCardPdfParser
+    from parsers.uploads.hdfc_savings import HDFCSavingsParser
+    from parsers.uploads.hdfc_savings_pdf import HDFCSavingsPdfParser
+    from parsers.uploads.icici_savings import ICICISavingsParser
 
     logical_map: dict[str, type[Any]] = {
         "hdfc_savings": HDFCSavingsParser,

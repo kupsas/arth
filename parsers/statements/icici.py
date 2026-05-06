@@ -2,7 +2,7 @@
 ICICI Bank **statement PDF** emails (monthly + annual savings).
 
 These are not InstaAlerts: they carry a password-protected PDF attachment with a
-full transaction table. We decrypt, reuse :class:`~pipeline.parsers.icici_savings.ICICISavingsParser`
+full transaction table. We decrypt, reuse :class:`~parsers.uploads.icici_savings.ICICISavingsParser`
 (same layout as manually uploaded PDFs), then stamp ``account_id`` / ``source_key``
 on each row so the orchestrator can group and transform like other email sources.
 
@@ -11,8 +11,8 @@ Routing (sender + subject):
 1. **Annual FY** — subject matches ``Bank Statement from DD-MM-YYYY to DD-MM-YYYY``.
    ICICI has sent these from ``estatement@…`` or ``customernotification@icicibank.com``
    (see :data:`~scraper.config.ICICI_SAVINGS_STATEMENT_SENDERS`).
-   Savings rows use :class:`~pipeline.parsers.icici_savings.ICICISavingsParser`
-   (PPF band stripped); PPF uses :mod:`pipeline.holding_parsers.icici_ppf_pdf`.
+   Savings rows use :class:`~parsers.uploads.icici_savings.ICICISavingsParser`
+   (PPF band stripped); PPF uses :mod:`parsers.holdings.icici_ppf_pdf`.
 
 2. **Current monthly** — subject contains ``ICICI Bank Statement from`` (post-~Oct 2020).
 
@@ -34,10 +34,10 @@ from typing import Literal
 import pikepdf
 import pipeline.config  # noqa: F401 — ensures ``.env`` is loaded before ``os.getenv``
 
-from pipeline.holding_parsers.icici_ppf_pdf import parse_icici_ppf_from_annual_pdf
+from parsers.holdings.icici_ppf_pdf import parse_icici_ppf_from_annual_pdf
 from pipeline.models import ParsedTransaction
-from pipeline.parsers.icici_savings import ICICISavingsParser
-from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
+from parsers.uploads.icici_savings import ICICISavingsParser
+from parsers.statements.base_broker import BaseBrokerStatementParser
 from scraper.pdf_passwords import (
     StatementPasswordRequired,
     resolve_icici_statement_pdf_password_candidates,

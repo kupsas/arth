@@ -23,7 +23,7 @@ SAMPLE_ANNUAL = (
 @pytest.mark.skipif(not SAMPLE_ANNUAL.is_file(), reason="sample equity statement PDF not present")
 def test_annual_statement_last_grid_row_is_bharti_airtel_resolved() -> None:
     """Last trade row on the statement grid must parse (Bharti Airtel, INE397D01024 → BHARTIARTL)."""
-    from pipeline.holding_parsers.icici_direct_equity_statement_pdf import (
+    from parsers.holdings.icici_direct_equity_statement_pdf import (
         parse_icici_direct_equity_statement_pdf,
     )
 

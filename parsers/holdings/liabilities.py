@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pdfplumber
 
-from pipeline.holding_parsers.base import ParsedLiability
+from parsers.holdings.base import ParsedLiability
 from pipeline.models import LiabilityType
 
 

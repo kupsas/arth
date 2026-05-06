@@ -4,7 +4,7 @@ ICICI Direct **equity** rows from the **Trades executed at NSE** email only (PDF
 The exchange email (e.g. ``nse-direct@nse.co.in``) sends a password-protected PDF listing
 NSE symbol, buy/sell, quantity, and rate. Password: ``NSE_TRADES_EXECUTED_PASSWORD``.
 
-Parsing: :mod:`pipeline.holding_parsers.icici_direct_contract_note`. No bank ``transform``/LLM —
+Parsing: :mod:`parsers.holdings.icici_direct_contract_note`. No bank ``transform``/LLM —
 only :func:`pipeline.holding_pipeline.ingest_investment_transactions` with ``source_type=email``.
 
 ICICI *Order and Trade* / contract-note PDFs are **not** ingested here (by design).
@@ -18,9 +18,9 @@ import logging
 import pikepdf
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 
-from pipeline.holding_parsers.icici_direct_contract_note import parse_icici_direct_trade_pdf
+from parsers.holdings.icici_direct_contract_note import parse_icici_direct_trade_pdf
 from pipeline.models import ParsedTransaction
-from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
+from parsers.statements.base_broker import BaseBrokerStatementParser
 from scraper.pdf_passwords import (
     StatementPasswordRequired,
     resolve_nse_pdf_password_candidates,

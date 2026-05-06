@@ -2,7 +2,7 @@
 """
 Compare one **ICICI Direct / NSE trade PDF** email against ``investment_transactions``.
 
-Uses the same decrypt + parse path as the scraper (:mod:`scraper.email_parsers.icici_direct_trade`).
+Uses the same decrypt + parse path as the scraper (:mod:`parsers.statements.icici_direct_trade`).
 Match key: ``txn_date``, ``symbol``, ``txn_type``, ``quantity``, ``total_amount`` (and
 ``account_platform == "ICICI Direct"``).
 
@@ -34,8 +34,8 @@ from sqlmodel import Session, select  # noqa: E402
 
 from api.database import get_engine, init_db  # noqa: E402
 from api.models import InvestmentTransaction  # noqa: E402
-from pipeline.holding_parsers.icici_direct_contract_note import parse_icici_direct_trade_pdf
-from scraper.email_parsers.icici_direct_trade import (
+from parsers.holdings.icici_direct_contract_note import parse_icici_direct_trade_pdf
+from parsers.statements.icici_direct_trade import (
     _nse_trades_pdf_password,
     classify_icici_direct_subject,
 )

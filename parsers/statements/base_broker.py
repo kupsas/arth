@@ -1,10 +1,10 @@
 """
 Base class for **broker** PDF email parsers that fill investment side-channels.
 
-:class:`~scraper.email_parsers.base_statement.BaseStatementEmailParser` is about
+:class:`~parsers.statements.base.BaseStatementEmailParser` is about
 ``parse_attachment`` → ``list[ParsedTransaction]`` (bank cash ledger). Some PDFs
-instead (or in addition) produce :class:`~pipeline.holding_parsers.base.ParsedHolding`
-/ :class:`~pipeline.holding_parsers.base.ParsedInvestmentTxn` rows, which the
+instead (or in addition) produce :class:`~parsers.holdings.base.ParsedHolding`
+/ :class:`~parsers.holdings.base.ParsedInvestmentTxn` rows, which the
 orchestrator reads via :meth:`attachment_investment_outputs` after all attachments
 on a message are processed.
 
@@ -15,8 +15,8 @@ equity/MF statement parsers.
 
 from __future__ import annotations
 
-from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn
-from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from parsers.holdings.base import ParsedHolding, ParsedInvestmentTxn
+from parsers.statements.base import BaseStatementEmailParser
 
 
 class BaseBrokerStatementParser(BaseStatementEmailParser):

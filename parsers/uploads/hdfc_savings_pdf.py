@@ -4,7 +4,7 @@ Parser for **HDFC Bank Combined Email Statement** PDFs (password-protected attac
 The downloadable ``.txt`` export uses a different layout — see :class:`HDFCSavingsParser`.
 This module handles the **PDF** produced by monthly combined email statements
 (``Txn Date | Narration | Withdrawals | Deposits | Closing Balance``), using
-pdfplumber **word coordinates** the same way :mod:`pipeline.parsers.icici_savings`
+pdfplumber **word coordinates** the same way :mod:`parsers.uploads.icici_savings`
 does for ICICI emailed PDFs.
 
 Why word-level extraction?
@@ -38,7 +38,7 @@ import pdfplumber
 
 from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
-from pipeline.parsers.base import BaseParser
+from parsers.uploads.base import BaseParser
 
 # ── Line bucketing (same idea as ICICI: small px tolerance groups words on one visual row)
 _Y_BUCKET_PX = 3

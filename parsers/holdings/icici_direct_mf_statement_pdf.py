@@ -5,7 +5,7 @@ Transaction lines are easier to recover from **plain text** than from ``extract_
 (brochure-style headers confuse table detection). We scan ``extract_text()`` line-by-line,
 track the current folio and scheme name, and parse dated ledger rows.
 
-Callers can run :func:`pipeline.holding_parsers.icici_direct_mf.derive_mf_holdings` on the
+Callers can run :func:`parsers.holdings.icici_direct_mf.derive_mf_holdings` on the
 returned transactions to rebuild ``ParsedHolding`` rows (mirrors CSV ingest).
 """
 
@@ -19,7 +19,7 @@ from pathlib import Path
 import pdfplumber
 
 from pipeline.detection import DetectionResult, PARSER_LABELS
-from pipeline.holding_parsers.base import ParsedInvestmentTxn, parse_icici_number
+from parsers.holdings.base import ParsedInvestmentTxn, parse_icici_number
 from pipeline.models import InvestmentTxnType
 
 logger = logging.getLogger(__name__)

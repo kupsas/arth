@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`pipeline.holding_parsers.icici_direct_contract_note` (NSE trades PDF)."""
+"""Unit tests for :mod:`parsers.holdings.icici_direct_contract_note` (NSE trades PDF)."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from pipeline.holding_parsers.icici_direct_contract_note import (
+from parsers.holdings.icici_direct_contract_note import (
     aggregate_icici_direct_trades,
     parse_nse_capital_market_tables,
     parse_nse_executed_text,
 )
-from pipeline.holding_parsers.base import ParsedInvestmentTxn
+from parsers.holdings.base import ParsedInvestmentTxn
 from pipeline.models import InvestmentTxnType
 
 
@@ -56,7 +56,7 @@ def test_parse_nse_capital_market_table_via_pdfplumber(tmp_path: Path) -> None:
     fake_pdf.pages = [fake_page]
 
     with patch(
-        "pipeline.holding_parsers.icici_direct_contract_note.pdfplumber.open",
+        "parsers.holdings.icici_direct_contract_note.pdfplumber.open",
         return_value=fake_pdf,
     ):
         out = parse_nse_capital_market_tables(
@@ -99,13 +99,13 @@ def test_parse_nse_executed_buy() -> None:
 
 
 def test_classify_subject_nse_only() -> None:
-    from scraper.email_parsers.icici_direct_trade import classify_icici_direct_subject
+    from parsers.statements.icici_direct_trade import classify_icici_direct_subject
 
     assert classify_icici_direct_subject("Your Trades executed at NSE on 15-03-2024") == "nse_trades_executed"
 
 
 def test_classify_subject_rejects_order_and_contract() -> None:
-    from scraper.email_parsers.icici_direct_trade import classify_icici_direct_subject
+    from parsers.statements.icici_direct_trade import classify_icici_direct_subject
 
     assert classify_icici_direct_subject("Order and Trade confirmations …") is None
     assert classify_icici_direct_subject("NSE Equity Digital Contract Note for your trades") is None

@@ -9,7 +9,7 @@ with annual CSV / NSE trade PDF ingest; **Net Amount** is optional metadata only
 We prefer ``pdfplumber`` ``extract_tables()`` because row alignment survives multi-line
 company names better than raw ``extract_text()`` regex alone.
 
-Parsed rows are merged with :func:`pipeline.holding_parsers.icici_direct_contract_note.aggregate_icici_direct_trades`
+Parsed rows are merged with :func:`parsers.holdings.icici_direct_contract_note.aggregate_icici_direct_trades`
 so ledger grain matches other ICICI Direct equity imports (one row per date × side × symbol).
 """
 
@@ -24,10 +24,10 @@ from pathlib import Path
 import pdfplumber
 
 from pipeline.detection import DetectionResult, PARSER_LABELS
-from pipeline.holding_parsers.base import ParsedInvestmentTxn
-from pipeline.holding_parsers.icici_direct_contract_note import aggregate_icici_direct_trades
-from pipeline.holding_parsers.icici_direct_equity import resolve_icici_direct_nse_symbol
-from pipeline.holding_parsers.base import parse_icici_number
+from parsers.holdings.base import ParsedInvestmentTxn
+from parsers.holdings.icici_direct_contract_note import aggregate_icici_direct_trades
+from parsers.holdings.icici_direct_equity import resolve_icici_direct_nse_symbol
+from parsers.holdings.base import parse_icici_number
 from pipeline.models import InvestmentTxnType
 
 logger = logging.getLogger(__name__)

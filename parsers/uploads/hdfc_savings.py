@@ -19,7 +19,7 @@ from pathlib import Path
 
 from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.models import ParsedTransaction
-from pipeline.parsers.base import BaseParser
+from parsers.uploads.base import BaseParser
 
 logger = logging.getLogger(__name__)
 

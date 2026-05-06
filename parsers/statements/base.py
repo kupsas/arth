@@ -1,7 +1,7 @@
 """
 Base class for parsers that read **PDF attachments** (monthly statements), not HTML bodies.
 
-HTML alert parsers subclass :class:`~scraper.email_parsers.base.BaseEmailParser` and
+HTML alert parsers subclass :class:`~parsers.alerts.base.BaseEmailParser` and
 implement ``parse(html, date)``. Statement parsers subclass *this* class and implement
 ``parse_attachment(pdf_bytes, date, email_sender=…, email_subject=…)`` instead.
 
@@ -17,7 +17,7 @@ import datetime
 from abc import abstractmethod
 from typing import ClassVar
 
-from scraper.email_parsers.base import BaseEmailParser
+from parsers.alerts.base import BaseEmailParser
 
 from pipeline.models import ParsedTransaction
 

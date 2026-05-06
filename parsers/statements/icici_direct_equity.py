@@ -17,12 +17,12 @@ import logging
 import pikepdf
 import pipeline.config  # noqa: F401 — load ``.env``
 
-from pipeline.holding_parsers.derived_equity import derive_equity_holdings
-from pipeline.holding_parsers.icici_direct_equity_statement_pdf import (
+from parsers.holdings.derived_equity import derive_equity_holdings
+from parsers.holdings.icici_direct_equity_statement_pdf import (
     parse_icici_direct_equity_statement_pdf,
 )
 from pipeline.models import ParsedTransaction
-from scraper.email_parsers.base_broker_statement import BaseBrokerStatementParser
+from parsers.statements.base_broker import BaseBrokerStatementParser
 from scraper.pdf_passwords import (
     StatementPasswordRequired,
     resolve_icici_statement_pdf_password_candidates,
