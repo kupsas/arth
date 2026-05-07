@@ -895,7 +895,10 @@ export type StatementUploadOutcome =
   | "account_picker"
   | "no_match"
   | "no_source"
-  | "needs_password";
+  | "needs_password"
+  | "account_mismatch"
+  | "confirm_account"
+  | "holdings_success";
 
 /** One row from POST /api/pipeline/upload for picker UIs */
 export interface StatementUploadOption {
@@ -915,6 +918,16 @@ export interface StatementUploadResult {
   password_invalid?: boolean;
   type_options?: StatementUploadOption[] | null;
   account_options?: StatementUploadOption[] | null;
+  /** When outcome is account_mismatch — last four read from the uploaded file */
+  detected_hint?: string | null;
+  /** source_key → last four digits on file (for mismatch / confirm flows) */
+  existing_hints?: Record<string, string> | null;
+  /** Logical parser id to send on retry (e.g. hdfc_savings) */
+  pending_source_type?: string | null;
+  /** True when confirm_account + user chose “new account” — collect four digits client-side */
+  needs_last4_input?: boolean;
+  /** When outcome is holdings_success — portfolio ingest stats from unified upload */
+  import_stats?: Record<string, unknown> | null;
 }
 
 /** POST /api/pipeline/upload/holdings — portfolio CSV/PDF */

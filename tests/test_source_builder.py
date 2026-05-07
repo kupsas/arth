@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, select
 
-from api.models import ScraperAccountMapping, UserPipelineSource
+from api.models import ScraperAccountMapping, Transaction, UserPipelineSource
 from scraper.source_builder import (
     _infer_accounts_dict,
     discovery_has_non_nse_broker_mail,
     filter_redundant_nse_broker_sources,
+    sync_user_pipeline_sources_from_scraper_mappings,
+    sync_user_pipeline_sources_from_transactions,
 )
 
 
@@ -29,12 +31,42 @@ def infer_session(monkeypatch: pytest.MonkeyPatch) -> tuple[Session, str]:
             session.delete(m)
         for m in session.exec(select(UserPipelineSource).where(UserPipelineSource.user_id == uid)).all():
             session.delete(m)
+        for m in session.exec(select(Transaction).where(Transaction.user_id == uid)).all():
+            session.delete(m)
         session.commit()
         yield session, uid
 
 
 def _read_fixture(name: str) -> str:
     return (Path(__file__).parent / "fixtures" / "email_samples" / name).read_text(encoding="utf-8")
+
+
+def test_sync_pipeline_sources_from_scraper_mappings_inserts_hdfc_savings(
+    infer_session: tuple[Session, str],
+) -> None:
+    """Email discovery writes scraper mappings; uploads need matching ``UserPipelineSource``."""
+    session, uid = infer_session
+    session.add(
+        ScraperAccountMapping(
+            user_id=uid,
+            sender_email="alerts@hdfcbank.net",
+            last_4_digits="3703",
+            account_id="HDFC_SAL_3703",
+            source_key="hdfc_savings",
+        )
+    )
+    session.commit()
+    assert sync_user_pipeline_sources_from_scraper_mappings(session, uid) == 1
+    session.commit()
+    row = session.exec(
+        select(UserPipelineSource).where(
+            UserPipelineSource.user_id == uid,
+            UserPipelineSource.source_key == "hdfc_savings",
+        )
+    ).first()
+    assert row is not None
+    assert row.account_id == "HDFC_SAL_3703"
+    assert sync_user_pipeline_sources_from_scraper_mappings(session, uid) == 0
 
 
 def test_hdfc_bank_html_upi_outbound_finds_account_last4(infer_session: tuple[Session, str]) -> None:
@@ -201,3 +233,85 @@ def test_filter_redundant_nse_keeps_both_when_icici_broker_has_zero_mail() -> No
     out = filter_redundant_nse_broker_sources(sources)
     assert out is sources
     assert len(out) == 2
+
+
+def test_sync_pipeline_sources_from_transactions_inserts_hdfc_savings(
+    infer_session: tuple[Session, str],
+) -> None:
+    """When only ``Transaction`` rows exist (no scraper mapping), uploads still get a pipeline source."""
+    import datetime
+    import hashlib
+
+    session, uid = infer_session
+    h = hashlib.sha256(f"{uid}-txn-sync-1".encode()).hexdigest()
+    session.add(
+        Transaction(
+            content_hash=h,
+            txn_date=datetime.date(2025, 1, 1),
+            account_id="HDFC_SAL_3703",
+            user_id=uid,
+            source_statement="email",
+            direction="INFLOW",
+            amount=1.0,
+            raw_description="test",
+            source_type="email",
+        )
+    )
+    session.commit()
+    assert sync_user_pipeline_sources_from_transactions(session, uid) == 1
+    session.commit()
+    row = session.exec(
+        select(UserPipelineSource).where(
+            UserPipelineSource.user_id == uid,
+            UserPipelineSource.source_key == "hdfc_savings",
+        )
+    ).first()
+    assert row is not None
+    assert row.account_id == "HDFC_SAL_3703"
+    assert sync_user_pipeline_sources_from_transactions(session, uid) == 0
+
+
+def test_sync_pipeline_sources_second_hdfc_account_gets_suffix_key(
+    infer_session: tuple[Session, str],
+) -> None:
+    import datetime
+    import hashlib
+
+    from parsers.uploads import PARSER_REGISTRY
+
+    session, uid = infer_session
+    session.add(
+        UserPipelineSource(
+            user_id=uid,
+            source_key="hdfc_savings",
+            account_id="HDFC_SAL_1111",
+            currency="INR",
+            statement_folder=None,
+        )
+    )
+    h = hashlib.sha256(f"{uid}-txn-sync-2".encode()).hexdigest()
+    session.add(
+        Transaction(
+            content_hash=h,
+            txn_date=datetime.date(2025, 1, 2),
+            account_id="HDFC_SAL_2222",
+            user_id=uid,
+            source_statement="email",
+            direction="INFLOW",
+            amount=2.0,
+            raw_description="test2",
+            source_type="email",
+        )
+    )
+    session.commit()
+    assert sync_user_pipeline_sources_from_transactions(session, uid) == 1
+    session.commit()
+    row = session.exec(
+        select(UserPipelineSource).where(
+            UserPipelineSource.user_id == uid,
+            UserPipelineSource.account_id == "HDFC_SAL_2222",
+        )
+    ).first()
+    assert row is not None
+    assert row.source_key == "hdfc_savings_2222"
+    assert "hdfc_savings_2222" in PARSER_REGISTRY

@@ -12,7 +12,7 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight } from "lucide-react"
+import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, PartyPopper, Sparkles } from "lucide-react"
 import * as React from "react"
 
 import { UploadButton } from "@/components/dashboard/upload-button"
@@ -193,6 +193,11 @@ function buildCarouselSlides(bundle: ReviewInsightsBundle): string[] {
   return out
 }
 
+/** How many insight cards to show side-by-side in the carousel */
+const CAROUSEL_VISIBLE = 3
+/** Gap between carousel cards in px — must match the inline gap style */
+const CAROUSEL_GAP_PX = 16
+
 export type StepReviewProps = {
   /** Discovery included a broker source — show portfolio cost-basis card */
   hasBrokerSource: boolean
@@ -222,19 +227,61 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
     return buildCarouselSlides(insightsQ.data)
   }, [insightsQ.data])
 
+  // ── Sliding carousel machinery ──────────────────────────────────────────────
+  // We clone the first (CAROUSEL_VISIBLE - 1) slides at the end of the track so
+  // the last real slide always has neighbours to its right. When slideIdx reaches
+  // slides.length we wait for the CSS transition to finish, then snap back to 0
+  // without animation — the clone makes that jump invisible.
+  const extendedSlides = React.useMemo(
+    () =>
+      slides.length >= CAROUSEL_VISIBLE
+        ? [...slides, ...slides.slice(0, CAROUSEL_VISIBLE - 1)]
+        : slides,
+    [slides],
+  )
+
   const [slideIdx, setSlideIdx] = React.useState(0)
+  const [noTransition, setNoTransition] = React.useState(false)
+  const trackRef = React.useRef<HTMLDivElement>(null)
+  const [cardPx, setCardPx] = React.useState(0)
 
+  // Measure the track width so we can compute exact pixel offsets per card
   React.useEffect(() => {
-    setSlideIdx(0)
-  }, [slides])
+    const el = trackRef.current
+    if (!el) return
+    const obs = new ResizeObserver(() => {
+      setCardPx(
+        (el.offsetWidth - CAROUSEL_GAP_PX * (CAROUSEL_VISIBLE - 1)) / CAROUSEL_VISIBLE,
+      )
+    })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [])
 
+  React.useEffect(() => { setSlideIdx(0) }, [slides])
+
+  // Auto-advance one card at a time
   React.useEffect(() => {
     if (slides.length <= 1) return
-    const t = window.setInterval(() => {
-      setSlideIdx((i) => (i + 1) % slides.length)
-    }, 5000)
+    const t = window.setInterval(() => setSlideIdx((i) => i + 1), 5000)
     return () => window.clearInterval(t)
   }, [slides.length])
+
+  // After the clone zone transition finishes, snap back to real position silently
+  React.useEffect(() => {
+    if (slides.length === 0 || slideIdx < slides.length) return
+    const t = setTimeout(() => {
+      setNoTransition(true)
+      setSlideIdx((i) => i - slides.length)
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => setNoTransition(false)),
+      )
+    }, 520)
+    return () => clearTimeout(t)
+  }, [slideIdx, slides.length])
+
+  const activeDot = slides.length > 0 ? slideIdx % slides.length : 0
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const snapQ = useQuery({
     queryKey: ["onboarding", "portfolio-snapshot-review", hasBrokerSource] as const,
@@ -257,59 +304,177 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
     return gapsData.reports.reduce((s, r) => s + (r.transaction_count ?? 0), 0)
   }, [gapsData])
 
-  const activeSlide = slides[slideIdx] ?? ""
+  // Top 3 holdings sorted by cost value, descending
+  const top3Holdings = React.useMemo(() => {
+    if (!snapQ.data?.top_holdings?.length) return []
+    return [...snapQ.data.top_holdings]
+      .sort((a, b) => (b.current_value ?? 0) - (a.current_value ?? 0))
+      .slice(0, 3)
+  }, [snapQ.data])
 
   return (
     <div className="space-y-8 max-w-3xl">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Review your import</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Here&apos;s what we pulled in, a few quick highlights, and any month-level gaps we spotted.
-          You can always upload more statements later from the dashboard.
-        </p>
+
+      {/* ── Celebration hero ── */}
+      <div className="rounded-2xl bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50 dark:from-emerald-950/40 dark:via-teal-950/30 dark:to-cyan-950/20 border border-emerald-100 dark:border-emerald-900/50 p-6 space-y-5">
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 size-10 rounded-full bg-emerald-100 dark:bg-emerald-900/60 flex items-center justify-center">
+            <PartyPopper className="size-5 text-emerald-600 dark:text-emerald-400" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight">Your money has a home.</h2>
+            <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+              Everything came through cleanly. Here&apos;s a quick look at what Arth pulled in — plus
+              any gaps worth filling before you dive in.
+            </p>
+          </div>
+        </div>
+
+        {/* Transactions + sources stat tiles */}
+        {totalTxnsFromGaps > 0 && (
+          <div className="flex flex-wrap gap-3">
+            <div className="bg-white/70 dark:bg-white/5 rounded-xl px-4 py-3 border border-emerald-100 dark:border-emerald-800/60">
+              <p className="text-3xl font-bold tabular-nums text-emerald-700 dark:text-emerald-300 leading-none">
+                {totalTxnsFromGaps.toLocaleString()}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1.5">transactions imported</p>
+            </div>
+            {gapsData && gapsData.reports.length > 0 && (
+              <div className="bg-white/70 dark:bg-white/5 rounded-xl px-4 py-3 border border-emerald-100 dark:border-emerald-800/60">
+                <p className="text-3xl font-bold tabular-nums text-emerald-700 dark:text-emerald-300 leading-none">
+                  {gapsData.reports.length}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  {gapsData.reports.length === 1 ? "source connected" : "sources connected"}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Broker portfolio — folded into the hero */}
+        {hasBrokerSource && (
+          <div className="border-t border-emerald-100 dark:border-emerald-800/40 pt-5 space-y-5">
+            <p className="text-xs font-semibold text-emerald-700/60 dark:text-emerald-400/60 uppercase tracking-widest">
+              Broker-linked portfolio · cost basis
+            </p>
+
+            {snapQ.isLoading && (
+              <p className="text-xs text-muted-foreground">Loading portfolio…</p>
+            )}
+            {snapQ.isError && (
+              <p className="text-xs text-destructive" role="alert">
+                {getUserFacingErrorMessage(snapQ.error) || "Couldn't load portfolio snapshot."}
+              </p>
+            )}
+
+            {snapQ.data && (
+              <>
+                {/* Big number tiles: cost value, equity positions, MF count */}
+                <div className="flex flex-wrap gap-4">
+                  <div className="bg-white/70 dark:bg-white/5 rounded-xl px-4 py-3 border border-emerald-100 dark:border-emerald-800/60">
+                    <p className="text-3xl font-bold tabular-nums text-emerald-700 dark:text-emerald-300 leading-none">
+                      {formatCurrency(snapQ.data.total_value_inr)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1.5">cost value</p>
+                  </div>
+                  {snapQ.data.equity_count > 0 && (
+                    <div className="bg-white/70 dark:bg-white/5 rounded-xl px-4 py-3 border border-emerald-100 dark:border-emerald-800/60">
+                      <p className="text-3xl font-bold tabular-nums text-emerald-700 dark:text-emerald-300 leading-none">
+                        {snapQ.data.equity_count}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1.5">equity positions</p>
+                    </div>
+                  )}
+                  {snapQ.data.mf_count > 0 && (
+                    <div className="bg-white/70 dark:bg-white/5 rounded-xl px-4 py-3 border border-emerald-100 dark:border-emerald-800/60">
+                      <p className="text-3xl font-bold tabular-nums text-emerald-700 dark:text-emerald-300 leading-none">
+                        {snapQ.data.mf_count}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1.5">mutual funds</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Top 3 holdings by cost value */}
+                {top3Holdings.length > 0 && snapQ.data.total_value_inr > 0 && (
+                  <ul className="space-y-3 mt-1">
+                    {top3Holdings.map((h, i) => {
+                      const pct = (100 * (h.current_value ?? 0)) / snapQ.data!.total_value_inr
+                      const name = h.name || h.symbol || `Holding ${i + 1}`
+                      return (
+                        <li
+                          key={h.symbol ?? i}
+                          className="flex items-start justify-between gap-6 text-sm bg-white/50 dark:bg-white/5 rounded-lg px-4 py-3 border border-emerald-100 dark:border-emerald-800/40"
+                        >
+                          <span className="flex items-start gap-3 min-w-0">
+                            <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums w-4 shrink-0 mt-px">
+                              {i + 1}
+                            </span>
+                            <span className="font-medium text-foreground leading-snug">{name}</span>
+                          </span>
+                          <span className="text-xs text-muted-foreground tabular-nums shrink-0 text-right leading-snug mt-px">
+                            {formatCurrency(h.current_value ?? 0)}
+                            <br />
+                            <span className="text-foreground font-semibold">{pct.toFixed(1)}%</span>
+                          </span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+
+                {/* Concentration warning if top holding is >15% */}
+                {top3Holdings[0] && snapQ.data.total_value_inr > 0 &&
+                  (100 * (top3Holdings[0].current_value ?? 0)) / snapQ.data.total_value_inr >= 15 && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+                      Your largest position is{" "}
+                      {(
+                        (100 * (top3Holdings[0].current_value ?? 0)) /
+                        snapQ.data.total_value_inr
+                      ).toFixed(1)}
+                      % of cost value — worth keeping an eye on concentration.
+                    </p>
+                  )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Per-source pill chips */}
+        {gapsData && gapsData.reports.length > 0 && (
+          <ul className="flex flex-wrap gap-2.5">
+            {gapsData.reports.map((r) => (
+              <li
+                key={r.source}
+                className="text-xs bg-white/60 dark:bg-white/5 border border-emerald-100 dark:border-emerald-900/40 rounded-full px-3 py-1 text-muted-foreground"
+              >
+                <span className="text-foreground font-medium">{r.source_label}</span>
+                {" · "}
+                {r.transaction_count.toLocaleString()} txns
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {insightsQ.data?.usePersonalized && insightsQ.isSuccess && (
+          <p className="text-xs text-emerald-700/70 dark:text-emerald-400/70">
+            Insights below draw from roughly the last three months of classified activity.
+          </p>
+        )}
       </div>
 
-      {/* A1 — Transaction summary */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Transactions</CardTitle>
-          <CardDescription>
-            Totals from your linked sources. Classification uses rules, AI, and anything you
-            confirmed during import.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <p>
-            <span className="font-medium text-foreground">{totalTxnsFromGaps.toLocaleString()}</span>{" "}
-            transactions across your sources.
-          </p>
-          {gapsData && gapsData.reports.length > 0 && (
-            <ul className="text-muted-foreground space-y-1 list-disc pl-5">
-              {gapsData.reports.map((r) => (
-                <li key={r.source}>
-                  <span className="text-foreground font-medium">{r.source_label}</span>
-                  {" · "}
-                  {r.transaction_count.toLocaleString()} txns
-                </li>
-              ))}
-            </ul>
-          )}
-          {insightsQ.data?.usePersonalized && insightsQ.isSuccess && (
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Insights below use roughly the last three months of classified activity.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* A2 — Carousel */}
-      <Card className="overflow-hidden">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Did you know?</CardTitle>
+      {/* ── Insights carousel (3-up sliding) ── */}
+      <Card className="overflow-hidden border-violet-200 dark:border-violet-800/60 bg-gradient-to-br from-white to-violet-50/60 dark:from-card dark:to-violet-950/20">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Sparkles className="size-4 text-violet-500 dark:text-violet-400" />
+            {insightsQ.data?.usePersonalized ? "Your highlights" : "Worth knowing"}
+          </CardTitle>
           <CardDescription>
             {insightsQ.data?.usePersonalized
-              ? "A quick spin through your own numbers."
-              : "Once we have a few months of data, this fills with personalised highlights. For now, here are some facts worth knowing."}
+              ? "A few patterns we spotted in your numbers."
+              : "Once you have a few months of data, this fills with personalised highlights. For now, here's some context worth having."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -323,24 +488,52 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
           )}
           {slides.length > 0 && (
             <>
-              <div className="relative min-h-[4.5rem] flex items-center">
-                <p
-                  key={slideIdx}
-                  className="text-sm leading-relaxed text-foreground motion-safe:animate-in motion-safe:fade-in motion-safe:duration-300"
+              {/* Overflow-hidden track — slides as a translateX'd flex row */}
+              <div ref={trackRef} className="overflow-hidden">
+                <div
+                  className={cn(
+                    "flex",
+                    !noTransition && "transition-transform duration-500 ease-in-out",
+                  )}
+                  style={{
+                    gap: `${CAROUSEL_GAP_PX}px`,
+                    transform:
+                      cardPx > 0
+                        ? `translateX(-${slideIdx * (cardPx + CAROUSEL_GAP_PX)}px)`
+                        : undefined,
+                  }}
                 >
-                  {activeSlide}
-                </p>
+                  {extendedSlides.map((slide, i) => (
+                    <div
+                      key={i}
+                      className="flex-none rounded-xl border-2 border-violet-200 dark:border-violet-700 bg-gradient-to-br from-violet-50 to-indigo-50/80 dark:from-violet-950/50 dark:to-indigo-950/40 p-4 flex flex-col justify-center"
+                      style={{
+                        width:
+                          cardPx > 0
+                            ? `${cardPx}px`
+                            : `calc(${100 / CAROUSEL_VISIBLE}% - ${(CAROUSEL_GAP_PX * (CAROUSEL_VISIBLE - 1)) / CAROUSEL_VISIBLE}px)`,
+                        minHeight: "148px",
+                      }}
+                    >
+                      <p className="text-sm leading-relaxed text-foreground">{slide}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-1">
+
+              {/* Dot indicators + prev / next */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
                   {slides.map((_, i) => (
                     <button
                       key={i}
                       type="button"
                       aria-label={`Go to insight ${i + 1}`}
                       className={cn(
-                        "size-2 rounded-full transition-colors",
-                        i === slideIdx ? "bg-primary" : "bg-muted-foreground/30",
+                        "rounded-full transition-all duration-200",
+                        i === activeDot
+                          ? "size-2.5 bg-violet-500"
+                          : "size-2 bg-violet-200 dark:bg-violet-800 hover:bg-violet-300 dark:hover:bg-violet-700",
                       )}
                       onClick={() => setSlideIdx(i)}
                     />
@@ -351,9 +544,11 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
                     type="button"
                     size="icon"
                     variant="outline"
-                    className="size-8"
+                    className="size-8 border-violet-200 dark:border-violet-800 hover:bg-violet-50 dark:hover:bg-violet-950/40"
                     aria-label="Previous insight"
-                    onClick={() => setSlideIdx((i) => (i - 1 + slides.length) % slides.length)}
+                    onClick={() =>
+                      setSlideIdx((i) => (i - 1 + slides.length) % slides.length)
+                    }
                   >
                     <ChevronLeft className="size-4" />
                   </Button>
@@ -361,9 +556,9 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
                     type="button"
                     size="icon"
                     variant="outline"
-                    className="size-8"
+                    className="size-8 border-violet-200 dark:border-violet-800 hover:bg-violet-50 dark:hover:bg-violet-950/40"
                     aria-label="Next insight"
-                    onClick={() => setSlideIdx((i) => (i + 1) % slides.length)}
+                    onClick={() => setSlideIdx((i) => i + 1)}
                   >
                     <ChevronRight className="size-4" />
                   </Button>
@@ -374,87 +569,14 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
         </CardContent>
       </Card>
 
-      {/* A3 — Portfolio (broker only) */}
-      {hasBrokerSource && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Broker-linked portfolio</CardTitle>
-            <CardDescription>
-              Values below are <strong>cost basis</strong> (what you paid) — not live market prices.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            {snapQ.isLoading && (
-              <p className="text-muted-foreground">Loading portfolio snapshot…</p>
-            )}
-            {snapQ.isError && (
-              <p className="text-destructive text-sm" role="alert">
-                {getUserFacingErrorMessage(snapQ.error) || "Couldn't load portfolio snapshot."}
-              </p>
-            )}
-            {snapQ.data && (
-              <>
-                <div className="flex flex-wrap gap-x-6 gap-y-2">
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Cost value</p>
-                    <p className="text-lg font-semibold tabular-nums">
-                      {formatCurrency(snapQ.data.total_value_inr)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Holdings</p>
-                    <p className="text-lg font-semibold tabular-nums">{snapQ.data.holding_count}</p>
-                  </div>
-                </div>
-                {snapQ.data.equity_count + snapQ.data.mf_count > 0 && (
-                  <p className="text-muted-foreground">
-                    By position count:{" "}
-                    <span className="text-foreground font-medium">
-                      {Math.round(
-                        (100 * snapQ.data.equity_count) /
-                          (snapQ.data.equity_count + snapQ.data.mf_count),
-                      )}
-                      %{" "}
-                    </span>
-                    equity ·{" "}
-                    <span className="text-foreground font-medium">
-                      {Math.round(
-                        (100 * snapQ.data.mf_count) /
-                          (snapQ.data.equity_count + snapQ.data.mf_count),
-                      )}
-                      %{" "}
-                    </span>
-                    mutual funds
-                  </p>
-                )}
-                {snapQ.data.top_holdings?.[0] && snapQ.data.total_value_inr > 0 && (
-                  (() => {
-                    const top = snapQ.data.top_holdings[0]
-                    const pct = (100 * top.current_value) / snapQ.data.total_value_inr
-                    if (pct < 15) return null
-                    const name = top.name || top.symbol || "one holding"
-                    return (
-                      <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
-                        Your largest line item is {name} at about {pct.toFixed(1)}% of cost value —
-                        worth keeping an eye on concentration.
-                      </p>
-                    )
-                  })()
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
       {/* B — Coverage */}
       <div className="space-y-4">
         <div>
           <h3 className="text-lg font-semibold tracking-tight">Coverage gaps</h3>
           <p className="text-sm text-muted-foreground mt-1">
             We flag long stretches with no parsed activity on sources that should be monthly.
-            Credit-card gaps only appear after three empty months in a row. Upload any supported
-            statement — we detect the format automatically.
+            Credit-card gaps only appear after three empty months in a row. Upload any statement —
+            we detect the format automatically.
           </p>
         </div>
 
@@ -476,9 +598,9 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
         {gapsData && gapsData.reports.length === 0 && !gapsLoading && (
           <Card>
             <CardContent className="pt-6 flex items-start gap-2 text-sm text-muted-foreground">
-              <AlertCircle className="size-4 mt-0.5 shrink-0" />
-              No source-level transaction history found yet. Finish importing from email or upload a
-              statement, then return here.
+              <AlertCircle className="size-4 mt-0.5 shrink-0 text-amber-500" />
+              No source-level history found yet. Finish importing from email or upload a statement,
+              then come back here.
             </CardContent>
           </Card>
         )}
@@ -506,9 +628,9 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
                       )}
                     </p>
                     {r.gaps.length === 0 && !r.note && (
-                      <p className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 text-sm">
-                        <CheckCircle2 className="size-4" />
-                        No month-level gaps in that window.
+                      <p className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 text-sm font-medium">
+                        <CheckCircle2 className="size-4 shrink-0" />
+                        Complete coverage — no gaps here.
                       </p>
                     )}
                     {r.gaps.length > 0 && (

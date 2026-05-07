@@ -364,38 +364,24 @@ export function OnboardingWizard({
     bfSourceIdx === backfillSourcesLen - 1 &&
     bfProgress?.status === "complete"
 
-  /** After a successful statement upload during onboarding, refresh counts and maybe clear the gate. */
+  /**
+   * After a successful statement upload during onboarding, refresh counts and clear the
+   * zero-transaction gate so the "Continue to review" button appears. We intentionally do
+   * **not** auto-advance to Review — the user should stay on the upload screen so they can
+   * see their import results and optionally upload more files before moving on.
+   */
   const handleStatementImportComplete = React.useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: metricsKeys.all })
     await queryClient.invalidateQueries({ queryKey: ["transactions"] })
     try {
-      // ``truth`` bypasses the optional dev mock on ``GET /has-data`` so we see rows just written.
       const hd = await fetchOnboardingHasData({ truth: true })
       if (hd.transaction_count > 0) {
         setTxnGateBlocked(false)
-        /**
-         * Advance when there is nothing left to wait on from **mail**:
-         * - No configured mail sources → upload was the only path.
-         * - Or every mail source finished → same gate as auto-advance after SSE.
-         * Then require zero classification unknowns so we do not skip the review pause.
-         */
-        const mailPipelineQuiet =
-          backfillSourcesLen === 0 || allMailSourcesFinished
-        if (!mailPipelineQuiet) return
-        try {
-          const unknownSnap = await fetchOnboardingUnknowns({ limit: 1, offset: 0 })
-          if (unknownSnap.pending_total === 0) {
-            setUserPanel("gaps")
-            await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
-          }
-        } catch {
-          /* non-fatal — user can use Continue to review */
-        }
       }
     } catch {
       /* non-fatal — user can retry */
     }
-  }, [queryClient, allMailSourcesFinished, backfillSourcesLen])
+  }, [queryClient])
 
   /** Matches server ``effective_onboarding_unknown_threshold`` (pause ~20). */
   const unknownPauseThreshold = classifierStatusQ.data?.unknown_threshold ?? 20

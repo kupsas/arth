@@ -13,10 +13,12 @@
  * 3. **Confirm** sends ``POST /api/onboarding/classify`` (no ``source`` when mixed), then for each
  *    affected ``source_key`` opens ``GET /api/onboarding/backfill/{source}/stream?resume_after_classification=true``
  *    so mail import continues with live SSE progress (same resume semantics as the POST chunk API).
- * 4. While the mail importer is **paused for classification** (``needs_classification``), or after **every
- *    email source** has finished (``complete`` on the last source but rows still need labels), an optional
- *    **“rest of queue = Uber”** shortcut fetches *every* pending unknown (not only the visible page),
- *    sets counterparty **Uber** + **Transport & Fuel**, and saves in chunks (with a destructive confirm).
+ * 4. While the mail importer is **paused for classification** (``needs_classification``), after **every
+ *    email source** has finished (``complete`` on the last source but rows still need labels), or while
+ *    reviewing **statement upload** rows (``pipelineRunId``), an optional **“rest of queue = Uber”**
+ *    shortcut fetches *every* pending unknown (not only the visible page), sets counterparty **Uber** +
+ *    **Transport & Fuel**, and saves in chunks (with a destructive confirm). Statement runs use
+ *    ``POST /api/pipeline/runs/{id}/classify`` instead of the onboarding classify route.
  * 5. While the parent is **actively pulling mail** (``processing*`` statuses), a translucent overlay
  *    explains that the queue is temporarily read-only so saving labels does not fight the importer.
  *
@@ -194,6 +196,11 @@ export type ClassificationBatchReviewProps = {
    * classification is confirmed and the resume stream hasn't connected yet.
    */
   lastKnownProgress?: Record<string, unknown> | null;
+  /**
+   * Called whenever this queue's ``pending_total`` changes (initial fetch, after saves, bulk Uber).
+   * Use to sync external UI (e.g. the statement upload summary) with the live review backlog.
+   */
+  onPendingTotalChange?: (pendingTotal: number) => void;
 };
 
 export function ClassificationBatchReview({
@@ -210,6 +217,7 @@ export function ClassificationBatchReview({
   hideClassificationRowsForImportLimbo = false,
   pauseThresholdForShortcuts,
   lastKnownProgress = null,
+  onPendingTotalChange,
 }: ClassificationBatchReviewProps) {
   const scopedSource = source?.trim() || undefined;
   const reviewRunId = pipelineRunId != null && pipelineRunId > 0 ? pipelineRunId : null;
@@ -248,6 +256,13 @@ export function ClassificationBatchReview({
   /** Zero when the queue is empty so we can hide pagination chrome entirely. */
   const totalPages =
     pendingTotal > 0 ? Math.max(1, Math.ceil(pendingTotal / PAGE_SIZE)) : 0;
+
+  const onPendingTotalChangeRef = React.useRef(onPendingTotalChange);
+  onPendingTotalChangeRef.current = onPendingTotalChange;
+  React.useEffect(() => {
+    if (busy || loading) return;
+    onPendingTotalChangeRef.current?.(pendingTotal);
+  }, [pendingTotal, busy, loading]);
 
   /** Anchor for scrolling back to the list top whenever ``page`` changes (see effect below). */
   const listTopRef = React.useRef<HTMLDivElement>(null);
@@ -557,15 +572,19 @@ export function ClassificationBatchReview({
   }
 
   /**
-   * Uber bulk row: show when import is paused for classification, all sources are done, **or** the
-   * visible queue already has at least the pause-threshold number of rows (multi-source / SSE
-   * “in between” case — same destructive confirm as end-of-import).
+   * Uber bulk row: same destructive confirm for **email** queues (pause / all sources done / big
+   * backlog) and for **statement run** queues (``pipelineRunId``) whenever rows remain — import
+   * path already uses ``postPipelineRunClassify`` in that mode.
    */
   const pauseBar = pauseThresholdForShortcuts ?? threshold ?? 20;
   const showUberQueueBulkShortcut =
-    !statementRunMode &&
     pendingTotal > 0 &&
-    (importAwaitingClassification || allMailSourcesImported || pendingTotal >= pauseBar);
+    !mailImportActivelyProcessing &&
+    !hideClassificationRowsForImportLimbo &&
+    (statementRunMode ||
+      importAwaitingClassification ||
+      allMailSourcesImported ||
+      pendingTotal >= pauseBar);
 
   const showPagination =
     !hideClassificationRowsForImportLimbo && pendingTotal > 0 && totalPages > 1;
@@ -577,13 +596,31 @@ export function ClassificationBatchReview({
           <DialogHeader>
             <DialogTitle>Mark entire list as Uber?</DialogTitle>
             <DialogDescription>
-              This is effectively <strong>irreversible in bulk</strong>: about{" "}
-              <strong>{pendingTotal.toLocaleString()}</strong> transaction
-              {pendingTotal === 1 ? "" : "s"} still in this list will be saved as counterparty{" "}
-              <strong>{UBER_QUEUE_COUNTERPARTY}</strong> and category <strong>{UBER_QUEUE_CATEGORY}</strong>
-              , including rows you have not opened. We also persist <strong>apply to future</strong> so
-              similar narrations learn a merchant rule keyed on <strong>UBER</strong>. Only continue if
-              you have already fixed non-Uber/Rapido rows and everything that is clearly not Uber.
+              {statementRunMode ? (
+                <>
+                  This applies only to <strong>{displayScope}</strong>. It is effectively{" "}
+                  <strong>irreversible in bulk</strong>: about{" "}
+                  <strong>{pendingTotal.toLocaleString()}</strong> transaction
+                  {pendingTotal === 1 ? "" : "s"} still in this list will be saved as counterparty{" "}
+                  <strong>{UBER_QUEUE_COUNTERPARTY}</strong> and category{" "}
+                  <strong>{UBER_QUEUE_CATEGORY}</strong>
+                  , including rows you have not opened. We also persist <strong>apply to future</strong>{" "}
+                  so similar narrations learn a merchant rule keyed on <strong>UBER</strong>. Only
+                  continue if you have already fixed non-Uber/Rapido rows and everything that is clearly
+                  not Uber.
+                </>
+              ) : (
+                <>
+                  This is effectively <strong>irreversible in bulk</strong>: about{" "}
+                  <strong>{pendingTotal.toLocaleString()}</strong> transaction
+                  {pendingTotal === 1 ? "" : "s"} still in this list will be saved as counterparty{" "}
+                  <strong>{UBER_QUEUE_COUNTERPARTY}</strong> and category{" "}
+                  <strong>{UBER_QUEUE_CATEGORY}</strong>
+                  , including rows you have not opened. We also persist <strong>apply to future</strong> so
+                  similar narrations learn a merchant rule keyed on <strong>UBER</strong>. Only continue if
+                  you have already fixed non-Uber/Rapido rows and everything that is clearly not Uber.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="-mx-4 -mb-4 flex flex-col-reverse gap-3 rounded-b-xl border-t border-border/50 bg-muted/25 px-6 pb-6 pt-5 sm:flex-row sm:justify-end sm:gap-4">

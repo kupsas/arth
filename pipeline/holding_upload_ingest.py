@@ -36,6 +36,9 @@ _VALID_HOLDING_UPLOAD_TYPES = frozenset(
     }
 )
 
+# Public alias for API routing (unified upload + /upload/holdings).
+VALID_PORTFOLIO_UPLOAD_SOURCE_TYPES = _VALID_HOLDING_UPLOAD_TYPES
+
 
 def ingest_portfolio_file(
     *,

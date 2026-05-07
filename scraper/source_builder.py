@@ -16,13 +16,248 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from api.models import ScraperAccountMapping, ScraperBankSender, UserPipelineSource
+from api.models import ScraperAccountMapping, ScraperBankSender, Transaction, UserPipelineSource
 from api.services.family_member_utils import self_member_id
 from scraper.config import BANK_SENDERS
 from scraper.email_router import _normalise_sender
 from scraper.gmail_client import GmailClient
 
 logger = logging.getLogger(__name__)
+
+
+def sync_user_pipeline_sources_from_scraper_mappings(session: Session, user_id: str) -> int:
+    """Create missing ``UserPipelineSource`` rows from Gmail ``ScraperAccountMapping``.
+
+    **Why this exists:** Onboarding ``persist-sources`` only upserted scraper tables, while
+    ``POST /pipeline/upload`` and the CLI resolve the destination account via
+    :func:`pipeline.config.get_source_configs`, which reads **only** ``UserPipelineSource``.
+    Users could already have HDFC/ICICI transactions from email ingest yet still see
+    ``outcome=no_source`` on manual uploads — this bridges that gap.
+
+    **Safety:** Inserts are skipped when a ``(user_id, source_key)`` row already exists; we
+    never overwrite ``account_id`` or ``statement_folder`` you set by hand or via migrate.
+
+    Returns:
+        Count of new ``UserPipelineSource`` rows staged on *session* (caller commits).
+    """
+    from parsers.uploads import PARSER_REGISTRY
+
+    uid = (user_id or "").strip()
+    if not uid:
+        return 0
+
+    rows = session.exec(
+        select(ScraperAccountMapping).where(ScraperAccountMapping.user_id == uid)
+    ).all()
+    account_ids_by_sk: dict[str, set[str]] = {}
+    for row in rows:
+        sk = (row.source_key or "").strip()
+        if not sk or sk not in PARSER_REGISTRY:
+            continue
+        aid = (row.account_id or "").strip()
+        if not aid:
+            continue
+        account_ids_by_sk.setdefault(sk, set()).add(aid)
+
+    added = 0
+    for sk in sorted(account_ids_by_sk.keys()):
+        existing = session.exec(
+            select(UserPipelineSource).where(
+                UserPipelineSource.user_id == uid,
+                UserPipelineSource.source_key == sk,
+            )
+        ).first()
+        if existing is not None:
+            continue
+        ids = account_ids_by_sk[sk]
+        if len(ids) > 1:
+            picked = sorted(ids)[0]
+            logger.warning(
+                "sync-user-pipeline-sources: user_id=%r source_key=%r has multiple account_id "
+                "values %s — using %r for uploads (registry has a single key per format)",
+                uid,
+                sk,
+                sorted(ids),
+                picked,
+            )
+        else:
+            picked = next(iter(ids))
+        session.add(
+            UserPipelineSource(
+                user_id=uid,
+                source_key=sk,
+                account_id=picked,
+                currency="INR",
+                statement_folder=None,
+            )
+        )
+        added += 1
+    return added
+
+
+def sync_user_pipeline_sources_from_transactions(session: Session, user_id: str) -> int:
+    """Create missing ``UserPipelineSource`` rows from existing ``Transaction`` account_ids.
+
+    Covers users who already have email-parsed (or migrated) rows but never got
+    ``ScraperAccountMapping`` / ``UserPipelineSource`` from Gmail persist-sources — they
+    would otherwise hit ``outcome=no_source`` on manual statement upload.
+
+    **HDFC savings:** Uses ``hdfc_savings`` for the first distinct ``HDFC_SAL_*`` account when
+    that slot is free; additional accounts use ``hdfc_savings_<last4>`` (registry extended via
+    :func:`parsers.uploads.register_dynamic_hdfc_savings_key`).
+
+    **HDFC credit card:** ``hdfc_cc_<last4>`` when that key can be registered.
+
+    **ICICI savings:** ``icici_savings`` for the first ``ICICI_SAV_*``; further accounts use
+    ``icici_savings_<last4>``.
+
+    Returns:
+        Count of new ``UserPipelineSource`` rows staged (caller commits).
+    """
+    from parsers.uploads import (
+        PARSER_REGISTRY,
+        register_dynamic_hdfc_cc_key,
+        register_dynamic_hdfc_savings_key,
+        register_dynamic_icici_savings_key,
+    )
+
+    uid = (user_id or "").strip()
+    if not uid:
+        return 0
+
+    # Use execute().scalars() so each row is the column value (str). session.exec().all()
+    # returns Row/tuple-shaped rows that confuse mypy when mixed with scalar unpacking.
+    account_ids_raw = session.execute(
+        select(Transaction.account_id).where(Transaction.user_id == uid)
+    ).scalars().all()
+    account_ids_set: set[str] = set()
+    for aid in account_ids_raw:
+        s = (aid or "").strip()
+        if s:
+            account_ids_set.add(s)
+    account_ids = sorted(account_ids_set)
+
+    added = 0
+    for aid in account_ids:
+        if session.exec(
+            select(UserPipelineSource).where(
+                UserPipelineSource.user_id == uid,
+                UserPipelineSource.account_id == aid,
+            )
+        ).first():
+            continue
+
+        m_hdfc_sal = re.match(r"^HDFC_SAL_(\d{4})$", aid)
+        m_hdfc_cc = re.match(r"^HDFC_CC_(\d{4})$", aid)
+        m_icici = re.match(r"^ICICI_SAV_(\d{4})$", aid)
+
+        if m_hdfc_sal:
+            last4 = m_hdfc_sal.group(1)
+            base_taken = session.exec(
+                select(UserPipelineSource).where(
+                    UserPipelineSource.user_id == uid,
+                    UserPipelineSource.source_key == "hdfc_savings",
+                )
+            ).first()
+            if base_taken is None:
+                sk = "hdfc_savings"
+            else:
+                sk = register_dynamic_hdfc_savings_key(last4)
+            if sk not in PARSER_REGISTRY:
+                continue
+            if session.exec(
+                select(UserPipelineSource).where(
+                    UserPipelineSource.user_id == uid,
+                    UserPipelineSource.source_key == sk,
+                )
+            ).first():
+                continue
+            session.add(
+                UserPipelineSource(
+                    user_id=uid,
+                    source_key=sk,
+                    account_id=aid,
+                    currency="INR",
+                    statement_folder=None,
+                )
+            )
+            added += 1
+            logger.info(
+                "sync-user-pipeline-sources-from-txns: user_id=%r added %r → %r",
+                uid,
+                sk,
+                aid,
+            )
+            continue
+
+        if m_hdfc_cc:
+            last4 = m_hdfc_cc.group(1)
+            sk = register_dynamic_hdfc_cc_key(last4)
+            if session.exec(
+                select(UserPipelineSource).where(
+                    UserPipelineSource.user_id == uid,
+                    UserPipelineSource.source_key == sk,
+                )
+            ).first():
+                continue
+            session.add(
+                UserPipelineSource(
+                    user_id=uid,
+                    source_key=sk,
+                    account_id=aid,
+                    currency="INR",
+                    statement_folder=None,
+                )
+            )
+            added += 1
+            logger.info(
+                "sync-user-pipeline-sources-from-txns: user_id=%r added %r → %r",
+                uid,
+                sk,
+                aid,
+            )
+            continue
+
+        if m_icici:
+            last4 = m_icici.group(1)
+            base_taken = session.exec(
+                select(UserPipelineSource).where(
+                    UserPipelineSource.user_id == uid,
+                    UserPipelineSource.source_key == "icici_savings",
+                )
+            ).first()
+            if base_taken is None:
+                sk = "icici_savings"
+            else:
+                sk = register_dynamic_icici_savings_key(last4)
+            if sk not in PARSER_REGISTRY:
+                continue
+            if session.exec(
+                select(UserPipelineSource).where(
+                    UserPipelineSource.user_id == uid,
+                    UserPipelineSource.source_key == sk,
+                )
+            ).first():
+                continue
+            session.add(
+                UserPipelineSource(
+                    user_id=uid,
+                    source_key=sk,
+                    account_id=aid,
+                    currency="INR",
+                    statement_folder=None,
+                )
+            )
+            added += 1
+            logger.info(
+                "sync-user-pipeline-sources-from-txns: user_id=%r added %r → %r",
+                uid,
+                sk,
+                aid,
+            )
+
+    return added
+
 
 # Masked card/account endings in bank mail — several shapes seen in production templates.
 # See ``hdfc_bank.py`` / ``icici_bank.py`` parsers: not everything uses ``**1234``.
@@ -598,8 +833,18 @@ def persist_scraper_sources_from_discovery(
         session.commit()
         processed += 1
 
+    pipeline_sources_synced = sync_user_pipeline_sources_from_scraper_mappings(session, uid)
+    if pipeline_sources_synced:
+        session.commit()
+
+    txn_pipeline_synced = sync_user_pipeline_sources_from_transactions(session, uid)
+    if txn_pipeline_synced:
+        session.commit()
+
     return {
         "senders_processed": processed,
         "senders_skipped": skipped,
         "accounts_inferred": inferred_digits,
+        "pipeline_sources_synced": pipeline_sources_synced,
+        "txn_pipeline_sources_synced": txn_pipeline_synced,
     }

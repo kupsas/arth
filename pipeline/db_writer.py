@@ -288,6 +288,7 @@ def write_to_db(
     session: Session,
     source_type: str = "statement",
     gmail_message_id: str | None = None,
+    existing_run: PipelineRun | None = None,
 ) -> PipelineRun:
     """Insert new transactions and backfill NULLs on existing ones.
 
@@ -304,6 +305,11 @@ def write_to_db(
         gmail_message_id:  The Gmail message ID that produced these transactions.
                            Only meaningful when source_type="email"; stored on each row
                            so we can trace a transaction back to its source email.
+        existing_run:      A pre-created PipelineRun row to adopt instead of creating a
+                           new one.  Used by API route handlers that need to return a run
+                           ID to the caller before the background work begins.  When
+                           provided, this row is updated in place rather than a new row
+                           being inserted.
 
     Returns:
         The PipelineRun row with final counts and status.
@@ -324,14 +330,22 @@ def write_to_db(
         account_id`` only — **not** ``ref_number`` — so PDF vs alert dedup relies on
         these paths, not Path A.  ``processed_emails`` is unchanged.
     """
-    # Create the audit-trail row first so we can link transactions to it.
-    run = PipelineRun(
-        source_key=source_key,
-        llm_model=llm_model,
-        status="running",
-    )
-    session.add(run)
-    session.flush()  # assigns run.id without committing
+    # Adopt a pre-created run row, or create a fresh audit-trail row.
+    if existing_run is not None:
+        run = existing_run
+        run.source_key = source_key
+        run.llm_model = llm_model
+        run.status = "running"
+        session.add(run)
+        session.flush()
+    else:
+        run = PipelineRun(
+            source_key=source_key,
+            llm_model=llm_model,
+            status="running",
+        )
+        session.add(run)
+        session.flush()  # assigns run.id without committing
     assert run.id is not None  # flush guarantees this; tells mypy the id is set
 
     new_count = 0

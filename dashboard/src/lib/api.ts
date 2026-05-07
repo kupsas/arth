@@ -748,6 +748,10 @@ export interface UploadStatementOptions {
   sourceType?: string;
   /** Password for encrypted PDFs (required on retry after needs_password) */
   pdfPassword?: string;
+  /** After account_mismatch / confirm_account: create a new linked source */
+  mismatchAction?: "new_account";
+  /** Four digits for mismatch_action=new_account */
+  newAccountLast4?: string;
 }
 
 /**
@@ -766,6 +770,8 @@ export async function uploadStatement(
   if (opts?.sourceKey) params.source_key = opts.sourceKey;
   if (opts?.sourceType) params.source_type = opts.sourceType;
   if (opts?.pdfPassword) params.pdf_password = opts.pdfPassword;
+  if (opts?.mismatchAction) params.mismatch_action = opts.mismatchAction;
+  if (opts?.newAccountLast4) params.new_account_last4 = opts.newAccountLast4;
 
   const url = buildApiUrl("/api/pipeline/upload", Object.keys(params).length ? params : undefined);
 

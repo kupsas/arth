@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, cast
 
 # Human-readable labels for upload UI (transaction + holding logical types).
 # Transaction rows: keep ``dashboard/src/lib/statement-upload-type-labels.ts`` in sync when you add keys here.
@@ -38,6 +38,34 @@ class DetectionResult:
     confidence: float  # 0.0–1.0
     account_hint: str | None  # last4, account tail, etc.
     label: str
+
+
+@dataclass(frozen=True)
+class ResolveAccountMismatch:
+    """Statement last-4 does not match any configured account for this format."""
+
+    candidate_keys: tuple[str, ...]
+    detected_hint: str
+    hints_on_file: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ResolveConfirmAccount:
+    """We could not read last-4 from the file (or multi-account disambiguation) — ask the user."""
+
+    candidate_keys: tuple[str, ...]
+    hints_on_file: dict[str, str]
+
+
+def last4_from_user_pipeline_account_id(account_id: str) -> str | None:
+    """Parse trailing four digits from canonical ``account_id`` strings used in Arth."""
+    aid = (account_id or "").strip()
+    for prefix in ("HDFC_SAL_", "HDFC_CC_", "ICICI_SAV_"):
+        if aid.startswith(prefix):
+            tail = aid[len(prefix) :]
+            if len(tail) == 4 and tail.isdigit():
+                return tail
+    return None
 
 
 def _label_for(source_type: str) -> str:
@@ -138,7 +166,36 @@ def resolve_transaction_source_key(
     user_source_keys: list[str],
     parser_registry: dict[str, type[Any]],
 ) -> str | list[str] | None:
-    """Pick a single source_key, return candidates if ambiguous, None if no configured source."""
+    """Legacy resolver — skips account validation (same as ``skip_account_validation=True``)."""
+    out = resolve_upload_statement_destination(
+        source_type=source_type,
+        account_hint=account_hint,
+        user_source_keys=user_source_keys,
+        user_source_configs={},
+        parser_registry=parser_registry,
+        skip_account_validation=True,
+    )
+    return cast(str | list[str] | None, out)
+
+
+def resolve_upload_statement_destination(
+    *,
+    source_type: str,
+    account_hint: str | None,
+    user_source_keys: list[str],
+    user_source_configs: Mapping[str, Mapping[str, Any]],
+    parser_registry: dict[str, type[Any]],
+    skip_account_validation: bool = False,
+) -> str | list[str] | ResolveAccountMismatch | ResolveConfirmAccount | None:
+    """Pick ``source_key`` for an upload, with optional last-4 validation / confirmation steps.
+
+    Returns:
+        - ``str`` — unambiguous single key (validated or user skipped validation).
+        - ``list[str]`` — show account picker (multiple keys, no way to auto-pick).
+        - :class:`ResolveAccountMismatch` — file hint disagrees with on-file account(s).
+        - :class:`ResolveConfirmAccount` — file did not yield a hint; user must confirm target.
+        - ``None`` — no configured source for this detected format.
+    """
     cands = matching_user_source_keys(
         source_type=source_type,
         user_source_keys=user_source_keys,
@@ -147,16 +204,66 @@ def resolve_transaction_source_key(
     if not cands:
         return None
 
-    if source_type == "hdfc_cc" and account_hint:
-        hint = account_hint.strip()
-        filtered = [sk for sk in cands if hint in sk]
-        if len(filtered) == 1:
-            return filtered[0]
-        if len(filtered) > 1:
-            return filtered
+    hints_on_file: dict[str, str] = {}
+    for sk in cands:
+        cfg = user_source_configs.get(sk) or {}
+        aid = str(cfg.get("account_id") or "")
+        l4 = last4_from_user_pipeline_account_id(aid)
+        if l4:
+            hints_on_file[sk] = l4
+
+    if skip_account_validation:
+        if source_type == "hdfc_cc" and account_hint:
+            hint = account_hint.strip()
+            filtered = [sk for sk in cands if hint in sk]
+            if len(filtered) == 1:
+                return filtered[0]
+            if len(filtered) > 1:
+                return filtered
+        if len(cands) == 1:
+            return cands[0]
+        return cands
+
+    ah = (account_hint or "").strip() or None
+
+    if ah:
+        matching = [sk for sk in cands if hints_on_file.get(sk) == ah]
+        if len(matching) == 1:
+            return matching[0]
+        if len(matching) > 1:
+            return matching
+        if hints_on_file:
+            return ResolveAccountMismatch(
+                candidate_keys=tuple(cands),
+                detected_hint=ah,
+                hints_on_file={sk: hints_on_file[sk] for sk in cands if sk in hints_on_file},
+            )
+        if source_type == "hdfc_cc":
+            hint = ah
+            filtered = [sk for sk in cands if hint in sk]
+            if len(filtered) == 1:
+                return filtered[0]
+            if len(filtered) > 1:
+                return filtered
+        if len(cands) == 1:
+            return cands[0]
+        return cands
 
     if len(cands) == 1:
-        return cands[0]
+        sk0 = cands[0]
+        if hints_on_file.get(sk0):
+            return ResolveConfirmAccount(
+                candidate_keys=(sk0,),
+                hints_on_file={sk0: hints_on_file[sk0]},
+            )
+        return sk0
+
+    known_all = all(sk in hints_on_file for sk in cands)
+    if known_all and hints_on_file:
+        return ResolveConfirmAccount(
+            candidate_keys=tuple(cands),
+            hints_on_file={sk: hints_on_file[sk] for sk in cands},
+        )
     return cands
 
 
@@ -165,17 +272,27 @@ def account_option_label(source_key: str) -> str:
     if "hdfc_cc_" in source_key:
         tail = source_key.replace("hdfc_cc_", "")
         return f"HDFC Credit Card (…{tail})"
+    if source_key.startswith("hdfc_savings_"):
+        tail = source_key.removeprefix("hdfc_savings_")
+        return f"HDFC Savings (…{tail})"
+    if source_key.startswith("icici_savings_"):
+        tail = source_key.removeprefix("icici_savings_")
+        return f"ICICI Savings (…{tail})"
     return source_key.replace("_", " ").title()
 
 
 __all__ = [
     "DetectionResult",
     "PARSER_LABELS",
+    "ResolveAccountMismatch",
+    "ResolveConfirmAccount",
     "_label_for",
     "detect_transaction_file",
     "detect_holding_file",
+    "last4_from_user_pipeline_account_id",
     "parser_class_for_transaction_source_type",
     "matching_user_source_keys",
     "resolve_transaction_source_key",
+    "resolve_upload_statement_destination",
     "account_option_label",
 ]

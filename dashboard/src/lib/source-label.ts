@@ -27,6 +27,12 @@ export function humanizeSourceKey(sourceKey: string | null | undefined): string 
   if (!sourceKey?.trim()) return "this account";
   const key = sourceKey.trim().toLowerCase();
   if (KNOWN_SOURCE_LABELS[key]) return KNOWN_SOURCE_LABELS[key];
+  let m = /^hdfc_savings_(\d{4})$/.exec(key);
+  if (m) return `HDFC savings (…${m[1]})`;
+  m = /^icici_savings_(\d{4})$/.exec(key);
+  if (m) return `ICICI savings (…${m[1]})`;
+  m = /^hdfc_cc_(\d{4})$/.exec(key);
+  if (m) return `HDFC credit card (…${m[1]})`;
   return sourceKey
     .split("_")
     .filter(Boolean)

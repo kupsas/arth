@@ -1,6 +1,7 @@
 /**
- * Labels for **bank transaction** uploads (subset of ``pipeline/detection.PARSER_LABELS``).
- * When you add a new upload parser, extend both that dict and this list.
+ * Labels for **unified statement upload** (`POST /api/pipeline/upload`): bank formats plus
+ * portfolio statements routed after transaction detectors miss. Keep in sync with
+ * ``pipeline/detection.py`` ``PARSER_LABELS`` keys surfaced to users.
  */
 export const TRANSACTION_UPLOAD_TYPE_LABELS: readonly string[] = [
   "HDFC Savings Account Statement (.txt export)",
@@ -8,4 +9,8 @@ export const TRANSACTION_UPLOAD_TYPE_LABELS: readonly string[] = [
   "HDFC Credit Card Statement (.csv export)",
   "HDFC Credit Card Statement (PDF)",
   "ICICI Bank Savings Account Statement (PDF)",
+  "ICICI Direct Equity Transaction Statement (PDF)",
+  "ICICI Direct Mutual Fund Statement (PDF)",
+  "NSE Contract Note / Trade Confirmation (PDF)",
+  "ICICI PPF Account Statement (PDF)",
 ]

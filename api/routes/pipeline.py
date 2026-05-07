@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
-from api.database import get_engine, get_session
+from api.database import SQLiteSerializingSession, get_engine, get_session
 from api.models import PipelineRun
 
 logger = logging.getLogger(__name__)
@@ -218,7 +218,7 @@ async def stream_pipeline_run_progress(
     from pipeline import config
 
     engine = get_engine()
-    with Session(engine) as session:
+    with SQLiteSerializingSession(engine) as session:
         run = session.get(PipelineRun, run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Couldn't find that import run.")
@@ -232,7 +232,7 @@ async def stream_pipeline_run_progress(
         while True:
             snap = _upload_progress_snapshot(run_id)
             if snap is None:
-                with Session(engine) as s2:
+                with SQLiteSerializingSession(engine) as s2:
                     run2 = s2.get(PipelineRun, run_id)
                     if run2 and run2.status in ("completed", "failed"):
                         payload: dict[str, Any] = {
@@ -528,10 +528,7 @@ def _run_pipeline_background(
     from pipeline.parsers import PARSER_REGISTRY
     from pipeline.rules_classifier import classify_rules
     from pipeline.transformer import transform
-    from pipeline.db_writer import compute_content_hash
-
-    from api.models import Transaction
-    from api.services.account_user_map import user_id_for_account
+    from pipeline.db_writer import write_to_db
     from api.services.user_classification import pipeline_config_for_account_owner
 
     if llm_model:
@@ -540,7 +537,7 @@ def _run_pipeline_background(
     engine = get_engine()
 
     for run_id, source_key in zip(run_ids, source_keys):
-        with Session(engine) as session:
+        with SQLiteSerializingSession(engine) as session:
             run = session.get(PipelineRun, run_id)
             if not run:
                 continue
@@ -564,71 +561,19 @@ def _run_pipeline_background(
                 classify_rules(canonical, ucfg)
                 classify_llm(canonical)
 
-                # Stage 5: Write to DB with dedup
-                new_count = 0
-                date_min = None
-                date_max = None
-
-                for txn in canonical:
-                    content_hash = compute_content_hash(txn)
-                    row_uid = user_id_for_account(txn.account_id)
-                    existing = session.exec(
-                        select(Transaction).where(
-                            Transaction.content_hash == content_hash,
-                            Transaction.account_id == txn.account_id,
-                            Transaction.user_id == row_uid,
-                        )
-                    ).first()
-                    if existing is not None:
-                        continue
-
-                    db_txn = Transaction(
-                        content_hash=content_hash,
-                        txn_date=txn.txn_date,
-                        account_id=txn.account_id,
-                        user_id=row_uid,
-                        source_statement=txn.source_statement,
-                        direction=txn.direction.value,
-                        amount=float(txn.amount),
-                        currency=txn.currency,
-                        txn_type=txn.txn_type.value if txn.txn_type else None,
-                        channel=txn.channel.value if txn.channel else None,
-                        upi_type=txn.upi_type.value if txn.upi_type else None,
-                        counterparty=txn.counterparty,
-                        counterparty_category=(
-                            txn.counterparty_category.value if txn.counterparty_category else None
-                        ),
-                        spend_category=(
-                            txn.spend_category.value if txn.spend_category else None
-                        ),
-                        classification_source=(
-                            txn.classification_source.value
-                            if txn.classification_source
-                            else None
-                        ),
-                        raw_description=txn.raw_description,
-                        ref_number=txn.ref_number,
-                        closing_balance=float(txn.closing_balance) if txn.closing_balance else None,
-                        value_date=txn.value_date,
-                        notes=txn.notes,
-                        is_reviewed=True,
-                        pipeline_run_id=run.id,
-                    )
-                    session.add(db_txn)
-                    new_count += 1
-
-                    if date_min is None or txn.txn_date < date_min:
-                        date_min = txn.txn_date
-                    if date_max is None or txn.txn_date > date_max:
-                        date_max = txn.txn_date
-
-                run.txn_count = len(canonical)
-                run.new_count = new_count
-                run.txn_date_min = date_min
-                run.txn_date_max = date_max
-                run.status = "completed"
-                run.completed_at = datetime.datetime.now(datetime.UTC)
-                session.commit()
+                # Stage 5: write_to_db is the single canonical write path.
+                # It handles hash dedup, email↔statement reconciliation, NULL backfill,
+                # PipelineRun finalisation, and cache invalidation in one place.
+                # We pass the pre-created run row so the ID returned to the API caller
+                # stays valid for polling.
+                write_to_db(
+                    canonical,
+                    source_key=source_key,
+                    llm_model=config.LLM_MODEL,
+                    session=session,
+                    source_type="statement",
+                    existing_run=run,
+                )
 
             except Exception:
                 # Full traceback also stored on the run row for UI polling; logger captures it for arth.log.
@@ -686,6 +631,9 @@ class UploadStatementResponse(BaseModel):
         "no_match",
         "no_source",
         "needs_password",
+        "account_mismatch",
+        "confirm_account",
+        "holdings_success",
     ]
     message: str
     run_id: int | None = None
@@ -694,9 +642,126 @@ class UploadStatementResponse(BaseModel):
     password_invalid: bool = False
     type_options: list[UploadOption] | None = None
     account_options: list[UploadOption] | None = None
+    # Account validation / confirmation (outcomes account_mismatch | confirm_account)
+    detected_hint: str | None = None
+    existing_hints: dict[str, str] | None = None
+    pending_source_type: str | None = None
+    needs_last4_input: bool = False
+    # Portfolio ingest via unified upload (same shape as HoldingUploadResponse.import_stats)
+    import_stats: dict[str, Any] | None = None
 
 
 _DETECT_CONF = 0.72
+
+
+def _portfolio_upload_response_from_unified_upload(
+    *,
+    active_file: Path,
+    source_type: str,
+    label: str,
+    user_id: str,
+    session: Session,
+) -> UploadStatementResponse:
+    """Run portfolio ingest synchronously for unified ``POST /upload``."""
+    from pipeline.holding_upload_ingest import ingest_portfolio_file
+
+    try:
+        stats = ingest_portfolio_file(
+            path=active_file,
+            source_type=source_type,
+            user_id=user_id,
+            session=session,
+        )
+        session.commit()
+        return UploadStatementResponse(
+            outcome="holdings_success",
+            message=f"Portfolio imported as {label}.",
+            import_stats=stats,
+        )
+    except ValueError as ve:
+        session.rollback()
+        return UploadStatementResponse(
+            outcome="no_match",
+            message=str(ve),
+            contact_prompt=True,
+        )
+
+
+def _ensure_new_upload_pipeline_source(session: Session, user_id: str, source_type: str, last4: str) -> str:
+    """Create ``UserPipelineSource`` + registry entry for a user-confirmed new account (last four digits).
+
+    Uses the base ``hdfc_savings`` / ``icici_savings`` key when that slot is still free so the
+    first account matches historical Gmail sync behaviour; additional accounts use suffixed keys.
+    """
+    from sqlmodel import select
+
+    from api.models import UserPipelineSource
+    from parsers.uploads import (
+        register_dynamic_hdfc_cc_key,
+        register_dynamic_hdfc_savings_key,
+        register_dynamic_icici_savings_key,
+    )
+
+    st = (source_type or "").strip().lower()
+    uid = (user_id or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="Missing user context.")
+
+    if st == "hdfc_savings":
+        aid = f"HDFC_SAL_{last4}"
+        base = session.exec(
+            select(UserPipelineSource).where(
+                UserPipelineSource.user_id == uid,
+                UserPipelineSource.source_key == "hdfc_savings",
+            )
+        ).first()
+        sk = "hdfc_savings" if base is None else register_dynamic_hdfc_savings_key(last4)
+    elif st == "hdfc_cc":
+        aid = f"HDFC_CC_{last4}"
+        sk = register_dynamic_hdfc_cc_key(last4)
+    elif st == "icici_savings":
+        aid = f"ICICI_SAV_{last4}"
+        base = session.exec(
+            select(UserPipelineSource).where(
+                UserPipelineSource.user_id == uid,
+                UserPipelineSource.source_key == "icici_savings",
+            )
+        ).first()
+        sk = "icici_savings" if base is None else register_dynamic_icici_savings_key(last4)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"We can't add a new account link for this statement type ({source_type!r}) from here yet.",
+        )
+
+    row_by_acct = session.exec(
+        select(UserPipelineSource).where(
+            UserPipelineSource.user_id == uid,
+            UserPipelineSource.account_id == aid,
+        )
+    ).first()
+    if row_by_acct is not None:
+        return str(row_by_acct.source_key)
+
+    row_by_sk = session.exec(
+        select(UserPipelineSource).where(
+            UserPipelineSource.user_id == uid,
+            UserPipelineSource.source_key == sk,
+        )
+    ).first()
+    if row_by_sk is not None:
+        return str(row_by_sk.source_key)
+
+    session.add(
+        UserPipelineSource(
+            user_id=uid,
+            source_key=sk,
+            account_id=aid,
+            currency="INR",
+            statement_folder=None,
+        )
+    )
+    return sk
 
 
 def _dedupe_detection_by_type(results: list[Any]) -> list[Any]:
@@ -722,22 +787,36 @@ async def upload_statement(
         None,
         description="When the PDF is password-protected: user password (after onboarding/env candidates fail)",
     ),
+    mismatch_action: str | None = Query(
+        None,
+        description="After account_mismatch or confirm_account: 'new_account' (with new_account_last4) or use explicit source_key for 'same'",
+    ),
+    new_account_last4: str | None = Query(
+        None,
+        description="Four digits for a new savings/CC account when mismatch_action=new_account",
+    ),
     *,
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> UploadStatementResponse:
-    """Upload a bank statement; sniff file **content** to pick the parser + account.
+    """Upload a bank or portfolio statement; sniff file **content** to pick ingest path.
 
     Flow:
-      1. No ``source_key`` → run detectors → ``success`` | ``type_picker`` |
+      1. No ``source_key`` → transaction detectors → ``success`` | ``type_picker`` |
          ``account_picker`` | ``no_match`` | ``no_source``.
-      2. User disambiguates → re-upload with ``source_type``, then ``source_key`` if needed.
+      2. When transaction detectors find nothing, portfolio detectors run → ``holdings_success`` |
+         ``type_picker`` (portfolio types) | ``no_match``.
+      3. ``source_type`` that is a portfolio format → ``ingest_portfolio_file`` → ``holdings_success``.
+      4. User disambiguates → re-upload with ``source_type``, then ``source_key`` if needed (bank).
     """
     from pipeline import config
     from pipeline.detection import (
+        ResolveAccountMismatch,
+        ResolveConfirmAccount,
         account_option_label,
+        detect_holding_file,
         detect_transaction_file,
-        resolve_transaction_source_key,
+        resolve_upload_statement_destination,
     )
     from pipeline.parsers import PARSER_REGISTRY
 
@@ -747,8 +826,18 @@ async def upload_statement(
         WrongPdfPassword,
         prepare_upload_pdf_path,
     )
+    from scraper.source_builder import (
+        sync_user_pipeline_sources_from_scraper_mappings,
+        sync_user_pipeline_sources_from_transactions,
+    )
 
     filename = file.filename or "upload.txt"
+    # Gmail onboarding only created ``ScraperAccountMapping`` rows; uploads resolve
+    # accounts via ``UserPipelineSource``. Bridge any gap before we read valid keys.
+    n_map = sync_user_pipeline_sources_from_scraper_mappings(session, current_user)
+    n_txn = sync_user_pipeline_sources_from_transactions(session, current_user)
+    if n_map or n_txn:
+        session.commit()
     user_sources = config.get_source_configs(current_user, session)
     valid_keys = sorted(user_sources.keys())
 
@@ -790,6 +879,51 @@ async def upload_statement(
                     password_invalid=True,
                 )
 
+        # ── User confirmed a brand-new account (re-upload after mismatch / confirm) ──
+        ma = (mismatch_action or "").strip().lower()
+        if ma == "new_account":
+            tail = (new_account_last4 or "").strip()
+            if len(tail) != 4 or not tail.isdigit():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Enter exactly four digits for the new account.",
+                )
+            st_req = (source_type or "").strip()
+            if not st_req:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Re-send the statement type (source_type) when you add a new account.",
+                )
+            sk_new = _ensure_new_upload_pipeline_source(session, current_user, st_req, tail)
+            session.commit()
+            user_sources = config.get_source_configs(current_user, session)
+            if sk_new not in user_sources:
+                raise HTTPException(
+                    status_code=500,
+                    detail="We couldn't save that account link. Try again in a moment?",
+                )
+            run = PipelineRun(source_key=sk_new, llm_model=llm_model, status="running")
+            session.add(run)
+            session.flush()
+            run_id = run.id
+            session.commit()
+            threading.Thread(
+                target=_run_upload_background,
+                args=(run_id, sk_new, active_file, llm_model, current_user),
+                daemon=True,
+            ).start()
+            tmp_kept = True
+            logger.info("Upload (new account): %s → %s (%s)", filename, active_file.name, sk_new)
+            return UploadStatementResponse(
+                outcome="success",
+                message=(
+                    f"Import started for your new account. "
+                    f"You can watch progress under Runs in the app (run #{run_id})."
+                ),
+                run_id=run_id,
+                source_key=sk_new,
+            )
+
         # ── Explicit source_key (user picked account or retry) ─────────────────
         if source_key:
             sk = source_key.strip()
@@ -823,6 +957,23 @@ async def upload_statement(
                 source_key=sk,
             )
 
+        # ── Explicit portfolio source_type (after unified type picker) ─────────
+        st_portfolio = (source_type or "").strip()
+        if st_portfolio:
+            from pipeline.holding_upload_ingest import VALID_PORTFOLIO_UPLOAD_SOURCE_TYPES
+
+            if st_portfolio in VALID_PORTFOLIO_UPLOAD_SOURCE_TYPES:
+                from pipeline.detection import PARSER_LABELS
+
+                plabel = PARSER_LABELS.get(st_portfolio, st_portfolio)
+                return _portfolio_upload_response_from_unified_upload(
+                    active_file=active_file,
+                    source_type=st_portfolio,
+                    label=plabel,
+                    user_id=current_user,
+                    session=session,
+                )
+
         raw_results = detect_transaction_file(active_file)
         strong = [r for r in raw_results if r.confidence >= _DETECT_CONF]
         if not strong and raw_results:
@@ -852,6 +1003,34 @@ async def upload_statement(
             )
 
         if len(deduped) == 0:
+            raw_h = detect_holding_file(active_file)
+            strong_h = [r for r in raw_h if r.confidence >= _DETECT_CONF]
+            if not strong_h and raw_h:
+                strong_h = [max(raw_h, key=lambda r: r.confidence)]
+            deduped_h = _dedupe_detection_by_type(strong_h)
+
+            if len(deduped_h) == 1:
+                chosen_h = deduped_h[0]
+                return _portfolio_upload_response_from_unified_upload(
+                    active_file=active_file,
+                    source_type=chosen_h.source_type,
+                    label=chosen_h.label,
+                    user_id=current_user,
+                    session=session,
+                )
+
+            if len(deduped_h) > 1:
+                return UploadStatementResponse(
+                    outcome="type_picker",
+                    message=(
+                        "We detected more than one possible format for this file. "
+                        "Which one is it?"
+                    ),
+                    type_options=[
+                        UploadOption(source_type=r.source_type, label=r.label) for r in deduped_h
+                    ],
+                )
+
             return UploadStatementResponse(
                 outcome="no_match",
                 message=(
@@ -862,11 +1041,13 @@ async def upload_statement(
             )
 
         chosen = deduped[0]
-        resolved = resolve_transaction_source_key(
+        resolved = resolve_upload_statement_destination(
             source_type=chosen.source_type,
             account_hint=chosen.account_hint,
             user_source_keys=valid_keys,
+            user_source_configs=user_sources,
             parser_registry=PARSER_REGISTRY,
+            skip_account_validation=False,
         )
 
         if resolved is None:
@@ -876,6 +1057,54 @@ async def upload_statement(
                     f"This looks like {chosen.label}, but that bank isn’t connected here yet. "
                     "Open Settings, add the account, then upload again."
                 ),
+            )
+
+        if isinstance(resolved, ResolveAccountMismatch):
+            hints = resolved.hints_on_file
+            on_file = " and ".join(sorted(hints.values())) or "your linked account"
+            same_account_opts = [
+                UploadOption(
+                    source_key=sk,
+                    label=f"No — same account, use the one ending {hints[sk]}",
+                )
+                for sk in resolved.candidate_keys
+                if sk in hints
+            ]
+            return UploadStatementResponse(
+                outcome="account_mismatch",
+                message=(
+                    f"We read account ending {resolved.detected_hint} on this file, but the "
+                    f"account we already have on file ends in {on_file}. "
+                    "Is this a new account, the same one, or should we cancel?"
+                ),
+                detected_hint=resolved.detected_hint,
+                existing_hints=dict(hints),
+                pending_source_type=chosen.source_type,
+                needs_last4_input=False,
+                account_options=same_account_opts or None,
+            )
+
+        if isinstance(resolved, ResolveConfirmAccount):
+            hints = resolved.hints_on_file
+            tails = sorted({v for v in hints.values()})
+            tail_txt = ", ".join(tails) if tails else "your linked account"
+            return UploadStatementResponse(
+                outcome="confirm_account",
+                message=(
+                    "We couldn't read the account number from this statement. "
+                    f"You already have an account ending in {tail_txt} on file. "
+                    "Continue with that account, tell us this is a new account, or cancel?"
+                ),
+                existing_hints=dict(hints),
+                pending_source_type=chosen.source_type,
+                needs_last4_input=True,
+                account_options=[
+                    UploadOption(source_key=sk, label=f"Continue with account ending …{hints[sk]}")
+                    for sk in resolved.candidate_keys
+                    if sk in hints
+                ]
+                if len(resolved.candidate_keys) > 1
+                else None,
             )
 
         if isinstance(resolved, list):
@@ -1064,13 +1293,16 @@ def _run_upload_background(
     Mirrors _run_pipeline_background() but uses the uploaded file path
     instead of the default source file from config.  Cleans up the temp
     file after processing (success or failure).
+
+    Uses :class:`~api.database.SQLiteSerializingSession` so DB commits line up with
+    the API's request-scoped sessions — plain :class:`sqlmodel.Session` bypasses the
+    process-wide writer lock and can cause ``database is locked`` under SQLite.
     """
     from pipeline import config
-    from pipeline.db_writer import compute_content_hash
+    from pipeline.db_writer import compute_content_hash, write_to_db
     from pipeline.llm_classifier import classify_llm
     from pipeline.models import CanonicalTransaction
     from pipeline.parsers import PARSER_REGISTRY
-    from pipeline.review_confidence import compute_review_confidence, should_auto_review_email
     from pipeline.rules_classifier import classify_rules
     from pipeline.transformer import transform
 
@@ -1095,7 +1327,7 @@ def _run_upload_background(
         },
     )
 
-    with Session(engine) as session:
+    with SQLiteSerializingSession(engine) as session:
         run = session.get(PipelineRun, run_id)
         if not run:
             input_file.unlink(missing_ok=True)
@@ -1129,13 +1361,10 @@ def _run_upload_background(
             ucfg = pipeline_config_for_account_owner(session, source_cfg["account_id"])
             classify_rules(canonical, ucfg)
 
-            # How many rows are new (not already in DB by content_hash)? Build the list we will
-            # classify and insert so we do not spend LLM calls on rows that will be skipped.
-            #
-            # NOTE (follow-up): This is exact ``content_hash`` dedupe per account/user only. The
-            # email import path can still reconcile near-duplicate rows via ``db_writer`` helpers
-            # (e.g. date ±1 day, same amount/direction). Unifying upload background work with
-            # ``write_to_db`` would close that gap for statement vs email double-counts.
+            # Pre-filter to only hash-new rows before LLM classification.
+            # This avoids spending LLM calls on rows that are exact content-hash
+            # duplicates already in the DB.  write_to_db will still see all rows
+            # and use its own Path A (hash) + Path B (email reconciliation) logic.
             unique_new = 0
             new_canonical: list[CanonicalTransaction] = []
             for txn in canonical:
@@ -1190,75 +1419,21 @@ def _run_upload_background(
                     },
                 )
 
-            new_count = 0
-            date_min = None
-            date_max = None
-
-            for txn in new_canonical:
-                content_hash = compute_content_hash(txn)
-                row_uid = user_id_for_account(txn.account_id)
-                existing = session.exec(
-                    _select(Transaction).where(
-                        Transaction.content_hash == content_hash,
-                        Transaction.account_id == txn.account_id,
-                        Transaction.user_id == row_uid,
-                    )
-                ).first()
-                if existing is not None:
-                    continue
-
-                review_conf = compute_review_confidence(txn)
-                auto_ok = should_auto_review_email(review_conf)
-
-                db_txn = Transaction(
-                    content_hash=content_hash,
-                    txn_date=txn.txn_date,
-                    account_id=txn.account_id,
-                    user_id=row_uid,
-                    source_statement=statement_src,
-                    source_type="statement",
-                    direction=txn.direction.value,
-                    amount=float(txn.amount),
-                    currency=txn.currency,
-                    txn_type=txn.txn_type.value if txn.txn_type else None,
-                    channel=txn.channel.value if txn.channel else None,
-                    upi_type=txn.upi_type.value if txn.upi_type else None,
-                    counterparty=txn.counterparty,
-                    counterparty_category=(
-                        txn.counterparty_category.value if txn.counterparty_category else None
-                    ),
-                    spend_category=(
-                        txn.spend_category.value if txn.spend_category else None
-                    ),
-                    classification_source=(
-                        txn.classification_source.value
-                        if txn.classification_source
-                        else None
-                    ),
-                    raw_description=txn.raw_description,
-                    ref_number=txn.ref_number,
-                    closing_balance=float(txn.closing_balance) if txn.closing_balance else None,
-                    value_date=txn.value_date,
-                    notes=txn.notes,
-                    is_reviewed=auto_ok,
-                    review_confidence=review_conf,
-                    pipeline_run_id=run_id,
-                )
-                session.add(db_txn)
-                new_count += 1
-
-                if date_min is None or txn.txn_date < date_min:
-                    date_min = txn.txn_date
-                if date_max is None or txn.txn_date > date_max:
-                    date_max = txn.txn_date
-
-            run.txn_count = len(canonical)
-            run.new_count = new_count
-            run.txn_date_min = date_min
-            run.txn_date_max = date_max
-            run.status = "completed"
-            run.completed_at = datetime.datetime.now(datetime.UTC)
-            session.commit()
+            # Stage 5: write_to_db is the single canonical write path.
+            # Passing all of canonical (not just new_canonical) lets write_to_db run
+            # Path A (hash dedup + NULL backfill) and Path B (email↔statement
+            # reconciliation) on every row — hash-dup rows get backfilled, email rows
+            # get merged rather than duplicated. The pre-filter above only controlled
+            # which rows were sent to the LLM to avoid unnecessary API spend.
+            run_row = session.get(PipelineRun, run_id)
+            completed_run = write_to_db(
+                canonical,
+                source_key=source_key,
+                llm_model=config.LLM_MODEL,
+                session=session,
+                source_type="statement",
+                existing_run=run_row,
+            )
 
             unknowns = count_pipeline_run_classification_unknowns(
                 session, user_id=user_id, run_id=run_id
@@ -1276,8 +1451,8 @@ def _run_upload_background(
                     "total_count": len(canonical),
                     "unique_count": unique_new,
                     "unknowns_count": unknowns,
-                    "new_count": new_count,
-                    "txn_count": len(canonical),
+                    "new_count": completed_run.new_count,
+                    "txn_count": completed_run.txn_count,
                 },
             )
 
