@@ -742,12 +742,6 @@ export function GoalTemplateWizard() {
             })}
           </ul>
         )}
-        <p className="text-xs text-muted-foreground">
-          <Link href="/goals" className="font-medium text-primary underline underline-offset-2">
-            Open full Goals page
-          </Link>{" "}
-          for edits, progress, and deletes.
-        </p>
       </section>
     </div>
   )

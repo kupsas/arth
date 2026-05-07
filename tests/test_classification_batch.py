@@ -115,6 +115,7 @@ def test_onboarding_classify_updates_txn_and_creates_rule(
         assert row.counterparty == "Swiggy"
         assert row.spend_category == "WANT"
         assert row.classification_source == "USER_REVIEWED"
+        assert row.is_reviewed is True
         ur = session.exec(
             select(UserMerchantRule).where(
                 UserMerchantRule.user_id == "batch_user",
@@ -377,11 +378,15 @@ def test_onboarding_classify_propagates_merchant_keyword_to_sibling_upi_rows(
     assert data.get("auto_propagated", 0) >= 1
 
     with Session(engine) as session:
+        u1 = session.get(Transaction, id1)
+        assert u1 is not None
+        assert u1.is_reviewed is True
         u2 = session.get(Transaction, id2)
         assert u2 is not None
         assert u2.counterparty == "Babul Hussain Laskar"
         assert u2.counterparty_category == "Friends and Family"
         assert u2.classification_source != "USER_REVIEWED"
+        assert u2.is_reviewed is True
 
 
 def test_onboarding_classify_propagates_multiword_keyword_when_tokens_not_contiguous(

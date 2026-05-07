@@ -1292,18 +1292,18 @@ function UploadDialog({
           if (!open) cancelDuplicateReupload()
         }}
       >
-        <DialogContent showCloseButton={false} className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Import this file again?</DialogTitle>
-            <DialogDescription>
+        <DialogContent showCloseButton={false} className="gap-5 p-6 sm:max-w-md sm:p-7">
+          <DialogHeader className="gap-3 text-left sm:text-left">
+            <DialogTitle className="pr-2 leading-snug">Import this file again?</DialogTitle>
+            <DialogDescription className="leading-relaxed">
               You already uploaded a file named{" "}
-              <span className="font-medium text-foreground break-all">
+              <span className="mt-1 block rounded-md border border-border/60 bg-muted/40 px-3 py-2 font-medium text-foreground wrap-break-word">
                 {duplicateDialogFile?.name ?? "this file"}
               </span>
-              . Still add it again?
+              <span className="mt-2 block">Still add it again?</span>
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="border-0 bg-transparent p-0 sm:justify-end gap-2">
+          <DialogFooter className="mt-1 border-0 bg-transparent p-0 pt-2 sm:justify-end sm:gap-3">
             <Button type="button" variant="outline" onClick={cancelDuplicateReupload}>
               No
             </Button>

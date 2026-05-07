@@ -23,7 +23,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from api.auth import get_current_user
 from api.database import get_session
 from api.main import app
-from api.models import OnboardingState, Transaction, UserContact, UserSecrets
+from api.models import Holding, InvestmentTransaction, OnboardingState, Transaction, UserContact, UserSecrets
+from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
 from scraper.discovery import DiscoveredSource
 
 
@@ -257,6 +258,69 @@ def test_patch_onboarding_state_logs_step_transition(
     again = flow_client.patch("/api/onboarding/state", json={"current_step": "discovery"})
     assert again.status_code == 200
     assert not [rec for rec in caplog.records if rec.levelno == logging.INFO]
+
+
+def test_onboarding_complete_clears_review_queue_for_user_data(
+    engine: object,
+    flow_client: TestClient,
+) -> None:
+    """POST /complete marks remaining bank + linked investment rows reviewed for this user."""
+    with Session(engine) as session:  # type: ignore[call-arg]
+        session.merge(OnboardingState(user_id="flow_user", current_step="summary"))
+        session.add(
+            Transaction(
+                content_hash="complete_review_q_01",
+                txn_date=date(2024, 6, 1),
+                account_id="ACC",
+                user_id="flow_user",
+                source_statement="sk",
+                source_type="email",
+                direction="OUTFLOW",
+                amount=10.0,
+                raw_description="onboarding complete review sweep",
+                is_reviewed=False,
+            )
+        )
+        h = Holding(
+            name="Inv Test",
+            symbol="INV1",
+            asset_class=AssetClass.EQUITY.value,
+            account_platform="ICICI",
+            valuation_method=ValuationMethod.MANUAL.value,
+            liquidity_class=LiquidityClass.T_PLUS_1.value,
+            user_id="flow_user",
+        )
+        session.add(h)
+        session.commit()
+        session.refresh(h)
+        session.add(
+            InvestmentTransaction(
+                txn_date=date(2024, 6, 2),
+                symbol="INV1",
+                txn_type=InvestmentTxnType.BUY.value,
+                quantity=1.0,
+                price_per_unit=100.0,
+                total_amount=100.0,
+                account_platform="ICICI",
+                holding_id=h.id,
+                is_reviewed=False,
+                source_type="email",
+            )
+        )
+        session.commit()
+
+    r = flow_client.post("/api/onboarding/complete")
+    assert r.status_code == 200, r.text
+
+    with Session(engine) as session:  # type: ignore[call-arg]
+        txn = session.exec(
+            select(Transaction).where(Transaction.content_hash == "complete_review_q_01")
+        ).one()
+        assert txn.is_reviewed is True
+        inv = session.exec(
+            select(InvestmentTransaction).where(InvestmentTransaction.symbol == "INV1")
+        ).one()
+        assert inv.is_reviewed is True
 
 
 def test_onboarding_complete_logs_finished_step(

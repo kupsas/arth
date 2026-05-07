@@ -167,9 +167,10 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
 
 # API keys — transaction **classification** pipeline only (separate from conversational agent).
 # Prefer *_FOR_CLASSIFIER so usage is trackable per product; fall back to legacy names for CI/scripts.
-# During Gmail ingest, :func:`api.services.classifier_runtime.user_classifier_runtime` may
-# temporarily overlay these module attributes with per-user values from encrypted
-# ``UserSecrets`` (see ``POST /api/onboarding/api-key``).
+# During Gmail ingest or statement-upload background jobs,
+# :func:`api.services.classifier_runtime.user_classifier_runtime` may temporarily overlay
+# these module attributes with per-user values from encrypted ``UserSecrets``
+# (see ``POST /api/onboarding/api-key``).
 OPENAI_API_KEY: str = (
     os.getenv("OPENAI_API_KEY_FOR_CLASSIFIER", "").strip()
     or os.getenv("OPENAI_API_KEY", "").strip()

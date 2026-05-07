@@ -529,6 +529,7 @@ def _run_pipeline_background(
     from pipeline.rules_classifier import classify_rules
     from pipeline.transformer import transform
     from pipeline.db_writer import write_to_db
+    from api.services.classifier_runtime import user_classifier_runtime
     from api.services.user_classification import pipeline_config_for_account_owner
 
     if llm_model:
@@ -559,8 +560,17 @@ def _run_pipeline_background(
                 )
                 ucfg = pipeline_config_for_account_owner(session, source_cfg["account_id"])
                 classify_rules(canonical, ucfg)
-                classify_llm(canonical)
+                # Release the read transaction before LLM I/O so concurrent API writes
+                # (classify, patch, etc.) are not blocked for minutes under SQLite.
+                session.commit()
+                # Same as Gmail ingest: overlay UserSecrets LLM keys onto pipeline.config
+                # for this session only (background thread has no request-scoped env).
+                with user_classifier_runtime(session, user_id):
+                    classify_llm(canonical)
 
+                # run was loaded before the pre-LLM commit; refresh so write_to_db sees a
+                # non-expired row on this session.
+                session.refresh(run)
                 # Stage 5: write_to_db is the single canonical write path.
                 # It handles hash dedup, email↔statement reconciliation, NULL backfill,
                 # PipelineRun finalisation, and cache invalidation in one place.
@@ -582,10 +592,12 @@ def _run_pipeline_background(
                     run_id,
                     source_key,
                 )
-                run.status = "failed"
-                run.error_message = traceback.format_exc()
-                run.completed_at = datetime.datetime.now(datetime.UTC)
-                session.commit()
+                fail_run = session.get(PipelineRun, run_id)
+                if fail_run is not None:
+                    fail_run.status = "failed"
+                    fail_run.error_message = traceback.format_exc()
+                    fail_run.completed_at = datetime.datetime.now(datetime.UTC)
+                    session.commit()
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -1308,6 +1320,7 @@ def _run_upload_background(
 
     from api.models import Transaction
     from api.services.account_user_map import user_id_for_account
+    from api.services.classifier_runtime import user_classifier_runtime
     from api.services.user_classification import pipeline_config_for_account_owner
     from scraper.onboarding_orchestrator import count_pipeline_run_classification_unknowns
     from sqlmodel import select as _select
@@ -1390,6 +1403,11 @@ def _run_upload_background(
                 },
             )
 
+            # Close the ORM transaction from dedupe / config reads before LLM calls.
+            # classify_llm can take minutes; holding SQLite's autobegin transaction that
+            # whole time causes ``database is locked`` for other endpoints on the same file.
+            session.commit()
+
             llm_state: dict[str, int] = {"done": 0, "total": 0}
             classify_total = len(new_canonical)
 
@@ -1407,7 +1425,10 @@ def _run_upload_background(
                     )
 
             if new_canonical:
-                classify_llm(new_canonical, on_batch_complete=on_llm_batch)
+                # Overlay keys from onboarding / Settings (UserSecrets), not only process ENV —
+                # matches scraper/orchestrator email path so uploads classify like mail import.
+                with user_classifier_runtime(session, user_id):
+                    classify_llm(new_canonical, on_batch_complete=on_llm_batch)
             if llm_state["total"] == 0:
                 _upload_progress_set(
                     run_id,
@@ -1462,15 +1483,19 @@ def _run_upload_background(
                 run_id,
                 source_key,
             )
-            run.status = "failed"
-            run.error_message = traceback.format_exc()
-            run.completed_at = datetime.datetime.now(datetime.UTC)
-            session.commit()
+            fail_run = session.get(PipelineRun, run_id)
+            if fail_run is not None:
+                fail_run.status = "failed"
+                fail_run.error_message = traceback.format_exc()
+                fail_run.completed_at = datetime.datetime.now(datetime.UTC)
+                session.commit()
             _upload_progress_set(
                 run_id,
                 {
                     "phase": "error",
-                    "error_message": run.error_message or "Import failed",
+                    "error_message": (
+                        fail_run.error_message if fail_run is not None else "Import failed"
+                    ),
                 },
             )
         finally:

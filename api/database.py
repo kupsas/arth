@@ -26,15 +26,37 @@ from pipeline.config import DB_PATH, REPO_ROOT
 
 logger = logging.getLogger(__name__)
 
-# SQLite allows only one writer at a time. WAL mode lets readers proceed during a
-# write, but concurrent flush/commit from multiple threads (e.g. onboarding backfill
-# worker + API classify/patch) still causes ``database is locked``. Serialize those
-# operations process-wide; use RLock so commit()->flush() nesting stays safe.
+# ── Write serialisation ──────────────────────────────────────────────────────
+#
+# SQLite allows only one writer at a time.  WAL mode lets *readers* proceed
+# during a write, but two threads flushing dirty objects concurrently from
+# different pooled connections still triggers ``database is locked``.
+#
+# Strategy:
+#   1. ``autoflush=False`` on every session — the only way data reaches SQLite
+#      is through explicit ``flush()`` or ``commit()``.
+#   2. Both ``flush()`` and ``commit()`` acquire ``_SQLITE_WRITER_LOCK`` (an
+#      ``RLock``), so writes are fully serialised process-wide.
+#   3. Read-only queries (``exec``, ``get``) never write under ``autoflush=False``,
+#      so they coexist freely across threads in WAL mode.
+#
+# The default connection pool (``QueuePool``, ``pool_size=5``) is intentionally
+# kept — multiple simultaneous connections are fine for reads.  Only writes
+# contend, and the RLock handles that.
 _SQLITE_WRITER_LOCK = threading.RLock()
 
 
 class SQLiteSerializingSession(Session):
-    """Session that serializes flush/commit/rollback for multi-threaded SQLite use."""
+    """Session with ``autoflush=False`` + serialised flush/commit/rollback.
+
+    ``autoflush=False`` is critical: without it, any ``session.exec()`` can
+    silently flush dirty objects to the DB — that flush bypasses the RLock
+    and races with another connection's write, producing ``database is locked``.
+    """
+
+    def __init__(self, *args, **kwargs):  # type: ignore[override]
+        kwargs.setdefault("autoflush", False)
+        super().__init__(*args, **kwargs)
 
     def flush(self, objects=None):  # type: ignore[override]
         with _SQLITE_WRITER_LOCK:
@@ -54,7 +76,7 @@ class SQLiteSerializingSession(Session):
 _engine = create_engine(
     f"sqlite:///{DB_PATH}",
     echo=False,
-    connect_args={"check_same_thread": False, "timeout": 60},
+    connect_args={"check_same_thread": False, "timeout": 120},
 )
 
 
@@ -66,6 +88,8 @@ def _sqlite_enable_wal(dbapi_conn, connection_record) -> None:
     """
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
+    # Milliseconds to retry on SQLITE_BUSY (matches connect ``timeout`` intent).
+    cursor.execute("PRAGMA busy_timeout=120000")
     cursor.close()
 
 

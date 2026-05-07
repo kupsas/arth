@@ -80,6 +80,30 @@ def _resolve_value(txn: CanonicalTransaction, attr: str) -> str | None:
     return val.value if hasattr(val, "value") else str(val)
 
 
+def _path_a_backfill_existing(
+    session: Session,
+    existing: Transaction,
+    txn: CanonicalTransaction,
+    row_user_id: str | None,
+) -> bool:
+    """Fill NULL classification columns on ``existing`` from ``txn``. Return True if anything changed."""
+    fields_touched = 0
+    if not existing.user_id:
+        existing.user_id = row_user_id
+        fields_touched += 1
+    for canon_attr, db_col in _BACKFILL_FIELDS:
+        if getattr(existing, db_col) is not None:
+            continue
+        new_val = _resolve_value(txn, canon_attr)
+        if new_val is not None:
+            setattr(existing, db_col, new_val)
+            fields_touched += 1
+    if fields_touched > 0:
+        existing.updated_at = datetime.datetime.now(datetime.UTC)
+        session.add(existing)
+    return fields_touched > 0
+
+
 def _find_statement_match_for_email(
     session: Session,
     txn: CanonicalTransaction,
@@ -355,9 +379,36 @@ def write_to_db(
     date_max: datetime.date | None = None
     # Bank data changes surplus + EXPENSE_LIMIT progress — drop cached sim rows per user.
     affected_user_ids: set[str] = set()
+    # Track content hashes for which we already inserted (Path C) in this batch.
+    # A second canonical row with the same hash must not INSERT again (UNIQUE on
+    # content_hash) — but we still merge classification from that row onto the
+    # first row after flush, in case LLM filled fields only on the duplicate object.
+    _batch_hashes: set[str] = set()
 
     for txn in txns:
         content_hash = compute_content_hash(txn)
+
+        if content_hash in _batch_hashes:
+            session.flush()
+            row_user_id = user_id_for_account(txn.account_id, session)
+            dup_existing = session.exec(
+                select(Transaction).where(
+                    Transaction.content_hash == content_hash,
+                    Transaction.account_id == txn.account_id,
+                    or_(
+                        col(Transaction.user_id) == row_user_id,
+                        col(Transaction.user_id).is_(None),
+                    ),
+                )
+            ).first()
+            if dup_existing is not None and _path_a_backfill_existing(
+                session, dup_existing, txn, row_user_id
+            ):
+                updated_count += 1
+                if row_user_id:
+                    affected_user_ids.add(row_user_id)
+            continue
+
         row_user_id = user_id_for_account(txn.account_id, session)
 
         # ── Path A: exact content_hash match ────────────────────────────────
@@ -376,23 +427,7 @@ def write_to_db(
         ).first()
 
         if existing is not None:
-            # Backfill: fill in NULL classification fields without clobbering
-            # any values that were set by earlier runs or manual user edits.
-            fields_touched = 0
-            if not existing.user_id:
-                existing.user_id = row_user_id
-                fields_touched += 1
-            for canon_attr, db_col in _BACKFILL_FIELDS:
-                if getattr(existing, db_col) is not None:
-                    continue
-                new_val = _resolve_value(txn, canon_attr)
-                if new_val is not None:
-                    setattr(existing, db_col, new_val)
-                    fields_touched += 1
-
-            if fields_touched > 0:
-                existing.updated_at = datetime.datetime.now(datetime.UTC)
-                session.add(existing)
+            if _path_a_backfill_existing(session, existing, txn, row_user_id):
                 updated_count += 1
                 if row_user_id:
                     affected_user_ids.add(row_user_id)
@@ -495,6 +530,7 @@ def write_to_db(
             gmail_message_id=gmail_message_id,
         )
         session.add(db_txn)
+        _batch_hashes.add(content_hash)
         new_count += 1
         ins_uid = db_txn.user_id or row_user_id
         if ins_uid:
@@ -504,6 +540,11 @@ def write_to_db(
             date_min = txn.txn_date
         if date_max is None or txn.txn_date > date_max:
             date_max = txn.txn_date
+
+    # Flush accumulated adds/updates so they are visible to the finalisation
+    # queries below (e.g. goal-cache invalidation).  With autoflush=False on
+    # SQLiteSerializingSession the session won't have written them yet.
+    session.flush()
 
     # Finalise the pipeline run row.
     # We store reconciled_count inside updated_count so the existing API

@@ -150,10 +150,23 @@ export function StepUploadFallback({
               </>
             )}
           </CardDescription>
-          <p className="text-xs text-muted-foreground leading-relaxed pt-1">
-            <span className="font-medium text-foreground">Supported today:</span>{" "}
-            {TRANSACTION_UPLOAD_TYPE_LABELS.join(" · ")}
-          </p>
+          <div className="pt-1">
+            <p className="text-xs font-medium text-foreground">Supported today</p>
+            {/*
+              Two-column grid so formats scan as a list, not one long paragraph.
+              Single column on very narrow screens so lines don’t feel squeezed.
+            */}
+            <ul
+              className="mt-1.5 grid grid-cols-1 gap-x-6 gap-y-1 text-xs leading-snug text-muted-foreground sm:grid-cols-2"
+              aria-label="Statement formats supported today"
+            >
+              {TRANSACTION_UPLOAD_TYPE_LABELS.map((label) => (
+                <li key={label} className="min-w-0 break-words">
+                  {label}
+                </li>
+              ))}
+            </ul>
+          </div>
         </CardHeader>
         <CardContent className="pt-0 space-y-3">
           <StatementUploadPanel

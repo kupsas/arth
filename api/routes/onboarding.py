@@ -30,13 +30,22 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, update
 from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import SQLiteSerializingSession, get_session
 from api.errors import arth_validation_error
-from api.models import AppUser, Holding, OnboardingState, PasswordTemplate, Transaction, UserContact, UserSecrets
+from api.models import (
+    AppUser,
+    Holding,
+    InvestmentTransaction,
+    OnboardingState,
+    PasswordTemplate,
+    Transaction,
+    UserContact,
+    UserSecrets,
+)
 from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
 from api.services.classifier_runtime import (
@@ -1624,6 +1633,9 @@ def _upsert_friend_contact(
             contact_source="ONBOARDING",
         )
     )
+    # Flush so a second call for the same display_name in the same batch
+    # hits the SELECT above and merges aliases instead of inserting a duplicate.
+    session.flush()
 
 
 def _upsert_self_contact(session: Session, user_id: str, display_name: str) -> None:
@@ -1654,6 +1666,8 @@ def _upsert_self_contact(session: Session, user_id: str, display_name: str) -> N
                 contact_source="ONBOARDING",
             )
         )
+        # Flush so a repeated call in the same batch finds this row via SELECT.
+        session.flush()
 
 
 def _txn_brief(t: Transaction) -> dict[str, Any]:
@@ -1800,6 +1814,9 @@ def onboarding_classify(
                 if item.upi_type is not None:
                     txn.upi_type = item.upi_type.strip() or None
                 txn.classification_source = "USER_REVIEWED"
+                # Same as statement upload classify: onboarding review counts as “reviewed”
+                # so the dashboard review banner does not nag after first-time setup.
+                txn.is_reviewed = True
                 txn.updated_at = datetime.datetime.now(datetime.UTC)
                 if txn.spend_category is None and txn.direction == "OUTFLOW":
                     canon = transaction_to_canonical(txn)
@@ -1971,6 +1988,24 @@ def onboarding_complete(
     if user_row and user_row.setup_completed_at is None:
         user_row.setup_completed_at = datetime.datetime.now(datetime.UTC)
         session.add(user_row)
+
+    # First-time setup already walked bank classification (and broker portfolio summary).
+    # Clear any remaining review-queue flags for this user so the home banner stays quiet
+    # on the first dashboard visit (email rows default to is_reviewed=False at ingest).
+    now = datetime.datetime.now(datetime.UTC)
+    session.execute(
+        update(Transaction)
+        .where(col(Transaction.user_id) == current_user)
+        .where(col(Transaction.is_reviewed).is_(False))
+        .values(is_reviewed=True, updated_at=now)
+    )
+    holdings_subq = select(col(Holding.id)).where(col(Holding.user_id) == current_user)
+    session.execute(
+        update(InvestmentTransaction)
+        .where(col(InvestmentTransaction.is_reviewed).is_(False))
+        .where(col(InvestmentTransaction.holding_id).in_(holdings_subq))
+        .values(is_reviewed=True, updated_at=now)
+    )
 
     session.commit()
     # Background Gmail polling was withheld until setup completed — activate it now.

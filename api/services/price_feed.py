@@ -485,13 +485,15 @@ def upsert_prices(session: Session, rows: Iterable[Price]) -> int:
 
     n = 0
     for p in rows_list:
-        existing = existing_by_key.get((p.symbol, p.date))
+        key = (p.symbol, p.date)
+        existing = existing_by_key.get(key)
         if existing:
             existing.close_price = p.close_price
             existing.source = p.source
             session.add(existing)
         else:
             session.add(p)
+            existing_by_key[key] = p
         n += 1
     session.flush()
     return n

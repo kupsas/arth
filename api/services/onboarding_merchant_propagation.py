@@ -149,6 +149,9 @@ def propagate_merchant_keyword_hits(
         canon = transaction_to_canonical(row)
         classify_rules([canon], ucfg)
         _write_canonical_classification_back(row, canon)
+        # Sibling rows picked up the user's merchant rule — treat as reviewed like the
+        # rows they confirmed in onboarding, so they do not reappear on the review banner.
+        row.is_reviewed = True
         session.add(row)
         touched += 1
     return touched

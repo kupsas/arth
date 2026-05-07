@@ -370,6 +370,11 @@ def _process_email(
                     f"account_id={account_id} source_key={source_key} rows={len(canonical)} (deterministic rules applied)",
                 )
 
+            # End the SQLite transaction from config/rules reads before slow LLM HTTP calls.
+            # An open autobegin transaction here otherwise competes with concurrent API writes
+            # (e.g. onboarding classify) and can raise ``database is locked``.
+            session.commit()
+
             # ── Step 7: LLM classifier ───────────────────────────────────────────
             # Fills counterparty, counterparty_category, and any remaining gaps.
             if import_flow_log:

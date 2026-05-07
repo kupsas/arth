@@ -156,7 +156,17 @@ def onboarding_should_resume_after_classify(
 
 @contextmanager
 def user_classifier_runtime(session: Session, user_id: str) -> Iterator[None]:
-    """Temporarily overlay ``pipeline.config`` LLM keys from ``UserSecrets``."""
+    """Temporarily overlay ``pipeline.config`` LLM keys from ``UserSecrets``.
+
+    Commits the ORM session after the ``UserSecrets`` read (before ``yield``) so the
+    transaction opened by that query is not held across slow LLM HTTP calls.
+
+    Callers that perform **additional** database reads after entering this context
+    (e.g. :func:`~api.services.user_classification.pipeline_config_for_account_owner`
+    in the email scraper) must ``session.commit()`` again after those reads and before
+    :func:`~pipeline.llm_classifier.classify_llm` so SQLite stays responsive to
+    concurrent API writes.
+    """
     snap_o, snap_a, snap_g = pc.OPENAI_API_KEY, pc.ANTHROPIC_API_KEY, pc.GOOGLE_API_KEY
     try:
         row = session.exec(select(UserSecrets).where(UserSecrets.user_id == user_id)).first()
@@ -173,6 +183,8 @@ def user_classifier_runtime(session: Session, user_id: str) -> Iterator[None]:
                     pc.ANTHROPIC_API_KEY = a
                 if g:
                     pc.GOOGLE_API_KEY = g
+        # End the autobegin transaction from the SELECT above; callers run LLM work after yield.
+        session.commit()
         yield
     finally:
         pc.OPENAI_API_KEY, pc.ANTHROPIC_API_KEY, pc.GOOGLE_API_KEY = snap_o, snap_a, snap_g
