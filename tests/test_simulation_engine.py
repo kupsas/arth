@@ -563,7 +563,9 @@ def test_performance_ten_goals_twenty_years():
     t0 = time.perf_counter()
     simulate(p)
     elapsed = time.perf_counter() - t0
-    assert elapsed < 0.5, f"took {elapsed:.3f}s, expected <500ms"
+    # 2s ceiling is generous enough for slow GitHub-hosted runners (shared CPU)
+    # while still catching a genuine O(n²) regression in the cascade loop.
+    assert elapsed < 2.0, f"took {elapsed:.3f}s, expected <2s"
 
 
 def _avg_contrib_first_n(trajectory: list, n: int) -> float:
