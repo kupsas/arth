@@ -104,7 +104,7 @@ export function GroupingPieChart({
             )}
           >
             <div className="h-[148px] w-[148px] shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height={148}>
                 <PieChart>
                   <Pie
                     data={pieData}

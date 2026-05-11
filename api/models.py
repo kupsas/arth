@@ -22,6 +22,7 @@ Tables:
   - FamilyMember       — household owner for scraper account mappings (Track 2 onboarding)
   - OnboardingState    — persisted wizard step + JSON payloads (Track 2 onboarding)
   - UserPipelineSource — per-user file pipeline: source_key → account_id + statement folder
+  - UserSimulationSandboxPreferences — saved simulate-page macro sliders (surplus, growth, CPI)
 
 Design notes:
   - Enum fields are stored as VARCHAR (SQLite has no native enum type anyway).
@@ -835,6 +836,29 @@ class UserClassificationSettings(SQLModel, table=True):
     # JSON list of {"substring": "...", "txn_type": "SELF_TRANSFER"}
     custom_patterns_json: str = Field(default="[]")
     account_hints_json: str = Field(default="[]")
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class UserSimulationSandboxPreferences(SQLModel, table=True):
+    """Persisted macro assumptions from the Goals simulate page (saved with goals).
+
+    When a row exists, :func:`api.routes.simulate.build_simulation_params_from_db` overrides
+    computed surplus + live CPI headline with these values so the sandbox matches what the
+    user last saved. Horizon months remain derived from goal dates.
+    """
+
+    __tablename__ = "user_simulation_sandbox_preferences"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(unique=True, index=True)
+    monthly_surplus_inr: float = Field(default=0.0)
+    salary_growth_rate_pct: float = Field(default=5.0)
+    general_inflation_rate_pct: float = Field(default=6.0)
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )

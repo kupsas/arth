@@ -227,7 +227,7 @@ export function InvestmentTransactionTable({
       <div className="flex items-center justify-between px-1">
         <p className="text-xs text-muted-foreground">
           {data
-            ? `${data.total.toLocaleString()} row${data.total !== 1 ? "s" : ""}`
+            ? `${data.total.toLocaleString("en-IN")} row${data.total !== 1 ? "s" : ""}`
             : "Loading…"}
         </p>
         <div className="flex items-center gap-2">

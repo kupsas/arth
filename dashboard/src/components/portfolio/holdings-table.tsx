@@ -55,8 +55,9 @@ import {
 } from "@/components/ui/table";
 import { portfolioKeys, useHoldings, useHoldingsSummary, useRefreshPrices, useUpdateHoldingValue } from "@/hooks/use-portfolio";
 import { fetchHoldingDetail } from "@/lib/api";
+import { sanitizeHtmlDateInputValue } from "@/lib/onboarding-input-validation";
 import type { Holding, HoldingDetail, HoldingValueUpdate } from "@/lib/types";
-import { cn, formatCurrency, formatPercent } from "@/lib/utils";
+import { cn, formatCurrency, formatInrMoneyInput, formatPercent, parseInrMoneyInput, reformatInrMoneyTyping } from "@/lib/utils";
 
 export interface HoldingsTableProps {
   userId: string;
@@ -559,7 +560,7 @@ function HoldingExpandedPanel({
   );
 
   React.useEffect(() => {
-    setValueStr(holding.current_value != null ? String(holding.current_value) : "");
+    setValueStr(holding.current_value != null ? formatInrMoneyInput(holding.current_value) : "");
     setDateStr(holding.last_valued_date ?? "");
   }, [holding.current_value, holding.last_valued_date]);
 
@@ -592,8 +593,10 @@ function HoldingExpandedPanel({
             className="flex flex-col gap-3"
             onSubmit={async (e) => {
               e.preventDefault();
-              const current_value = valueStr === "" ? null : Number(valueStr);
-              if (valueStr !== "" && !Number.isFinite(current_value)) return;
+              const current_value =
+                valueStr.trim() === "" ? null : parseInrMoneyInput(valueStr);
+              if (valueStr.trim() !== "" && (current_value === null || !Number.isFinite(current_value)))
+                return;
               await onSaveManual({
                 current_value,
                 last_valued_date: dateStr || null,
@@ -604,11 +607,12 @@ function HoldingExpandedPanel({
               <Label htmlFor={`cv-${holding.id}`}>Current value (INR)</Label>
               <Input
                 id={`cv-${holding.id}`}
-                type="number"
-                step="any"
-                min={0}
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                className="tabular-nums"
                 value={valueStr}
-                onChange={(e) => setValueStr(e.target.value)}
+                onChange={(e) => setValueStr(reformatInrMoneyTyping(e.target.value))}
               />
             </div>
             <div className="space-y-1">
@@ -616,8 +620,18 @@ function HoldingExpandedPanel({
               <Input
                 id={`lv-${holding.id}`}
                 type="date"
+                min="1900-01-01"
+                max="9999-12-31"
                 value={dateStr.slice(0, 10)}
-                onChange={(e) => setDateStr(e.target.value)}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setDateStr("");
+                    return;
+                  }
+                  const v = sanitizeHtmlDateInputValue(raw);
+                  if (v != null) setDateStr(v);
+                }}
               />
             </div>
             <Button type="submit" size="sm" disabled={isSaving} className="w-fit">

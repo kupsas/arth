@@ -48,7 +48,7 @@ import { cn } from "@/lib/utils"
 function formatLastScannedLabel(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+  return d.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
 }
 
 const DISCOVERY_UI_SECTIONS: DiscoveryUiCategory[] = ["bank", "demat", "credit"]

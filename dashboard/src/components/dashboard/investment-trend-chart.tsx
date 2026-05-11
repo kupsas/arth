@@ -119,8 +119,9 @@ export function InvestmentTrendChart({
           for all investment transactions that month.
         </p>
       </CardHeader>
-      <CardContent className="h-[300px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
+      <CardContent className="h-[300px] w-full min-w-0">
+        {/* Numeric height avoids Recharts’ first-paint -1×-1 + 100%/100% console warning */}
+        <ResponsiveContainer width="100%" height={300}>
           <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis dataKey="month" tick={axisTick} />

@@ -52,6 +52,9 @@ export default function SimulatePage() {
     commitDraftAsBase,
   } = useSimulation();
 
+  const [surplusChartFocusedGoal, setSurplusChartFocusedGoal] = React.useState<string | null>(
+    null,
+  );
   const [saveOpen, setSaveOpen] = React.useState(false);
 
   if (isLoading && !draftParams) {
@@ -111,27 +114,51 @@ export default function SimulatePage() {
         </div>
       </div>
 
-      <SliderPanel draft={draftParams} onChange={updateGlobalParam} />
+      {/* Inputs + surplus chart: side-by-side. Inputs stay interactive while chart dims on re-simulate. */}
+      <div className="flex items-stretch gap-4">
+        {/* Left column: simulation inputs — fixed width, stretches to match chart height */}
+        <div className="w-[240px] shrink-0">
+          <SliderPanel draft={draftParams} onChange={updateGlobalParam} />
+        </div>
 
-      {/* Charts + goal cards dim slightly while POST /api/simulate runs (incl. cascade refinement on server). */}
-      <div className="relative space-y-6">
+        {/* Right column: surplus waterfall chart */}
+        <div className="relative min-w-0 flex-1">
+          {isSimulating && (
+            <div
+              className="pointer-events-none absolute inset-0 z-10 animate-pulse rounded-xl bg-muted/25"
+              aria-hidden
+            />
+          )}
+          <div
+            className={cn(
+              "h-full",
+              isSimulating && "opacity-70 transition-opacity duration-200",
+            )}
+          >
+            <SurplusWaterfall
+              projections={result.projections}
+              netWorthProjection={result.net_worth_projection}
+              focusedGoal={surplusChartFocusedGoal}
+              onFocusedGoalChange={setSurplusChartFocusedGoal}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Goal explorer below — dims while POST /api/simulate runs */}
+      <div className="relative">
         {isSimulating && (
           <div
-            className="pointer-events-none absolute inset-0 z-10 rounded-xl bg-muted/25 animate-pulse"
+            className="pointer-events-none absolute inset-0 z-10 animate-pulse rounded-xl bg-muted/25"
             aria-hidden
           />
         )}
         <div
           className={cn(
-            "relative z-0 space-y-6",
+            "relative z-0",
             isSimulating && "opacity-70 transition-opacity duration-200",
           )}
         >
-          <SurplusWaterfall
-            projections={result.projections}
-            netWorthProjection={result.net_worth_projection}
-          />
-
           <GoalExplorer
             goals={draftParams.goals}
             projections={result.projections}
@@ -139,6 +166,7 @@ export default function SimulatePage() {
             asOfDate={draftParams.as_of_date ?? null}
             onReorderList={reorderGoalsByList}
             onAddHypothetical={() => addHypotheticalGoal(defaultHypotheticalGoal())}
+            onSurplusChartFocusChange={setSurplusChartFocusedGoal}
           />
         </div>
       </div>

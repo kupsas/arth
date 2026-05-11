@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import Goal
+from api.models import Goal, UserSimulationSandboxPreferences
 from api.services.inflation_service import cpi_general_yoy_ema_pct, resolve_goal_inflation
 from api.services.priority_scorer import _effective_goal_class, compute_priority_scores
 from api.services.simulation import (
@@ -34,6 +34,41 @@ from api.services.surplus_calculator import compute_surplus
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# When ``compute_surplus`` yields no positive monthly flow yet, the simulation UI still
+# needs a usable starting point (charts and allocation previews are meaningless at ₹0).
+# ₹1,50,000/month — applied only in ``POST /from-current``, not in ``build_simulation_params_from_db``
+# (goal status cache continues to use the raw computed surplus).
+SANDBOX_DEFAULT_MONTHLY_SURPLUS_INR = 150_000.0
+# Matches dashboard ``SIMULATION_MONTHLY_SURPLUS_MAX_INR`` (₹10 lakh / mo).
+SANDBOX_MONTHLY_SURPLUS_MAX_INR = 1_000_000.0
+
+
+def _apply_saved_sandbox_macros(
+    session: Session,
+    user_id: str,
+    params: SimulationParams,
+    meta: dict[str, Any],
+) -> SimulationParams:
+    """If the user saved simulate-page sliders, override computed surplus + headline CPI."""
+    row = session.exec(
+        select(UserSimulationSandboxPreferences).where(
+            UserSimulationSandboxPreferences.user_id == user_id
+        )
+    ).first()
+    if row is None:
+        return params
+    meta["sandbox_saved_macros_applied"] = True
+    return params.model_copy(
+        update={
+            "monthly_surplus": max(
+                0.0,
+                min(float(row.monthly_surplus_inr), SANDBOX_MONTHLY_SURPLUS_MAX_INR),
+            ),
+            "salary_growth_rate": max(0.0, min(float(row.salary_growth_rate_pct), 50.0)),
+            "general_inflation_rate": max(0.0, min(float(row.general_inflation_rate_pct), 50.0)),
+        },
+    )
 
 
 class AllocateRequest(BaseModel):
@@ -145,6 +180,7 @@ def build_simulation_params_from_db(
         simulation_months=simulation_months,
         as_of_date=as_of_date or datetime.date.today(),
     )
+    params = _apply_saved_sandbox_macros(session, user_id, params, meta)
     return params, meta
 
 
@@ -181,6 +217,48 @@ class FromCurrentBody(BaseModel):
     as_of_date: datetime.date | None = None
 
 
+class SandboxPreferencesPut(BaseModel):
+    """Persisted simulate-page sliders (dashboard Save changes)."""
+
+    monthly_surplus: float = Field(..., ge=0, le=SANDBOX_MONTHLY_SURPLUS_MAX_INR)
+    salary_growth_rate: float = Field(default=5.0, ge=0, le=50)
+    general_inflation_rate: float = Field(default=6.0, ge=0, le=50)
+
+
+@router.put("/sandbox-preferences")
+def put_simulation_sandbox_preferences(
+    body: SandboxPreferencesPut,
+    *,
+    session: Session = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+) -> dict[str, bool]:
+    """Upsert saved monthly surplus, salary growth, and headline inflation for simulation."""
+    now = datetime.datetime.now(datetime.UTC)
+    ms = max(0.0, min(float(body.monthly_surplus), SANDBOX_MONTHLY_SURPLUS_MAX_INR))
+    sg = max(0.0, min(float(body.salary_growth_rate), 50.0))
+    gi = max(0.0, min(float(body.general_inflation_rate), 50.0))
+    row = session.exec(
+        select(UserSimulationSandboxPreferences).where(
+            UserSimulationSandboxPreferences.user_id == user_id
+        )
+    ).first()
+    if row is None:
+        row = UserSimulationSandboxPreferences(
+            user_id=user_id,
+            monthly_surplus_inr=ms,
+            salary_growth_rate_pct=sg,
+            general_inflation_rate_pct=gi,
+        )
+    else:
+        row.monthly_surplus_inr = ms
+        row.salary_growth_rate_pct = sg
+        row.general_inflation_rate_pct = gi
+    row.updated_at = now
+    session.add(row)
+    session.commit()
+    return {"ok": True}
+
+
 @router.post("/from-current")
 def post_simulate_from_current(
     body: FromCurrentBody | None = None,
@@ -197,6 +275,10 @@ def post_simulate_from_current(
         surplus_trailing_months=opts.surplus_trailing_months,
         as_of_date=opts.as_of_date,
     )
+    if params.monthly_surplus <= 0:
+        params = params.model_copy(
+            update={"monthly_surplus": SANDBOX_DEFAULT_MONTHLY_SURPLUS_INR}
+        )
     result = simulate(params)
     logger.debug(
         "Simulation from-current finished goals=%s horizon_months=%s",

@@ -5,6 +5,7 @@
  *
  * Connection URL follows ``NEXT_PUBLIC_API_URL`` / same-origin rules (see ``api-base.ts``).
  * When the URL has no ``session_id``, FastAPI creates a thread and emits ``session_ready``.
+ * The chat page avoids that when an empty draft already exists (see ``/chat`` bootstrap).
  *
  * In same-origin mode, the WS bypasses the Next.js proxy (which can't upgrade
  * WebSocket) and connects directly to FastAPI.  A one-time auth ticket fetched
@@ -49,10 +50,20 @@ function cloneToolUi(t: ToolCallUi): ToolCallUi {
   };
 }
 
+export type UseChatOptions = {
+  /**
+   * When false, no WebSocket is opened (used while the page decides whether to reuse
+   * an empty draft session from REST instead of creating another server-side thread).
+   */
+  enabled?: boolean;
+};
+
 export function useChat(
   sessionIdProp: string | undefined,
   onSessionReady?: (sessionId: string) => void,
+  options?: UseChatOptions,
 ) {
+  const enabled = options?.enabled ?? true;
   const onReadyRef = useRef(onSessionReady);
   useEffect(() => {
     onReadyRef.current = onSessionReady;
@@ -164,6 +175,15 @@ export function useChat(
    *  travels through the proxy), then pass it as ``?ticket=`` to FastAPI. */
   useEffect(() => {
     let cancelled = false;
+
+    if (!enabled) {
+      setConnection("idle");
+      setLastError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setConnection("connecting");
     setLastError(null);
 
@@ -531,6 +551,7 @@ export function useChat(
     };
   }, [
     sessionIdProp,
+    enabled,
     flushPendingToolsToActivity,
     pushActivitySegment,
     syncWipTools,

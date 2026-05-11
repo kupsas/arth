@@ -11,6 +11,8 @@ export interface ChatSessionSummary {
   title: string | null;
   created_at: string;
   updated_at: string;
+  /** Rows in ``chat_messages``; 0 means an empty draft the UI can reopen instead of creating another thread. */
+  message_count: number;
 }
 
 /** GET /api/chat/sessions/{id} */

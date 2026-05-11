@@ -14,7 +14,7 @@ import {
 } from "@/lib/goal-target-money"
 import { simulationInflationResolutionFromGoal } from "@/lib/goal-inflation-preview"
 import type { SimulationGoal } from "@/lib/types"
-import { formatCurrency } from "@/lib/utils"
+import { formatCurrency, parseInrMoneyInput } from "@/lib/utils"
 
 function parseInflationInput(s: string): number | null | undefined {
   const t = s.trim()
@@ -24,10 +24,7 @@ function parseInflationInput(s: string): number | null | undefined {
 }
 
 function parseTargetInput(s: string): number | null {
-  const t = s.trim()
-  if (t === "") return null
-  const n = parseFloat(t)
-  return Number.isNaN(n) ? null : n
+  return parseInrMoneyInput(s)
 }
 
 type GoalTargetMoneyHintProps = {

@@ -34,7 +34,7 @@ const DIM_SERIES_COLOR = "var(--muted-foreground)";
  * Stacked-area series for surplus that was not assigned to any goal (`unallocated_surplus` from API).
  * Shown as the top band in grey so it is visible in the chart, not only in the tooltip.
  */
-const UNALLOCATED_SERIES = "Unallocated";
+const UNALLOCATED_SURPLUS_SERIES_NAME = "Unallocated";
 
 /** Grey stack segment for unallocated surplus (distinct from goal palette in CHART_SERIES_COLORS). */
 const UNALLOCATED_FILL = "var(--muted)";
@@ -44,7 +44,7 @@ const UNALLOCATED_STROKE = "var(--muted-foreground)";
  * Raw INR per goal for one chart row (before optional % transform).
  * `_surplusLeft` / `_totalMonthlySurplus` mirror the simulation engine (from `net_worth_projection`);
  * prefixed so they never collide with goal names.
- * `[UNALLOCATED_SERIES]` duplicates unallocated INR for the stack (same value as `_surplusLeft` when present).
+ * `[UNALLOCATED_SURPLUS_SERIES_NAME]` duplicates unallocated INR for the stack (same value as `_surplusLeft` when present).
  */
 type InrRow = {
   monthLabel: string;
@@ -79,10 +79,10 @@ function buildMonthlyInrRows(
     if (nw) {
       const left = nw.unallocated_surplus ?? 0;
       row._surplusLeft = left;
-      row[UNALLOCATED_SERIES] = left;
+      row[UNALLOCATED_SURPLUS_SERIES_NAME] = left;
       row._totalMonthlySurplus = nw.monthly_surplus_pool ?? 0;
     } else {
-      row[UNALLOCATED_SERIES] = 0;
+      row[UNALLOCATED_SURPLUS_SERIES_NAME] = 0;
     }
     for (const p of projections) {
       const snap = p.monthly_trajectory[i];
@@ -136,10 +136,10 @@ function buildYearlyInrRows(
     const s = yearSurplus.get(y);
     if (s) {
       row._surplusLeft = s.unalloc;
-      row[UNALLOCATED_SERIES] = s.unalloc;
+      row[UNALLOCATED_SURPLUS_SERIES_NAME] = s.unalloc;
       row._totalMonthlySurplus = s.pool;
     } else {
-      row[UNALLOCATED_SERIES] = 0;
+      row[UNALLOCATED_SURPLUS_SERIES_NAME] = 0;
     }
     for (const p of projections) {
       row[p.goal_name] = bucket[p.goal_name] ?? 0;
@@ -150,7 +150,7 @@ function buildYearlyInrRows(
 
 function toPercentRows(rows: InrRow[], goalNames: string[]): PercentRow[] {
   return rows.map((row) => {
-    const unalloc = Number(row[UNALLOCATED_SERIES]) || 0;
+    const unalloc = Number(row[UNALLOCATED_SURPLUS_SERIES_NAME]) || 0;
     const goalsTotal = goalNames.reduce(
       (s, n) => s + (Number(row[n]) || 0),
       0,
@@ -168,8 +168,8 @@ function toPercentRows(rows: InrRow[], goalNames: string[]): PercentRow[] {
       out._inr[n] = v;
       out[n] = total > 0 ? (v / total) * 100 : 0;
     }
-    out._inr[UNALLOCATED_SERIES] = unalloc;
-    out[UNALLOCATED_SERIES] = total > 0 ? (unalloc / total) * 100 : 0;
+    out._inr[UNALLOCATED_SURPLUS_SERIES_NAME] = unalloc;
+    out[UNALLOCATED_SURPLUS_SERIES_NAME] = total > 0 ? (unalloc / total) * 100 : 0;
     return out;
   });
 }
@@ -186,34 +186,36 @@ type StackMode = "absolute" | "percent";
 export function SurplusWaterfall({
   projections,
   netWorthProjection,
+  focusedGoal,
+  onFocusedGoalChange,
 }: {
   projections: GoalProjection[];
   /** Same length/order as each goal’s `monthly_trajectory` — supplies per-month surplus pool + unallocated. */
   netWorthProjection: MonthlyNetWorth[];
+  /**
+   * Which stack keeps full color on the chart (null = all vivid). Controlled by the parent so the
+   * goal list and legend can stay in sync.
+   */
+  focusedGoal: string | null;
+  onFocusedGoalChange: (goalName: string | null) => void;
 }) {
   const names = projections.map((p) => p.goal_name);
 
   const [cadence, setCadence] = useState<Cadence>("monthly");
   const [stackMode, setStackMode] = useState<StackMode>("absolute");
 
-  /**
-   * When set, only that goal keeps its chart color; other stacks use DIM_SERIES_COLOR.
-   * Click the same legend row again to clear (show all colors).
-   */
-  const [focusedGoal, setFocusedGoal] = useState<string | null>(null);
-
   /** Goal names plus the unallocated stack — legend focus can isolate any of these. */
   const validFocusKeys = useMemo(
     () =>
-      new Set([...projections.map((p) => p.goal_name), UNALLOCATED_SERIES]),
+      new Set([...projections.map((p) => p.goal_name), UNALLOCATED_SURPLUS_SERIES_NAME]),
     [projections],
   );
 
   useEffect(() => {
     if (focusedGoal && !validFocusKeys.has(focusedGoal)) {
-      setFocusedGoal(null);
+      onFocusedGoalChange(null);
     }
-  }, [focusedGoal, validFocusKeys]);
+  }, [focusedGoal, validFocusKeys, onFocusedGoalChange]);
 
   const inrRows = useMemo(() => {
     if (!projections.length) return [];
@@ -408,7 +410,7 @@ export function SurplusWaterfall({
                           className="inline-flex max-w-[200px] items-center gap-1.5 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/50"
                           style={{ opacity: isDimmed ? 0.55 : 1 }}
                           onClick={() =>
-                            setFocusedGoal((prev) => (prev === key ? null : key))
+                            onFocusedGoalChange(focusedGoal === key ? null : key)
                           }
                           title={
                             focusedGoal === key
@@ -456,23 +458,23 @@ export function SurplusWaterfall({
             })}
             {/* Top of stack: surplus not assigned to goals (same series as tooltip / engine `unallocated_surplus`). */}
             <Area
-              key={UNALLOCATED_SERIES}
+              key={UNALLOCATED_SURPLUS_SERIES_NAME}
               type="monotone"
-              name={UNALLOCATED_SERIES}
-              dataKey={UNALLOCATED_SERIES}
+              name={UNALLOCATED_SURPLUS_SERIES_NAME}
+              dataKey={UNALLOCATED_SURPLUS_SERIES_NAME}
               stackId="1"
               stroke={
-                focusedGoal === null || focusedGoal === UNALLOCATED_SERIES
+                focusedGoal === null || focusedGoal === UNALLOCATED_SURPLUS_SERIES_NAME
                   ? UNALLOCATED_STROKE
                   : DIM_SERIES_COLOR
               }
               fill={
-                focusedGoal === null || focusedGoal === UNALLOCATED_SERIES
+                focusedGoal === null || focusedGoal === UNALLOCATED_SURPLUS_SERIES_NAME
                   ? UNALLOCATED_FILL
                   : DIM_SERIES_COLOR
               }
               fillOpacity={
-                focusedGoal === null || focusedGoal === UNALLOCATED_SERIES
+                focusedGoal === null || focusedGoal === UNALLOCATED_SURPLUS_SERIES_NAME
                   ? 0.65
                   : 0.28
               }

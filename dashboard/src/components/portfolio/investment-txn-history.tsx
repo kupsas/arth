@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/table";
 import { useHoldings, useInvestmentTransactions } from "@/hooks/use-portfolio";
 import type { InvestmentLedgerTxnType, InvestmentTxn } from "@/lib/types";
+import { sanitizeHtmlDateInputValue } from "@/lib/onboarding-input-validation";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 
 const PAGE_SIZE = 30;
@@ -339,18 +340,38 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
             <Label className="text-[10px] text-muted-foreground">From</Label>
             <Input
               type="date"
+              min="1900-01-01"
+              max="9999-12-31"
               className="h-8 w-[11rem]"
               value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === "") {
+                  setDateFrom("");
+                  return;
+                }
+                const v = sanitizeHtmlDateInputValue(raw);
+                if (v != null) setDateFrom(v);
+              }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-[10px] text-muted-foreground">To</Label>
             <Input
               type="date"
+              min="1900-01-01"
+              max="9999-12-31"
               className="h-8 w-[11rem]"
               value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === "") {
+                  setDateTo("");
+                  return;
+                }
+                const v = sanitizeHtmlDateInputValue(raw);
+                if (v != null) setDateTo(v);
+              }}
             />
           </div>
         </div>
@@ -399,7 +420,7 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
           <p className="text-xs text-muted-foreground">
             Page {page} of {totalPages}
             {data?.total != null
-              ? ` · ${data.total.toLocaleString()} total`
+              ? ` · ${data.total.toLocaleString("en-IN")} total`
               : ""}
           </p>
           <div className="flex gap-2">

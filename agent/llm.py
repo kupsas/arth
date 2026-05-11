@@ -119,6 +119,33 @@ def _api_key_for_litellm_model(model: str) -> str | None:
     return None
 
 
+def _agent_model_chain(model: str | None, fallback_chain: list[str] | None) -> list[str]:
+    """Primary model plus fallbacks (deduped), same order as :func:`chat_completion` uses."""
+    primary = model or cfg.AGENT_MODEL
+    tail = cfg.AGENT_FALLBACK_CHAIN if fallback_chain is None else fallback_chain
+    return [primary] + [x for x in tail if x != primary]
+
+
+def _first_chain_model_with_api_key(chain: list[str]) -> str | None:
+    """First chain entry that has a configured agent API key (skips entries without keys)."""
+    for cand in chain:
+        if not _model_expects_agent_api_key(cand):
+            continue
+        if _api_key_for_litellm_model(cand):
+            return cand
+    return None
+
+
+def _no_usable_agent_model_error(chain: list[str]) -> RuntimeError:
+    return RuntimeError(
+        f"No API key is configured for any model in your agent chain (tried {chain!r}). "
+        f"Primary is {chain[0]!r} — Gemini-style ids need GOOGLE_API_KEY_FOR_SINGLE_AGENT; "
+        "Anthropic needs ANTHROPIC_API_KEY_FOR_SINGLE_AGENT; OpenAI needs OPENAI_API_KEY_FOR_SINGLE_AGENT. "
+        "Set the key for at least one provider in the chain, or change AGENT_MODEL / AGENT_FALLBACK_CHAIN "
+        "in the repo root .env (or Ask Arth Settings)."
+    )
+
+
 def _provider_slug_for_litellm_model(model: str) -> str:
     """Map a LiteLLM model id to a stable provider key for user-facing copy."""
     m = model.strip().lower()
@@ -252,9 +279,7 @@ async def chat_completion(
     mtok = cfg.MAX_OUTPUT_TOKENS if max_tokens is None else int(max_tokens)
     tout = cfg.LLM_REQUEST_TIMEOUT if timeout is None else float(timeout)
 
-    primary = model or cfg.AGENT_MODEL
-    tail = cfg.AGENT_FALLBACK_CHAIN if fallback_chain is None else fallback_chain
-    chain = [primary] + [m for m in tail if m != primary]
+    chain = _agent_model_chain(model, fallback_chain)
 
     api_messages = messages_for_llm(messages)
     last_err: Exception | None = None
@@ -267,15 +292,22 @@ async def chat_completion(
             "max_tokens": mtok,
             "timeout": tout,
         }
+        if _model_expects_agent_api_key(m) and not _api_key_for_litellm_model(m):
+            logger.warning(
+                "Skipping model %r — no API key for this provider; trying next in fallback chain",
+                m,
+            )
+            failures.append(
+                ProviderFailure(
+                    _provider_slug_for_litellm_model(m),
+                    "auth",
+                    f"No API key configured for {m!r}.",
+                )
+            )
+            continue
         ak = _api_key_for_litellm_model(m)
         if ak:
             kwargs["api_key"] = ak
-        elif _model_expects_agent_api_key(m):
-            raise RuntimeError(
-                f"Agent model {m!r} needs an API key. Set one of "
-                "OPENAI_API_KEY_FOR_SINGLE_AGENT, ANTHROPIC_API_KEY_FOR_SINGLE_AGENT, "
-                "GOOGLE_API_KEY_FOR_SINGLE_AGENT in the root .env (separate from classification keys)."
-            )
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
@@ -308,8 +340,11 @@ async def chat_completion(
             last_err = e
             failures.append(_classify_litellm_error(e, m))
             logger.warning("LLM call failed for model=%s: %s — trying fallback", m, e)
-    assert last_err is not None
-    raise AgentPausedError(failures)
+    if last_err is not None:
+        raise AgentPausedError(failures)
+    if failures:
+        raise AgentPausedError(failures)
+    raise _no_usable_agent_model_error(chain)
 
 
 # --- Streaming (final assistant text only; see ``agent.core``) ----------------
@@ -453,9 +488,9 @@ async def streaming_chat_completion(
     """
     Stream one chat completion; invoke ``on_text_delta`` for each safe text slice.
 
-    Same kwargs shape as :func:`chat_completion`. Uses only the **primary** model
-    from the chain (no streaming fallback chain) — callers that need fallbacks should
-    catch exceptions and call :func:`chat_completion` without streaming.
+    Picks the **first** model in the agent chain (primary + fallbacks) that has a
+    configured API key, so a Gemini primary with only an Anthropic key still streams
+    via the Anthropic fallback — matching :func:`chat_completion` behaviour.
 
     If the model streams tool-call deltas, we stop emitting text immediately, drain
     the stream, and return the reconstructed full response (same shape as non-stream)
@@ -473,10 +508,16 @@ async def streaming_chat_completion(
     temp = cfg.AGENT_TEMPERATURE if temperature is None else float(temperature)
     mtok = cfg.MAX_OUTPUT_TOKENS if max_tokens is None else int(max_tokens)
     tout = cfg.LLM_REQUEST_TIMEOUT if timeout is None else float(timeout)
-    primary = model or cfg.AGENT_MODEL
-    tail = cfg.AGENT_FALLBACK_CHAIN if fallback_chain is None else fallback_chain
-    chain = [primary] + [m for m in tail if m != primary]
-    m = chain[0]
+    chain = _agent_model_chain(model, fallback_chain)
+    m = _first_chain_model_with_api_key(chain)
+    if m is None:
+        raise _no_usable_agent_model_error(chain)
+    if m != chain[0]:
+        logger.info(
+            "Streaming with model %r (first chain entry with a key; primary %r skipped)",
+            m,
+            chain[0],
+        )
     api_messages = messages_for_llm(messages)
 
     kwargs: dict[str, Any] = {
@@ -493,12 +534,6 @@ async def streaming_chat_completion(
     ak = _api_key_for_litellm_model(m)
     if ak:
         kwargs["api_key"] = ak
-    elif _model_expects_agent_api_key(m):
-        raise RuntimeError(
-            f"Agent model {m!r} needs an API key. Set one of "
-            "OPENAI_API_KEY_FOR_SINGLE_AGENT, ANTHROPIC_API_KEY_FOR_SINGLE_AGENT, "
-            "GOOGLE_API_KEY_FOR_SINGLE_AGENT in the root .env (separate from classification keys)."
-        )
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"

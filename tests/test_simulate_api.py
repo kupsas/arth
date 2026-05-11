@@ -156,3 +156,44 @@ def test_post_from_current_with_seed(client: TestClient, session: Session) -> No
     assert payload["meta"]["user_id"] == "test_user"
     assert payload["meta"]["active_goals_loaded"] == 1
     assert len(payload["result"]["projections"]) >= 1
+    # Seed DB has no recurring income → computed surplus is ≤ 0; sandbox defaults to ₹1.5L/mo.
+    assert payload["params"]["monthly_surplus"] == 150_000.0
+
+
+def test_put_sandbox_preferences_overrides_from_current_surplus(
+    client: TestClient, session: Session
+) -> None:
+    session.add(
+        Goal(
+            name="API sim goal",
+            goal_type="SAVINGS",
+            goal_class="POINT_IN_TIME",
+            user_id="test_user",
+            pyramid_id="SIM2",
+            target_amount=500_000.0,
+            target_date=datetime.date(2032, 1, 1),
+            activation_status="ACTIVE",
+            allocation_priority=1,
+            expected_return_rate=10.0,
+        )
+    )
+    session.commit()
+
+    r_put = client.put(
+        "/api/simulate/sandbox-preferences",
+        json={
+            "monthly_surplus": 200_000.0,
+            "salary_growth_rate": 7.5,
+            "general_inflation_rate": 5.25,
+        },
+    )
+    assert r_put.status_code == 200
+    assert r_put.json() == {"ok": True}
+
+    r = client.post("/api/simulate/from-current", json={})
+    assert r.status_code == 200
+    p = r.json()["params"]
+    assert p["monthly_surplus"] == 200_000.0
+    assert p["salary_growth_rate"] == 7.5
+    assert p["general_inflation_rate"] == 5.25
+    assert r.json()["meta"].get("sandbox_saved_macros_applied") is True

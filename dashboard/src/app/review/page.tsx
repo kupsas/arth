@@ -90,7 +90,7 @@ export default function ReviewPage() {
         <div>
           <h1 className="text-xl font-semibold">Review</h1>
           <p className="text-sm text-muted-foreground">
-            Approve or tweak labels before they shape your Home charts and trends.
+            Approve or tweak labels before they shape your Expense Trends charts and trends.
           </p>
         </div>
       </div>
@@ -195,7 +195,7 @@ function BankTransactionReviewTab() {
           <span className="text-sm text-muted-foreground">
             {totalUnreviewed === 0
               ? "All caught up!"
-              : `${totalUnreviewed.toLocaleString()} unreviewed transaction${totalUnreviewed !== 1 ? "s" : ""} remaining`}
+              : `${totalUnreviewed.toLocaleString("en-IN")} unreviewed transaction${totalUnreviewed !== 1 ? "s" : ""} remaining`}
           </span>
           {skippedIds.size > 0 && (
             <button
@@ -394,7 +394,7 @@ function InvestmentTransactionReviewTab({ userId }: { userId: string | null }) {
           <span className="text-sm text-muted-foreground">
             {totalUnreviewed === 0
               ? "All caught up!"
-              : `${totalUnreviewed.toLocaleString()} unreviewed investment transaction${totalUnreviewed !== 1 ? "s" : ""} remaining`}
+              : `${totalUnreviewed.toLocaleString("en-IN")} unreviewed investment transaction${totalUnreviewed !== 1 ? "s" : ""} remaining`}
           </span>
           {skippedIds.size > 0 && (
             <button

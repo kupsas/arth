@@ -20,6 +20,7 @@ import {
 } from "@/lib/onboarding-input-validation";
 import { simulationHorizonEndYearLabel } from "@/lib/simulation-horizon";
 import type { SimulationParams } from "@/lib/types";
+import { formatInrMoneyInput, parseInrMoneyInput } from "@/lib/utils";
 
 /** Default salary growth when the server omits the field (matches API SimulationParams default). */
 const DEFAULT_SALARY_GROWTH_PCT = 5;
@@ -60,6 +61,8 @@ function MacroParamBlock({
   formatRangeMax,
   inputSuffix,
   inputMode,
+  /** Plain `type="number"` cannot show Indian grouping; use text + grouped rupees for surplus. */
+  rupeeTextField,
 }: {
   label: string;
   value: number;
@@ -72,22 +75,52 @@ function MacroParamBlock({
   formatRangeMax: () => string;
   inputSuffix?: string;
   inputMode?: "decimal" | "numeric";
+  rupeeTextField?: boolean;
 }) {
+  /**
+   * `localDraft` holds what the user is actively typing as a raw string.
+   * While it's non-null the input shows the draft; on blur we parse + commit + clear it.
+   * This prevents every keystroke from snapping to the nearest step (e.g. typing "1"
+   * toward "10" was immediately clamped to 1000 for the surplus field).
+   */
+  const [localDraft, setLocalDraft] = React.useState<string | null>(null);
   const [parseErr, setParseErr] = React.useState<string | null>(null);
 
-  const handleInputChange = (raw: string) => {
-    const t = raw.trim();
-    if (t === "" || t === "-") {
-      setParseErr(null);
-      return;
-    }
-    const parsed = parseGoalDecimalString(raw);
-    if (parsed === null) {
-      setParseErr(SIMULATION_INVALID_DECIMAL_MESSAGE);
-      return;
-    }
+  // When the committed value changes from outside (e.g. Reset), clear any stale draft.
+  React.useEffect(() => {
+    setLocalDraft(null);
     setParseErr(null);
+  }, [value]);
+
+  const safeVal = Number.isFinite(value) ? value : min;
+
+  /** What the <input> actually shows: the live draft while typing, the prop value otherwise. */
+  const displayValue =
+    localDraft !== null
+      ? localDraft
+      : rupeeTextField
+        ? formatInrMoneyInput(safeVal)
+        : safeVal;
+
+  const handleChange = (raw: string) => {
+    setLocalDraft(raw);
+    // Show a parse error inline while typing, but don't commit yet.
+    const t = raw.trim();
+    if (t === "" || t === "-") { setParseErr(null); return; }
+    const parsed = rupeeTextField ? parseInrMoneyInput(t) : parseGoalDecimalString(t);
+    setParseErr(parsed === null ? SIMULATION_INVALID_DECIMAL_MESSAGE : null);
+  };
+
+  const handleBlur = () => {
+    setParseErr(null);
+    if (localDraft === null) return;
+    const t = localDraft.trim();
+    // Empty / sign-only: revert to current prop value.
+    if (t === "" || t === "-") { setLocalDraft(null); return; }
+    const parsed = rupeeTextField ? parseInrMoneyInput(t) : parseGoalDecimalString(t);
+    if (parsed === null) { setLocalDraft(null); return; }
     onCommit(clamp(snapToStep(parsed, step), min, max));
+    setLocalDraft(null);
   };
 
   return (
@@ -98,16 +131,14 @@ function MacroParamBlock({
       <div className="relative w-full">
         <Input
           id={inputId}
-          type="number"
-          min={min}
-          max={max}
-          step={step}
+          type={rupeeTextField ? "text" : "number"}
+          {...(rupeeTextField ? {} : { min, max, step })}
           inputMode={inputMode}
-          value={Number.isFinite(value) ? value : min}
+          value={displayValue}
           aria-invalid={!!parseErr}
           aria-describedby={parseErr ? `${inputId}-err ${inputId}-range` : `${inputId}-range`}
-          onChange={(e) => handleInputChange(e.target.value)}
-          onBlur={() => setParseErr(null)}
+          onChange={(e) => handleChange(e.target.value)}
+          onBlur={handleBlur}
           className="h-8 pr-9 text-right font-mono text-sm tabular-nums"
         />
         {inputSuffix ? (
@@ -150,26 +181,27 @@ export function SliderPanel({
   const horizonYearLabel = simulationHorizonEndYearLabel(draft.goals, draft.as_of_date);
 
   return (
-    <Card>
-      <CardContent className="space-y-4 pb-4 pt-4">
-        {/* Read-only horizon — latest point-in-time / growth target year + 2 calendar years. */}
-        <div className="flex flex-col gap-1 border-b border-border pb-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm font-medium leading-snug">Simulation horizon</p>
-          <p className="text-sm text-muted-foreground">
-            <span className="font-mono font-medium text-foreground">
+    <Card className="h-full">
+      <CardContent className="flex h-full flex-col gap-4 pb-4 pt-4">
+        {/* Read-only horizon */}
+        <div className="border-b border-border pb-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Simulation horizon
+          </p>
+          <p className="mt-0.5 text-sm">
+            <span className="font-mono font-semibold text-foreground">
               {simMonths.toLocaleString("en-IN")}
             </span>{" "}
             months
-            {horizonYearLabel == null ? (
-              <span>
-                {" "}
-                (add a point-in-time or growth goal with a target date to tie this to your plan)
-              </span>
-            ) : null}
           </p>
+          {horizonYearLabel == null ? (
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              Add a goal with a target date to tie this to your plan.
+            </p>
+          ) : null}
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:gap-5">
+        <div className="grid grid-cols-1 gap-4">
           <MacroParamBlock
             label="Monthly surplus"
             value={draft.monthly_surplus}
@@ -179,6 +211,7 @@ export function SliderPanel({
             inputId="sim-monthly-surplus"
             inputSuffix="/ mo"
             inputMode="numeric"
+            rupeeTextField
             formatRangeMin={() => "₹0 / mo"}
             formatRangeMax={() =>
               `₹${(SIMULATION_MONTHLY_SURPLUS_MAX_INR / 100_000).toLocaleString("en-IN", { maximumFractionDigits: 0 })} lakh / mo`
@@ -212,6 +245,9 @@ export function SliderPanel({
             onCommit={(v) => onChange("general_inflation_rate", v)}
           />
         </div>
+
+        {/* Spacer so the card fills its column height and the inputs sit at the top */}
+        <div className="flex-1" />
       </CardContent>
     </Card>
   );

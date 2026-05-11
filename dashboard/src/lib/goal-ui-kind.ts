@@ -23,10 +23,11 @@ export type GoalUiKind =
   | "RECURRING_CASH_FLOW"
   | "EXPENSE_LIMIT"
 
+/** User-facing only — never show enum / API names like POINT_IN_TIME in UI copy. */
 export const GOAL_UI_KIND_LABELS: Record<GoalUiKind, string> = {
-  POINT_IN_TIME: "Big one-time target (home, corpus, etc.)",
-  RECURRING_CASH_FLOW: "Repeating cash flow (EMI, rent…)",
-  EXPENSE_LIMIT: "Spend cap (budget)",
+  POINT_IN_TIME: "Hit a lump sum by a date (home, trip, corpus…)",
+  RECURRING_CASH_FLOW: "Same payment on repeat (EMI, rent, fees…)",
+  EXPENSE_LIMIT: "Keep spending under a cap",
 }
 
 /** Form state for Add Goal — keeps UI fields separate from API until submit. */

@@ -182,7 +182,7 @@ export function explainGoalTargetMoney(opts: {
     months > 0 && eff > 0 && nominalAtDate > rawTarget + EPS
   const emphasizeLongHorizon = showNominalFutureLine && months > LONG_HORIZON_MONTHS
 
-  const formattedDeadline = end.toLocaleDateString(undefined, {
+  const formattedDeadline = end.toLocaleDateString("en-IN", {
     year: "numeric",
     month: "short",
     day: "numeric",

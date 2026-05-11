@@ -22,7 +22,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import {
-  ClipboardList,
   LayoutDashboard,
   ArrowLeftRight,
   Wallet,
@@ -30,8 +29,7 @@ import {
   PieChart,
   Settings,
   LineChart,
-  Tags,
-  MessageCircle,
+  Home,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -40,13 +38,13 @@ import { cn } from "@/lib/utils";
 const NAV_ITEMS = [
   {
     label: "Home",
-    href: "/",
-    icon: LayoutDashboard,
+    href: "/chat",
+    icon: Home,
   },
   {
-    label: "Ask Arth",
-    href: "/chat",
-    icon: MessageCircle,
+    label: "Expense Trends",
+    href: "/expense-trends",
+    icon: LayoutDashboard,
   },
   {
     label: "Transactions",
@@ -69,16 +67,6 @@ const NAV_ITEMS = [
     icon: PieChart,
   },
   {
-    label: "Review",
-    href: "/review",
-    icon: ClipboardList,
-  },
-  {
-    label: "Sorting rules",
-    href: "/classification-rules",
-    icon: Tags,
-  },
-  {
     label: "Settings",
     href: "/settings",
     icon: Settings,
@@ -86,7 +74,7 @@ const NAV_ITEMS = [
 ] as const;
 
 export function Sidebar() {
-  // usePathname gives us the current URL path (e.g. "/" or "/transactions")
+  // usePathname gives us the current URL path (e.g. "/expense-trends" or "/transactions")
   const pathname = usePathname();
 
   return (
@@ -106,10 +94,9 @@ export function Sidebar() {
       <nav className="flex flex-1 flex-col gap-1 p-2">
         {NAV_ITEMS.map(({ label, href, icon: Icon }) => {
           // A link is "active" if the current path matches its href.
-          // Special case for "/" (dashboard): only exact match, so
-          // "/transactions" doesn't accidentally highlight Dashboard too.
-          const isActive =
-            href === "/" ? pathname === "/" : pathname.startsWith(href);
+          // Exact match for root-like paths so /expense-trends does not highlight /e.g.
+          const isExact = href === "/chat" || href === "/expense-trends";
+          const isActive = isExact ? pathname === href : pathname.startsWith(href);
 
           return (
             <Link

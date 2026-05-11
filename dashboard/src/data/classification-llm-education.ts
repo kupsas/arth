@@ -23,7 +23,8 @@ export const ONBOARDING_INDICATIVE_CLOUD_ROWS_PER_1000 = 10;
 export const ONBOARDING_PRIMARY_COST_USD_PER_100 = 0.00249375 * (100 / 20);
 
 export function formatUsd(n: number, digits = 4): string {
-  return new Intl.NumberFormat("en-US", {
+  // Use en-IN so digit grouping matches the rest of the app (Indian notation).
+  return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: digits,

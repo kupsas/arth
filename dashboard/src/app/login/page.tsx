@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 function LoginRedirectInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("from") ?? "/";
+  const redirectTo = searchParams.get("from") ?? "/chat";
 
   useEffect(() => {
     router.replace(redirectTo);

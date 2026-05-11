@@ -9,15 +9,16 @@
  */
 
 import * as React from "react"
+import Link from "next/link"
 import { useQueryClient } from "@tanstack/react-query"
-import { Download, Link2, Pencil, Trash2 } from "lucide-react"
+import { Download, Link2, Pencil, Tags, Trash2 } from "lucide-react"
 
 import { UploadButton } from "@/components/dashboard/upload-button"
 import { OnboardingOptionalLlmKeys } from "@/components/onboarding/onboarding-optional-llm-keys"
 import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard"
 import { AgentChatLlmSettings } from "@/components/settings/agent-chat-llm-settings"
 import { ReminderExamplePicker } from "@/components/settings/reminder-example-picker"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -59,7 +60,7 @@ import {
 import { ApiError, deriveReminderAnchors, downloadDiagnosticsLogsArchive } from "@/lib/api"
 import { COUNTERPARTY_CATEGORY_OPTIONS } from "@/lib/counterparty-categories"
 import type { Reminder } from "@/lib/types"
-import { formatCurrency } from "@/lib/utils"
+import { cn, formatCurrency, formatInrMoneyInput, parseInrMoneyInput, reformatInrMoneyTyping } from "@/lib/utils"
 
 /** Split user comma-separated match text into anchor strings for the API. */
 function parseAnchorInput(text: string): string[] {
@@ -109,7 +110,7 @@ export default function SettingsPage() {
     }
     setEditName(editing.name)
     setEditDueDay(String(editing.due_day_of_month))
-    setEditAmount(editing.amount != null ? String(editing.amount) : "")
+    setEditAmount(editing.amount != null ? formatInrMoneyInput(editing.amount) : "")
     setEditCategory(editing.counterparty_category ?? "_none")
     setEditExampleIds([...editing.example_transaction_ids])
     setEditAnchorText(editing.description_match_anchors.join(", "))
@@ -165,7 +166,10 @@ export default function SettingsPage() {
       await createMut.mutateAsync({
         name: name.trim(),
         due_day_of_month: day,
-        amount: amount ? parseFloat(amount) : undefined,
+        amount:
+          amount.trim() === ""
+            ? undefined
+            : (parseInrMoneyInput(amount) ?? undefined),
         counterparty_category: category === "_none" ? undefined : category,
         example_transaction_ids:
           createExampleIds.length > 0 ? createExampleIds : undefined,
@@ -195,7 +199,10 @@ export default function SettingsPage() {
         body: {
           name: editName.trim(),
           due_day_of_month: day,
-          amount: editAmount ? parseFloat(editAmount) : null,
+          amount:
+            editAmount.trim() === ""
+              ? null
+              : (parseInrMoneyInput(editAmount) ?? null),
           counterparty_category:
             editCategory === "_none" ? null : editCategory,
           example_transaction_ids: editExampleIds,
@@ -342,10 +349,29 @@ export default function SettingsPage() {
                 </li>
               )}
               <li className="text-xs text-muted-foreground pt-2">
-                Based on {classificationStats.data.total_transactions.toLocaleString()} total rows.
+                Based on {classificationStats.data.total_transactions.toLocaleString("en-IN")} total rows.
               </li>
             </ul>
           )}
+          {/* Same destination as the old sidebar link — full sorting-rules UI lives on its own route.
+              Styled Link (not Button asChild): Base UI Button forwards `asChild` onto children,
+              and Next.js Link passes unknown props to `<a>`, which triggers a React warning. */}
+          <div className="mt-4 border-t border-border pt-4">
+            <Link
+              href="/classification-rules"
+              className={cn(
+                buttonVariants({ variant: "secondary", size: "default" }),
+                "gap-2 w-full sm:w-auto",
+              )}
+            >
+              <Tags className="size-4" aria-hidden />
+              Sorting rules
+            </Link>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Open the screen where you edit how transactions get categories and labels — built-in
+              rules, smart labels, and your own tweaks.
+            </p>
+          </div>
         </CardContent>
       </Card>
 
@@ -398,11 +424,13 @@ export default function SettingsPage() {
                 <Label htmlFor="r-amt">Expected amount (optional)</Label>
                 <Input
                   id="r-amt"
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  className="tabular-nums"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="₹"
+                  onChange={(e) => setAmount(reformatInrMoneyTyping(e.target.value))}
+                  placeholder="e.g. 25,000"
                 />
               </div>
               <div className="space-y-1.5 sm:col-span-2">
@@ -561,10 +589,13 @@ export default function SettingsPage() {
                 <Label htmlFor="e-amt">Expected amount (optional)</Label>
                 <Input
                   id="e-amt"
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  className="tabular-nums"
                   value={editAmount}
-                  onChange={(e) => setEditAmount(e.target.value)}
+                  onChange={(e) => setEditAmount(reformatInrMoneyTyping(e.target.value))}
+                  placeholder="e.g. 25,000"
                 />
               </div>
               <div className="space-y-1.5">

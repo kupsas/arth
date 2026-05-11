@@ -57,6 +57,38 @@ export function categoryLabelForInflationKey(category: string | null | undefined
   return CATEGORY_LABELS[category] ?? category.replace(/_/g, " ").toLowerCase()
 }
 
+/** Short name for each subtype — keep in sync with goal creation / edit pickers. */
+const SUBTYPE_DISPLAY_NAME: Record<string, string> = {
+  LOAN_PAYOFF: "Loan payoff",
+  HOME_PURCHASE: "Home purchase",
+  VEHICLE: "Vehicle",
+  RETIREMENT: "Retirement",
+  CHILD_EDUCATION: "Child education",
+  EMERGENCY_FUND: "Emergency fund",
+  WEDDING: "Wedding",
+  TRAVEL: "Travel",
+  CUSTOM: "General / custom",
+}
+
+/**
+ * One line for the inflation-category dropdown: friendly name + default yearly %
+ * + what that % is trying to mirror, so people can tell options apart.
+ */
+export function inflationSelectLabelForSubtype(
+  goalSubtype: string | null | undefined,
+  headlineCpiEma: number,
+): string {
+  const st = (goalSubtype || "CUSTOM").trim().toUpperCase()
+  const short = SUBTYPE_DISPLAY_NAME[st] ?? st.replace(/_/g, " ").toLowerCase()
+  const p = previewInflationResolutionForForm(goalSubtype, headlineCpiEma)
+  if (!p) return short
+  if (p.method === "loan_zero") {
+    return `${short} — 0% a year (we keep the payoff number flat—no extra "price growth" on top)`
+  }
+  const pct = p.annual_pct.toFixed(1)
+  return `${short} — ~${pct}% a year (${p.label})`
+}
+
 /** Shape matches `InflationResolutionLike` in goal-target-money — for add-goal preview only. */
 export function previewInflationResolutionForForm(
   goalSubtype: string | null | undefined,

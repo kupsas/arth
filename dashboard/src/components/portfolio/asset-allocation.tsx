@@ -116,8 +116,8 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
               {byClass.length === 0 ? (
                 <Empty />
               ) : (
-                <div className="h-[260px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div className="h-[260px] w-full min-w-0">
+                  <ResponsiveContainer width="100%" height={260}>
                     <PieChart>
                       <Pie
                         data={byClass}
@@ -156,8 +156,8 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
               {liquidityBarData.length === 0 ? (
                 <Empty />
               ) : (
-                <div className="h-[260px] w-full pr-2">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div className="h-[260px] w-full min-w-0 pr-2">
+                  <ResponsiveContainer width="100%" height={260}>
                     <BarChart
                       layout="vertical"
                       data={liquidityBarData}
@@ -224,8 +224,8 @@ export function AssetAllocation({ userId }: AssetAllocationProps) {
               {byPlatform.length === 0 ? (
                 <Empty />
               ) : (
-                <div className="h-[260px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div className="h-[260px] w-full min-w-0">
+                  <ResponsiveContainer width="100%" height={260}>
                     <PieChart>
                       <Pie
                         data={byPlatform}

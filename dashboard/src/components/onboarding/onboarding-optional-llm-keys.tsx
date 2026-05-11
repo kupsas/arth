@@ -231,7 +231,7 @@ export function OnboardingOptionalLlmKeys() {
   return (
     <Card className="mx-auto w-full max-w-2xl">
       <CardHeader className="space-y-2">
-        <CardTitle>Add an AI key to continue</CardTitle>
+        <CardTitle>API Keys - Classifier</CardTitle>
         <CardDescription>
           Auto-labelling without an AI key is genuinely bad. Our built-in sorting rules handle
           clear cases, but messy merchant names and edge cases trip them up — badly. One key below

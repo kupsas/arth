@@ -2,7 +2,7 @@
  * api.ts — typed HTTP client for the Arth FastAPI backend.
  *
  * Architecture:
- *   - Two low-level helpers: get<T>() and patch<T>()
+ *   - Two low-level helpers: get<T>(), patch<T>(), and put<T>()
  *   - Typed functions on top that map to specific backend endpoints
  *   - All functions are async and return typed Promises
  *
@@ -215,6 +215,38 @@ async function patch<T>(
     const raw = await res.text().catch(() => res.statusText);
     throwApiHttpError(res.status, raw);
   }
+
+  return res.json() as Promise<T>;
+}
+
+/**
+ * Performs a PUT request with a JSON body and deserialises the response.
+ * Throws ApiError on non-2xx responses.
+ * Redirects to /login on 401.
+ */
+async function put<T>(
+  path: string,
+  body: unknown,
+  params?: QueryParams,
+): Promise<T> {
+  const res = await fetch(buildApiUrl(path, params), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
+
+  if (!res.ok) {
+    const raw = await res.text().catch(() => res.statusText);
+    throwApiHttpError(res.status, raw);
+  }
+
+  if (res.status === 204) return undefined as unknown as T;
 
   return res.json() as Promise<T>;
 }
@@ -624,6 +656,15 @@ export function fetchSimulateFromCurrent(body?: {
   as_of_date?: string | null;
 }): Promise<FromCurrentResponse> {
   return post<FromCurrentResponse>("/api/simulate/from-current", body ?? {});
+}
+
+/** PUT /api/simulate/sandbox-preferences — persist surplus + macro % sliders for simulate page. */
+export function putSimulationSandboxPreferences(body: {
+  monthly_surplus: number;
+  salary_growth_rate: number;
+  general_inflation_rate: number;
+}): Promise<{ ok: boolean }> {
+  return put<{ ok: boolean }>("/api/simulate/sandbox-preferences", body);
 }
 
 /** POST /api/simulate/compare — base vs scenario variants. */
@@ -1774,6 +1815,8 @@ export function postAgentKeys(body: {
   openai_api_key?: string;
   anthropic_api_key?: string;
   google_api_key?: string;
+  /** Copy saved auto-labelling keys into Ask Arth slots (server-side only). */
+  reuse_classifier_keys?: boolean;
 }): Promise<{ ok: boolean; keys_updated: string[] }> {
   return post("/api/settings/agent-keys", body);
 }

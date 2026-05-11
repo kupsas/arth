@@ -33,13 +33,51 @@ export function formatCurrency(amount: number, decimals = 0): string {
 }
 
 /**
- * Compact INR for tight spaces (chart axes, badges).
- * Indian convention: **lakhs (L)** from 1,00,000 upward — not "100k".
- * Below 1 lakh: thousands as **₹12k** (lowercase k, no Western "100k" for a lakh).
+ * Parse a rupee amount typed in a plain text field where the user may include
+ * Indian-style grouping commas (e.g. "15,00,000"). Empty or invalid → null.
+ */
+export function parseInrMoneyInput(s: string): number | null {
+  const normalized = s.trim().replace(/[\s,]/g, "")
+  if (normalized === "" || normalized === "." || normalized === "-") return null
+  const n = parseFloat(normalized)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Format a number for controlled rupee inputs: Indian grouping, no ₹ symbol.
+ * Whole rupees show without a decimal part; fractional amounts keep up to 2 decimals.
+ */
+export function formatInrMoneyInput(n: number): string {
+  const isInt = Math.abs(n % 1) < 1e-9
+  return new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: isInt ? 0 : 2,
+    minimumFractionDigits: 0,
+  }).format(n)
+}
+
+/**
+ * Use on `onChange` for goal-style rupee fields: normalize typing/paste to grouped text.
+ */
+export function reformatInrMoneyTyping(raw: string): string {
+  const n = parseInrMoneyInput(raw)
+  if (n === null) return ""
+  return formatInrMoneyInput(n)
+}
+
+/**
+ * Compact INR for tight spaces (chart axes, badges, simulation tooltips).
+ * - **Crores (Cr)** from ₹1 crore upward (1,00,00,000) — e.g. 8.38Cr not 838.3L.
+ * - **Lakhs (L)** from ₹1 lakh up to just below ₹1 crore.
+ * - Below ₹1 lakh: **₹12k**-style thousands (lowercase k), not Western “100k” for a lakh.
  */
 export function formatCurrencyCompact(amount: number): string {
   const n = Number(amount)
   const av = Math.abs(n)
+  if (av >= 1_00_00_000) {
+    const cr = n / 1_00_00_000
+    // Two decimals then trim trailing zeros (8.00 → 8, 8.30 → 8.3, 8.38 → 8.38).
+    return `₹${Number(cr.toFixed(2))}Cr`
+  }
   if (av >= 1_00_000) {
     const lakhs = n / 1_00_000
     return `₹${lakhs.toFixed(1).replace(/\.0$/, "")}L`
@@ -51,7 +89,7 @@ export function formatCurrencyCompact(amount: number): string {
 }
 
 /**
- * Same as formatCurrencyCompact — use in Recharts `tickFormatter` so axis rules stay consistent.
+ * Same rules as formatCurrencyCompact — use in Recharts `tickFormatter` / tooltips so INR stays consistent.
  */
 export function formatInrChartAxis(value: number): string {
   return formatCurrencyCompact(value)

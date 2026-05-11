@@ -101,10 +101,10 @@ async def _openai_moderation_flagged(text: str) -> bool | None:
     """
     Return True if OpenAI moderation flags the input, False if clean, None if skipped/error.
     """
-    if not cfg.AGENT_OPENAI_API_KEY.strip():
+    if not cfg.AGENT_MODERATION_API_KEY.strip():
         return None
     try:
-        client = AsyncOpenAI(api_key=cfg.AGENT_OPENAI_API_KEY)
+        client = AsyncOpenAI(api_key=cfg.AGENT_MODERATION_API_KEY)
         res = await client.moderations.create(input=text)
         results = getattr(res, "results", None) or []
         if not results:

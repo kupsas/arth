@@ -418,7 +418,7 @@ export function TransactionTable({
         {/* Left: row count info */}
         <p className="text-xs text-muted-foreground">
           {data
-            ? `${data.total.toLocaleString()} transaction${data.total !== 1 ? "s" : ""}`
+            ? `${data.total.toLocaleString("en-IN")} transaction${data.total !== 1 ? "s" : ""}`
             : "Loading…"}
         </p>
 

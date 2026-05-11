@@ -116,7 +116,7 @@ export function diffGlobalParams(base: SimulationParams, draft: SimulationParams
   const out: NamedChange[] = [];
   if (base.monthly_surplus !== draft.monthly_surplus) {
     out.push({
-      label: "Monthly surplus (sandbox)",
+      label: "Monthly surplus",
       from: fmt(base.monthly_surplus),
       to: fmt(draft.monthly_surplus),
     });
