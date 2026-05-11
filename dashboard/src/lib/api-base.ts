@@ -79,8 +79,14 @@ function _defaultLoopbackWsOrigin(): string {
   if (typeof window === "undefined") {
     return "ws://127.0.0.1:8000";
   }
+  const hostname = window.location.hostname;
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${scheme}://${window.location.hostname}:8000`;
+  // Local dev: FastAPI on a separate port. Production (behind Caddy/reverse proxy):
+  // WebSocket routes through the same origin on the standard port.
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${scheme}://${hostname}:8000`;
+  }
+  return `${scheme}://${hostname}`;
 }
 
 /**

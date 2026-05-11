@@ -1,0 +1,13 @@
+# Reverse proxy for the single-container demo on Fly.io.
+# Caddy listens on :3000 (Fly's internal_port) and fans out:
+#   /api/*  → FastAPI (handles REST + WebSocket upgrades)
+#   *       → Next.js (dashboard UI)
+
+:3000 {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3001
+	}
+}

@@ -13,16 +13,15 @@ import type {
 } from "@/lib/chat-types";
 import type { ProviderFailurePayload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 
 import { ChatPanel } from "./chat-panel";
 import { SessionSidebar } from "./session-sidebar";
 
-/** Three starter chips: two short prompts + one tier-2 eval question (see ``agent/evals/questions.yaml``, id ``t2_q14``). */
+/** Three starter chips for the Ask Arth landing — concrete, answerable prompts. */
 const LANDING_STARTERS = [
-  "How much I spent on food",
-  "Where am I spending",
-  "Which of my goals is most at risk right now?",
+  "How much did I spend on eating out vs. home groceries last month?",
+  "Can I afford a 50K vacation next month without hurting my goals?",
+  "What are my top 5 expense categories over the last year?",
 ];
 
 function ChatLanding({
@@ -186,15 +185,15 @@ function ChatLanding({
           </div>
         </div>
 
-        {/* Quick-fire starter chips */}
-        <div className="flex flex-wrap justify-center gap-2">
+        {/* Quick-fire starter chips — left-aligned so longer prompts read naturally */}
+        <div className="flex flex-wrap justify-start gap-2">
           {LANDING_STARTERS.map((q) => (
             <button
               key={q}
               type="button"
               disabled={!connectionOk || isGenerating}
               onClick={() => onSend(q)}
-              className="rounded-full border border-border bg-background px-4 py-1.5 text-sm text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              className="max-w-full rounded-full border border-border bg-background px-4 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
             >
               {q}
             </button>

@@ -1,6 +1,7 @@
-# Multi-stage image: Next.js production build + FastAPI + baked SQLite seed (`ARTH_DEMO_MODE`).
+# Multi-stage image: Caddy + Next.js + FastAPI + baked SQLite seed (`ARTH_DEMO_MODE`).
+# Caddy on :3000 reverse-proxies /api/* → FastAPI :8000, everything else → Next.js :3001.
 # Build: `docker build -f Dockerfile.demo -t arth-demo .`
-# Run:  `docker run --rm -p 3000:3000 -p 8000:8000 -e OPENAI_API_KEY=... arth-demo`
+# Run:  `docker run --rm -p 3000:3000 -e OPENAI_API_KEY=... arth-demo`
 
 FROM node:22-bookworm-slim AS web
 WORKDIR /build
@@ -16,9 +17,12 @@ RUN npm run build
 FROM python:3.13-slim-bookworm
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl debian-keyring debian-archive-keyring apt-transport-https \
+    && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
+    && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs caddy \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -26,6 +30,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+COPY Caddyfile.demo /etc/caddy/Caddyfile
 RUN chmod +x scripts/docker_demo_entrypoint.sh \
     && python3 scripts/generate_demo_seed.py
 
