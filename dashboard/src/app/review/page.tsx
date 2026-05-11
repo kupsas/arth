@@ -147,8 +147,12 @@ function BankTransactionReviewTab() {
   async function handleApprove(id: number) {
     setApprovingIds((prev) => new Set(prev).add(id));
     try {
-      await updateTransaction({ id, update: { is_reviewed: true } });
-      setSessionApproved((n) => n + 1);
+      const updated = await updateTransaction({
+        id,
+        update: { is_reviewed: true },
+      });
+      const also = updated.auto_approved_count ?? 0;
+      setSessionApproved((n) => n + 1 + also);
     } finally {
       setApprovingIds((prev) => {
         const next = new Set(prev);

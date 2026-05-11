@@ -127,6 +127,9 @@ export interface Transaction {
   exclusion_reason?: string | null;
   created_at: string;         // ISO datetime string
   updated_at: string;         // ISO datetime string
+
+  /** Only set on PATCH /api/transactions/:id — number of other rows approved together */
+  auto_approved_count?: number;
 }
 
 /**
@@ -142,6 +145,8 @@ export interface TransactionUpdate {
   is_reviewed?: boolean;
   exclude_from_analytics?: boolean;
   exclusion_reason?: string | null;
+  /** When true, save this merchant + category as your auto-label for similar alerts */
+  apply_to_future?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

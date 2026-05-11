@@ -337,6 +337,7 @@ export function fetchTransaction(id: number): Promise<Transaction> {
  * PATCH /api/transactions/:id
  * Updates user-editable fields on a single transaction.
  * Only send the fields you want to change — the rest are left untouched.
+ * Response may include `auto_approved_count` when approving clears similar rows from the queue.
  */
 export function updateTransaction(
   id: number,

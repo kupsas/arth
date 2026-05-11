@@ -17,8 +17,10 @@ accidentally match a statement row's hash.  Reconciliation handles that case
 explicitly via fuzzy matching on (account_id, amount, txn_date ± 1 day).
 
 source_type values:
-  "statement"  — default; inserted by the file-based pipeline
-  "email"      — inserted by the Gmail scraper (is_reviewed=False)
+  "statement"  — default; inserted by the file-based pipeline / uploads (is_reviewed=True)
+  "email"      — Gmail path; fully rule-labelled rows (merchant rules / contacts with both
+                 counterparty and category) enter as reviewed; LLM or incomplete labels stay
+                 unreviewed. Historical backfill / onboarding sets email_presumes_reviewed=True.
   "reconciled" — was email-sourced, then upgraded when matching statement arrived
 """
 
@@ -35,7 +37,7 @@ from api.models import PipelineRun, Transaction
 from api.services.account_user_map import user_id_for_account
 from api.services.goal_status_cache import invalidate_goal_status_cache
 from pipeline.models import CanonicalTransaction, ClassificationSource
-from pipeline.review_confidence import compute_review_confidence, should_auto_review_email
+from pipeline.review_confidence import compute_review_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +315,7 @@ def write_to_db(
     source_type: str = "statement",
     gmail_message_id: str | None = None,
     existing_run: PipelineRun | None = None,
+    email_presumes_reviewed: bool = False,
 ) -> PipelineRun:
     """Insert new transactions and backfill NULLs on existing ones.
 
@@ -329,6 +332,10 @@ def write_to_db(
         gmail_message_id:  The Gmail message ID that produced these transactions.
                            Only meaningful when source_type="email"; stored on each row
                            so we can trace a transaction back to its source email.
+        email_presumes_reviewed: When source_type="email", sets Transaction.is_reviewed.
+                           False (default) — live Gmail poll / interactive scrape: rows stay on
+                           the Review queue until approved. True — historical email backfill:
+                           treat rows as already reviewed (same spirit as statement uploads).
         existing_run:      A pre-created PipelineRun row to adopt instead of creating a
                            new one.  Used by API route handlers that need to return a run
                            ID to the caller before the background work begins.  When
@@ -391,7 +398,15 @@ def write_to_db(
         content_hash = compute_content_hash(txn)
 
         if content_hash in _batch_hashes:
-            session.flush()
+            # flush_and_commit() holds _SQLITE_WRITER_LOCK across flush+commit so there
+            # is no window where another thread can see an open write transaction (the gap
+            # between a plain flush() releasing the lock and the eventual commit() is long
+            # here — it spans the rest of this loop — which exhausts the busy_timeout).
+            _fac = getattr(session, "flush_and_commit", None)
+            if _fac is not None:
+                _fac()
+            else:
+                session.flush()
             row_user_id = user_id_for_account(txn.account_id, session)
             dup_existing = session.exec(
                 select(Transaction).where(
@@ -496,7 +511,23 @@ def write_to_db(
         # ── Path C: brand-new row ────────────────────────────────────────────
         review_conf = compute_review_confidence(txn)
         if source_type == "email":
-            reviewed = should_auto_review_email(review_conf)
+            # Historical / onboarding backfill: trust scraper flag (usually reviewed).
+            # Live Gmail: rule-based classification matches onboarding — nothing new to confirm.
+            # Anything else (LLM or missing fields) stays on the Review queue.
+            if email_presumes_reviewed:
+                reviewed = True
+            else:
+                src = txn.classification_source
+                rule_based = src in (
+                    ClassificationSource.RULES_USER,
+                    ClassificationSource.RULES_GENERIC,
+                )
+                # Same idea as onboarding: need a merchant label *and* category before we
+                # skip the queue (rules can still stamp channel/type without a counterparty).
+                has_merchant_and_cat = (
+                    txn.counterparty is not None and txn.counterparty_category is not None
+                )
+                reviewed = rule_based and has_merchant_and_cat
         else:
             reviewed = True
 
@@ -543,12 +574,9 @@ def write_to_db(
         if date_max is None or txn.txn_date > date_max:
             date_max = txn.txn_date
 
-    # Flush accumulated adds/updates so they are visible to the finalisation
-    # queries below (e.g. goal-cache invalidation).  With autoflush=False on
-    # SQLiteSerializingSession the session won't have written them yet.
-    session.flush()
-
-    # Finalise the pipeline run row.
+    # Finalise the pipeline run row BEFORE the flush so all changes land in one
+    # atomic write.  Setting these attributes here (not after flush) means they
+    # are included in the same flush call below.
     # We store reconciled_count inside updated_count so the existing API
     # response shape doesn't change — the field already means "rows that were
     # touched but not inserted fresh".
@@ -560,7 +588,17 @@ def write_to_db(
     run.status = "completed"
     run.completed_at = datetime.datetime.now(datetime.UTC)
 
-    session.commit()
+    # flush_and_commit() holds _SQLITE_WRITER_LOCK across flush+commit so there
+    # is no window where the write transaction is open without the Python lock.
+    # A plain flush() followed by commit() has a brief gap (lock released after
+    # flush, re-acquired for commit) where a concurrent thread can trigger
+    # ``database is locked``.
+    _fac = getattr(session, "flush_and_commit", None)
+    if _fac is not None:
+        _fac()
+    else:
+        session.flush()
+        session.commit()
     session.refresh(run)
     if affected_user_ids:
         try:
