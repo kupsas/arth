@@ -20,7 +20,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -359,6 +359,8 @@ class SettingsAgentApiKeyBody(BaseModel):
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
+    #: When true, copy saved auto-labelling keys (``*_FOR_CLASSIFIER``) into agent slots (server-side only).
+    reuse_classifier_keys: bool = False
 
 
 class SettingsAgentConfigBody(BaseModel):
@@ -406,6 +408,38 @@ def agent_keys_save(
             data = {}
 
     touched: list[str] = []
+    if body.reuse_classifier_keys:
+        # Match ``api.services.classifier_runtime._triplet_from_secrets_dict`` so we copy the same
+        # value the auto-labelling step actually uses (legacy keys may omit the ``_FOR_CLASSIFIER`` suffix).
+        def _classifier_openai(d: dict[str, str]) -> str:
+            return (
+                str(d.get("OPENAI_API_KEY_FOR_CLASSIFIER") or "").strip()
+                or str(d.get("OPENAI_API_KEY") or "").strip()
+            )
+
+        def _classifier_anthropic(d: dict[str, str]) -> str:
+            return (
+                str(d.get("ANTHROPIC_API_KEY_FOR_CLASSIFIER") or "").strip()
+                or str(d.get("ANTHROPIC_API_KEY") or "").strip()
+            )
+
+        def _classifier_google(d: dict[str, str]) -> str:
+            return (
+                str(d.get("GOOGLE_API_KEY_FOR_CLASSIFIER") or "").strip()
+                or str(d.get("GOOGLE_API_KEY") or "").strip()
+            )
+
+        _agent_from_classifier: tuple[tuple[str, Callable[[dict[str, str]], str]], ...] = (
+            ("OPENAI_API_KEY_FOR_SINGLE_AGENT", _classifier_openai),
+            ("ANTHROPIC_API_KEY_FOR_SINGLE_AGENT", _classifier_anthropic),
+            ("GOOGLE_API_KEY_FOR_SINGLE_AGENT", _classifier_google),
+        )
+        for dest, getter in _agent_from_classifier:
+            v = getter(data)
+            if v:
+                data[dest] = v
+                touched.append(dest)
+
     if body.openai_api_key is not None:
         v = body.openai_api_key.strip()
         if v:

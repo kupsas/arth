@@ -76,7 +76,7 @@ export function AssetAllocationDonut({ userId }: AssetAllocationDonutProps) {
           <div className="flex w-full flex-col items-center gap-4 sm:flex-row sm:items-start sm:gap-5">
             {/* Left: compact donut so the card stays short; legend uses the rest. */}
             <div className="h-[148px] w-[148px] shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height={148}>
                 <PieChart>
                   <Pie
                     data={pieData}

@@ -24,11 +24,13 @@ from sqlmodel import Session, col, select
 
 from api.models import Goal, GoalStatusCache, Holding, Transaction
 from api.routes.simulate import build_simulation_params_from_db
+from api.services.goal_decomposer import months_between
 from api.services.priority_scorer import _effective_goal_class
 from api.services.simulation import (
     GC_POINT,
     GC_RECURRING,
     GoalProjection,
+    _recurrence_period_months,
     simulate,
 )
 
@@ -54,7 +56,7 @@ def _slim_projection_dict(p: GoalProjection) -> dict[str, Any]:
 
 
 def _headline_percentage(goal_class: str, p: GoalProjection) -> float | None:
-    """Match dashboard semantics: PIT → projected_completion_pct; recurring → periods_met_pct."""
+    """Cache headline % for stale snapshots; API read path overrides PIT with user corpus ratio."""
     gc = goal_class.strip().upper()
     if gc == GC_RECURRING:
         return p.periods_met_pct
@@ -221,6 +223,72 @@ def get_cache_row(session: Session, goal_id: int) -> GoalStatusCache | None:
     return session.exec(select(GoalStatusCache).where(GoalStatusCache.goal_id == goal_id)).first()
 
 
+def _point_in_time_saved_amount(goal: Goal) -> float:
+    """Corpus from the goal row: inline Update progress (current_value) first, else starting_balance."""
+    if goal.current_value is not None:
+        return float(goal.current_value)
+    if goal.starting_balance is not None:
+        return float(goal.starting_balance)
+    return 0.0
+
+
+def _point_in_time_funding_pct(
+    goal: Goal,
+    status_data: dict[str, Any],
+    eff_class: str,
+) -> float | None:
+    """Already saved ÷ inflation-adjusted target at deadline × 100; ``None`` if not applicable."""
+    if eff_class != GC_POINT:
+        return None
+    saved = _point_in_time_saved_amount(goal)
+    infl_t = status_data.get("inflation_adjusted_target_at_deadline")
+    if infl_t is not None and float(infl_t) > 1e-9:
+        return (saved / float(infl_t)) * 100.0
+    raw = goal.target_amount
+    if raw is not None and float(raw) > 1e-9:
+        return (saved / float(raw)) * 100.0
+    return None
+
+
+def _recurring_timeline_pct(
+    goal: Goal,
+    today: datetime.date | None = None,
+) -> float | None:
+    """Elapsed billing periods ÷ scheduled periods from recurrence dates (calendar), not simulator."""
+    if goal.recurrence_start is None:
+        return None
+
+    td = (today or datetime.date.today()).replace(day=1)
+    anchor = goal.recurrence_start.replace(day=1)
+    pm = _recurrence_period_months(goal.recurrence_frequency)
+
+    end_m = goal.recurrence_end.replace(day=1) if goal.recurrence_end else None
+
+    if end_m is not None:
+        if td < anchor:
+            return 0.0
+        if end_m < anchor:
+            return 100.0
+
+        total_months_span = months_between(anchor, end_m) + 1
+        total_periods = max(1, (total_months_span + pm - 1) // pm)
+
+        if td >= end_m:
+            return 100.0
+
+        idx = months_between(anchor, td)
+        elapsed_periods = min(idx // pm, total_periods)
+        return min(100.0, 100.0 * elapsed_periods / total_periods)
+
+    # Open-ended "Until": wall-clock progress vs a 10-year horizon (no simulation contribution %).
+    REF_MONTHS = 120
+    if td < anchor:
+        return 0.0
+    cm = months_between(anchor, td)
+    cm_capped = min(cm, REF_MONTHS)
+    return min(100.0, 100.0 * cm_capped / REF_MONTHS)
+
+
 def progress_from_cache_or_naive(goal: Goal, session: Session) -> dict[str, Any]:
     """Build the ``compute_progress`` dict using the cache when fingerprint matches."""
     uid = goal.user_id
@@ -249,7 +317,18 @@ def progress_from_cache_or_naive(goal: Goal, session: Session) -> dict[str, Any]
         status_data = {}
 
     eff = (status_data.get("effective_goal_class") or row.goal_class or "").strip().upper()
+    if not eff:
+        eff = _effective_goal_class(goal)
+
+    pit_pct = _point_in_time_funding_pct(goal, status_data, eff)
     pct = float(row.percentage)
+    if eff == GC_POINT and pit_pct is not None:
+        pct = float(pit_pct)
+    elif eff == GC_RECURRING:
+        rec_tl = _recurring_timeline_pct(goal)
+        if rec_tl is not None:
+            pct = float(rec_tl)
+
     current_value = _current_value_from_status(status_data, eff, goal)
 
     out: dict[str, Any] = {
@@ -264,11 +343,13 @@ def progress_from_cache_or_naive(goal: Goal, session: Session) -> dict[str, Any]
 
 
 def _current_value_from_status(status_data: dict[str, Any], eff_class: str, goal: Goal) -> float:
-    """Pick a sensible 'current' scalar for the goals list (corpus at deadline vs contributed)."""
+    """Scalar shown as Spent / Saved on the goals list."""
     if eff_class == GC_RECURRING:
         tc = status_data.get("total_contributed")
         if tc is not None:
             return float(tc)
+    if eff_class == GC_POINT:
+        return _point_in_time_saved_amount(goal)
     cps = status_data.get("corpus_at_deadline")
     if cps is not None:
         return float(cps)
@@ -277,6 +358,31 @@ def _current_value_from_status(status_data: dict[str, Any], eff_class: str, goal
 
 def _naive_non_expense_progress(goal: Goal) -> dict[str, Any]:
     """Last-resort ratio when simulation or cache is unavailable (e.g. engine error)."""
+    eff = _effective_goal_class(goal)
+    if eff == GC_POINT:
+        saved = _point_in_time_saved_amount(goal)
+        target = float(goal.target_amount or 0.0)
+        pct = (saved / target) * 100.0 if target > 1e-9 else 0.0
+        return {
+            "current_value": round(saved, 2),
+            "target_amount": goal.target_amount,
+            "percentage": round(pct, 1),
+            "status_data": None,
+            "projected_completion_pct": None,
+            "periods_met_pct": None,
+        }
+    if eff == GC_RECURRING:
+        rp = _recurring_timeline_pct(goal)
+        if rp is not None:
+            cur = float(goal.current_value or 0.0)
+            return {
+                "current_value": round(cur, 2),
+                "target_amount": goal.target_amount,
+                "percentage": round(rp, 1),
+                "status_data": None,
+                "projected_completion_pct": None,
+                "periods_met_pct": None,
+            }
     current_value = float(goal.current_value or 0.0)
     target = float(goal.target_amount or 0.0)
     pct = (current_value / target) * 100.0 if target > 0 else 0.0

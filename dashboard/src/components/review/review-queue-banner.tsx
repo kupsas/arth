@@ -1,6 +1,6 @@
 /**
  * ReviewQueueBanner — amber call-to-action when bank and/or investment ledger
- * rows still need a quick check. Shown on Home and Holdings so you don't miss work.
+ * rows still need a quick check. Shown on Expense Trends and Holdings so you don't miss work.
  */
 
 "use client";
@@ -27,11 +27,11 @@ function ReviewQueueBannerCopy({
     return (
       <>
         <strong>
-          {tx.toLocaleString()} {tx === 1 ? "transaction" : "transactions"}
+          {tx.toLocaleString("en-IN")} {tx === 1 ? "transaction" : "transactions"}
         </strong>
         {" and "}
         <strong>
-          {inv.toLocaleString()} {inv === 1 ? "investment" : "investments"}
+          {inv.toLocaleString("en-IN")} {inv === 1 ? "investment" : "investments"}
         </strong>
         {" need review."}
       </>
@@ -42,7 +42,7 @@ function ReviewQueueBannerCopy({
     return (
       <>
         <strong>
-          {tx.toLocaleString()} {tx === 1 ? "transaction" : "transactions"}
+          {tx.toLocaleString("en-IN")} {tx === 1 ? "transaction" : "transactions"}
         </strong>
         {tx === 1 ? " needs" : " need"} review.
       </>
@@ -53,7 +53,7 @@ function ReviewQueueBannerCopy({
     return (
       <>
         <strong>
-          {inv.toLocaleString()} {inv === 1 ? "investment" : "investments"}
+          {inv.toLocaleString("en-IN")} {inv === 1 ? "investment" : "investments"}
         </strong>
         {inv === 1 ? " needs" : " need"} review.
       </>

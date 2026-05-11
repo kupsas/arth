@@ -53,9 +53,11 @@ import { useOnboardingGoalTemplates } from "@/hooks/use-onboarding-goal-template
 import { ApiError } from "@/lib/api"
 import {
   coerceFiniteNumber,
+  isValidCalendarIsoDate,
   parseGoalDecimalString,
+  sanitizeHtmlDateInputValue,
 } from "@/lib/onboarding-input-validation"
-import { cn, formatCurrency } from "@/lib/utils"
+import { cn, formatCurrency, formatInrMoneyInput, parseInrMoneyInput } from "@/lib/utils"
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 import type { OnboardingGoalTemplate, GoalCreate } from "@/lib/types"
 
@@ -77,15 +79,7 @@ function formatLocalYmd(d: Date): string {
 
 /** True for ``YYYY-MM-DD`` that parses to a real calendar date. */
 function isValidIsoDate(s: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s.trim())) return false
-  const [ys, ms, ds] = s.split("-").map((x) => parseInt(x, 10))
-  const t = new Date(ys, ms - 1, ds)
-  return (
-    !Number.isNaN(t.getTime()) &&
-    t.getFullYear() === ys &&
-    t.getMonth() === ms - 1 &&
-    t.getDate() === ds
-  )
+  return isValidCalendarIsoDate(s)
 }
 
 /**
@@ -462,16 +456,15 @@ export function GoalTemplateWizard() {
               </Label>
               <Input
                 id="amt"
-                type="number"
+                type="text"
                 inputMode="decimal"
-                min={1}
-                max={GOAL_WIZARD_AMOUNT_MAX}
-                step={1000}
+                autoComplete="off"
+                className="tabular-nums"
                 aria-invalid={!amountOk || !!amountParseErr}
                 aria-describedby={
                   !amountOk || amountParseErr ? "amt-hint amt-err" : "amt-hint"
                 }
-                value={draft.amount}
+                value={draft.amount > 0 ? formatInrMoneyInput(draft.amount) : ""}
                 onChange={(e) => {
                   const raw = e.target.value
                   if (raw.trim() === "") {
@@ -479,7 +472,7 @@ export function GoalTemplateWizard() {
                     setDraft((d) => ({ ...d, amount: 0 }))
                     return
                   }
-                  const n = parseGoalDecimalString(raw)
+                  const n = parseInrMoneyInput(raw)
                   if (n === null) {
                     setAmountParseErr(
                       "Use digits only (optional decimal point). Letters, scientific notation (e), and symbols are not accepted.",
@@ -510,6 +503,8 @@ export function GoalTemplateWizard() {
                 <Input
                   id="rec-start"
                   type="date"
+                  min="1900-01-01"
+                  max="9999-12-31"
                   className="block w-full max-w-xs"
                   value={
                     isValidIsoDate(draft.recurrence_start_iso)
@@ -517,8 +512,10 @@ export function GoalTemplateWizard() {
                       : todayIsoLocal()
                   }
                   onChange={(e) => {
-                    const v = e.target.value
-                    if (v && isValidIsoDate(v)) {
+                    const raw = e.target.value
+                    if (raw === "") return
+                    const v = sanitizeHtmlDateInputValue(raw)
+                    if (v != null) {
                       setDraft((d) => ({ ...d, recurrence_start_iso: v }))
                     }
                   }}

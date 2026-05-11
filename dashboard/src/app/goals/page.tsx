@@ -17,18 +17,14 @@ function GoalsPageContent() {
   const searchParams = useSearchParams()
   const chartKey = searchParams.get("chart_key")
 
-  return (
-    <div className="max-w-4xl">
-      <GoalsSection initialChartKey={chartKey} />
-    </div>
-  )
+  return <GoalsSection initialChartKey={chartKey} />
 }
 
 export default function GoalsPage() {
   return (
     <React.Suspense
       fallback={
-        <div className="max-w-4xl space-y-3">
+        <div className="space-y-3">
           <Skeleton className="h-8 w-48" />
           <Skeleton className="h-40 w-full" />
         </div>

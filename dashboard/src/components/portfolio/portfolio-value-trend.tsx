@@ -299,8 +299,8 @@ export function PortfolioValueTrend({ userId }: PortfolioValueTrendProps) {
               No history points yet — add holdings or widen the range.
             </p>
           ) : (
-            <div className="h-[280px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="h-[280px] w-full min-w-0">
+              <ResponsiveContainer width="100%" height={280}>
                 <AreaChart
                   data={chartData}
                   margin={{ top: 8, right: 8, left: 0, bottom: 0 }}

@@ -86,8 +86,8 @@ function MiniCategoryChart({
         </div>
       </CardHeader>
       {/* px-2 + positive left margin: room for Y ticks (negative margin was clipping "12k" etc.) */}
-      <CardContent className="h-[148px] w-full px-2 pb-2">
-        <ResponsiveContainer width="100%" height="100%">
+      <CardContent className="h-[148px] w-full min-w-0 px-2 pb-2">
+        <ResponsiveContainer width="100%" height={148}>
           <BarChart
             data={data ?? []}
             margin={{ top: 4, right: 2, left: 4, bottom: 2 }}

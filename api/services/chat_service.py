@@ -12,6 +12,7 @@ import json
 import uuid
 from typing import Any
 
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from api.models import ChatMessage, ChatSession
@@ -65,6 +66,33 @@ def list_sessions(
         .limit(min(200, max(1, limit)))
     )
     return list(session.exec(stmt).all())
+
+
+def list_sessions_with_message_counts(
+    session: Session,
+    user_id: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[tuple[ChatSession, int]]:
+    """
+    Same ordering as ``list_sessions``, plus how many ``ChatMessage`` rows exist per session.
+
+    The UI uses this to reopen the latest empty draft instead of creating another thread
+    every time you land on ``/chat`` without a ``session`` query param.
+    """
+    rows = list_sessions(session, user_id, limit=limit, offset=offset)
+    if not rows:
+        return []
+    ids = [r.id for r in rows]
+    stmt = (
+        select(ChatMessage.session_id, func.count())
+        .where(col(ChatMessage.session_id).in_(ids))
+        .group_by(col(ChatMessage.session_id))
+    )
+    raw = session.exec(stmt).all()
+    count_by_id = {str(sid): int(n) for sid, n in raw}
+    return [(r, count_by_id.get(r.id, 0)) for r in rows]
 
 
 def update_session_title(session: Session, session_id: str, user_id: str, title: str) -> ChatSession | None:

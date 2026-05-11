@@ -616,7 +616,7 @@ export function ClassificationBatchReview({
                 <>
                   This applies only to <strong>{displayScope}</strong>. It is effectively{" "}
                   <strong>irreversible in bulk</strong>: about{" "}
-                  <strong>{pendingTotal.toLocaleString()}</strong> transaction
+                  <strong>{pendingTotal.toLocaleString("en-IN")}</strong> transaction
                   {pendingTotal === 1 ? "" : "s"} still in this list will be saved as counterparty{" "}
                   <strong>{UBER_QUEUE_COUNTERPARTY}</strong> and category{" "}
                   <strong>{UBER_QUEUE_CATEGORY}</strong>
@@ -628,7 +628,7 @@ export function ClassificationBatchReview({
               ) : (
                 <>
                   This is effectively <strong>irreversible in bulk</strong>: about{" "}
-                  <strong>{pendingTotal.toLocaleString()}</strong> transaction
+                  <strong>{pendingTotal.toLocaleString("en-IN")}</strong> transaction
                   {pendingTotal === 1 ? "" : "s"} still in this list will be saved as counterparty{" "}
                   <strong>{UBER_QUEUE_COUNTERPARTY}</strong> and category{" "}
                   <strong>{UBER_QUEUE_CATEGORY}</strong>
@@ -676,7 +676,7 @@ export function ClassificationBatchReview({
               className="rounded-md border border-border bg-muted/50 px-2.5 py-1 text-sm font-medium tabular-nums text-foreground"
               title="Gaps (missing counterparty or category), auto-categorised rows in Friends & Family / Gifts & Personal Transfers / Miscellaneous (unless that counterparty was already confirmed in a prior round), and the count the importer uses before pausing."
             >
-              {pendingTotal.toLocaleString()} pending
+              {pendingTotal.toLocaleString("en-IN")} pending
             </span>
           )}
         </div>

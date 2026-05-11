@@ -61,6 +61,7 @@ class ChatSessionSummary(BaseModel):
     title: str | None
     created_at: datetime
     updated_at: datetime
+    message_count: int = 0
 
 
 class ChatSessionDetail(ChatSessionSummary):
@@ -78,8 +79,17 @@ def list_chat_sessions(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[ChatSessionSummary]:
-    rows = chat_service.list_sessions(session, user, limit=limit, offset=offset)
-    return [ChatSessionSummary.model_validate(r) for r in rows]
+    pairs = chat_service.list_sessions_with_message_counts(session, user, limit=limit, offset=offset)
+    return [
+        ChatSessionSummary(
+            id=row.id,
+            title=row.title,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            message_count=n,
+        )
+        for row, n in pairs
+    ]
 
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionDetail)
@@ -97,6 +107,7 @@ def get_chat_session(
         title=row.title,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        message_count=len(msgs),
         messages=msgs,
     )
 
@@ -111,7 +122,14 @@ def rename_chat_session(
     updated = chat_service.update_session_title(session, session_id, user, body.title)
     if updated is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
-    return ChatSessionSummary.model_validate(updated)
+    mcount = len(chat_service.load_messages(session, session_id))
+    return ChatSessionSummary(
+        id=updated.id,
+        title=updated.title,
+        created_at=updated.created_at,
+        updated_at=updated.updated_at,
+        message_count=mcount,
+    )
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

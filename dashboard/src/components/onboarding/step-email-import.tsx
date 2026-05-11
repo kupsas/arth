@@ -251,9 +251,9 @@ export function StepEmailImport({
                 </h3>
                 {progress && !isAlertListingReconnect && progress.emails_found > 0 && (
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {progress.emails_processed.toLocaleString()} /{" "}
-                    {progress.emails_found.toLocaleString()} messages ·{" "}
-                    {progress.transactions_parsed.toLocaleString()} transactions parsed
+                    {progress.emails_processed.toLocaleString("en-IN")} /{" "}
+                    {progress.emails_found.toLocaleString("en-IN")} messages ·{" "}
+                    {progress.transactions_parsed.toLocaleString("en-IN")} transactions parsed
                   </p>
                 )}
                 {progress &&
@@ -264,7 +264,7 @@ export function StepEmailImport({
                       Still pulling message lists from Gmail — numbers appear after each batch.{" "}
                       {progress.transactions_parsed > 0 && (
                         <>
-                          {progress.transactions_parsed.toLocaleString()} transactions imported so far.
+                          {progress.transactions_parsed.toLocaleString("en-IN")} transactions imported so far.
                         </>
                       )}
                     </p>

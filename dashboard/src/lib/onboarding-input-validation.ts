@@ -161,6 +161,20 @@ const SIM_GENERAL_INFLATION_MAX = 15
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
+/** True when `YYYY-MM-DD` is a real calendar day (rejects 2020-13-40, etc.). */
+export function isValidCalendarIsoDate(iso: string): boolean {
+  const t = iso.trim()
+  if (!ISO_DATE.test(t)) return false
+  const [ys, ms, ds] = t.split("-").map((x) => parseInt(x, 10))
+  const d = new Date(ys, ms - 1, ds)
+  return (
+    !Number.isNaN(d.getTime()) &&
+    d.getFullYear() === ys &&
+    d.getMonth() === ms - 1 &&
+    d.getDate() === ds
+  )
+}
+
 function clampNum(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n))
 }
@@ -184,6 +198,45 @@ export function guardIsoDateInput(raw: string): string | null {
   const t = stripControlCharacters(String(raw).trim(), "single-line").slice(0, 32)
   if (!t) return null
   return ISO_DATE.test(t) ? t : null
+}
+
+/**
+ * Normalises values from `<input type="date">` (and stray pastes) to a strict ISO date.
+ * - Truncates an overlong **year** in hyphen form (`202020-07-29` → `2020-07-29`).
+ * - Accepts `dd/mm/yyyy` pastes and clamps the year to **four digits** (`29/07/202020` → `2020-07-29`).
+ * Returns `undefined` for empty input or strings that cannot be made valid.
+ */
+export function sanitizeHtmlDateInputValue(raw: string): string | undefined {
+  const t = stripControlCharacters(String(raw).trim(), "single-line").slice(0, 32)
+  if (!t) return undefined
+
+  const accept = (candidate: string): string | undefined =>
+    ISO_DATE.test(candidate) && isValidCalendarIsoDate(candidate) ? candidate : undefined
+
+  const direct = accept(t)
+  if (direct) return direct
+
+  const longYear = t.match(/^([0-9]{4,})-([0-9]{1,2})-([0-9]{1,2})$/)
+  if (longYear) {
+    const y = longYear[1].slice(0, 4)
+    const mo = longYear[2].padStart(2, "0")
+    const da = longYear[3].padStart(2, "0")
+    const v = accept(`${y}-${mo}-${da}`)
+    if (v) return v
+  }
+
+  const slash = t.match(/^([0-9]{1,2})\/([0-9]{1,2})\/([0-9]+)$/)
+  if (slash) {
+    let yStr = slash[3]
+    if (yStr.length > 4) yStr = yStr.slice(0, 4)
+    if (yStr.length !== 4) return undefined
+    const mo = slash[2].padStart(2, "0")
+    const da = slash[1].padStart(2, "0")
+    const v = accept(`${yStr}-${mo}-${da}`)
+    if (v) return v
+  }
+
+  return undefined
 }
 
 function coerceOptionalMoneyField(v: unknown): number | null {

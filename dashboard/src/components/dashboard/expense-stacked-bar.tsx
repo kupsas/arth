@@ -154,8 +154,8 @@ export function ExpenseStackedBar({
             Wants
           </span>
         </div>
-        <div className="min-h-0 w-full flex-1">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-[308px] min-w-0 w-full shrink-0">
+          <ResponsiveContainer width="100%" height={308}>
             <BarChart
               key={`expense-${pctMode ? "pct" : "amt"}`}
               data={chartData}

@@ -26,6 +26,7 @@ import {
   needsProfileNameDobPdfStyle,
 } from "@/lib/pdf-password-source-flags";
 import type { OnboardingBackfillSourceRow } from "@/lib/types";
+import { sanitizeHtmlDateInputValue } from "@/lib/onboarding-input-validation";
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error";
 
 export type PasswordRequirementRow = {
@@ -210,7 +211,22 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
         {showDobField && (
           <div className="space-y-2">
             <Label htmlFor="arth-dob">{FIELD_LABELS.dob_iso}</Label>
-            <Input id="arth-dob" type="date" value={dobIso} onChange={(e) => setDobIso(e.target.value)} />
+            <Input
+              id="arth-dob"
+              type="date"
+              min="1900-01-01"
+              max="9999-12-31"
+              value={dobIso}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === "") {
+                  setDobIso("")
+                  return
+                }
+                const v = sanitizeHtmlDateInputValue(raw)
+                if (v != null) setDobIso(v)
+              }}
+            />
           </div>
         )}
 

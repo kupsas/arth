@@ -17,8 +17,8 @@ import { ThemeToggle } from "./theme-toggle";
 
 /** Maps URL paths to human-readable page titles. */
 const PAGE_TITLES: Record<string, string> = {
-  "/": "Home",
-  "/chat": "Ask Arth",
+  "/chat": "Home",
+  "/expense-trends": "Expense Trends",
   "/transactions": "Transactions",
   "/goals": "Goals",
   "/simulate": "Simulate",

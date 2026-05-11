@@ -30,7 +30,7 @@ export default function SetupPage() {
         const status = await fetchSetupStatus();
         if (cancelled) return;
         if (status.setup_completed) {
-          router.replace("/");
+          router.replace("/chat");
           return;
         }
       } catch (e) {
@@ -83,7 +83,7 @@ export default function SetupPage() {
     try {
       await completeSetupWizard();
       await queryClient.invalidateQueries({ queryKey: [...SETUP_STATUS_QUERY_KEY] });
-      router.replace("/");
+      router.replace("/chat");
       router.refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Couldn't finish setup. Try again?");

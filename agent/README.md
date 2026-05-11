@@ -49,6 +49,7 @@ Set these in the **root** `.env` when you use the terminal (names mirror [.env.e
 - `OPENAI_API_KEY_FOR_SINGLE_AGENT`
 - `ANTHROPIC_API_KEY_FOR_SINGLE_AGENT`
 - `GOOGLE_API_KEY_FOR_SINGLE_AGENT`
+- `OPENAI_API_KEY_FOR_MODERATION` (optional — moderation-only key for the quick safety check; ship a restricted key or leave unset to skip that layer)
 
 If you’ve saved keys in **Settings** inside the app for Ask Arth, prefer that flow for normal use — `.env` is mostly for CI, Docker-only setups, or terminal tinkering.
 

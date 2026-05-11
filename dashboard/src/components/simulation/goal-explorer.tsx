@@ -235,6 +235,7 @@ export function GoalExplorer({
   asOfDate,
   onReorderList,
   onAddHypothetical,
+  onSurplusChartFocusChange,
 }: {
   goals: SimulationGoal[];
   projections: GoalProjection[];
@@ -243,6 +244,11 @@ export function GoalExplorer({
   asOfDate?: string | null;
   onReorderList: (ordered: SimulationGoal[]) => void;
   onAddHypothetical: () => void;
+  /**
+   * Keeps the surplus stacked-area “isolate one band” state in sync with the goal list.
+   * Pass the projection’s `goal_name` (or `goal.name` as fallback). `null` = show all stacks in full color.
+   */
+  onSurplusChartFocusChange?: (goalName: string | null) => void;
 }) {
   const sorted = React.useMemo(
     () =>
@@ -253,15 +259,29 @@ export function GoalExplorer({
   );
 
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+  /** Latest selection for event handlers (avoids stale closures without reading state during setState updaters). */
+  const selectedKeyRef = React.useRef<string | null>(null);
+  selectedKeyRef.current = selectedKey;
+
+  /** When true, an empty goal selection was intentional (click same row to deselect) — do not auto-pick the first goal. */
+  const userClearedListSelectionRef = React.useRef(false);
 
   React.useEffect(() => {
     const keys = sorted.map(stableGoalKey);
     if (keys.length === 0) {
       setSelectedKey(null);
+      onSurplusChartFocusChange?.(null);
       return;
     }
-    setSelectedKey((prev) => (prev && keys.includes(prev) ? prev : keys[0]!));
-  }, [sorted]);
+    setSelectedKey((prev) => {
+      if (prev && keys.includes(prev)) return prev;
+      if (prev === null && userClearedListSelectionRef.current) {
+        return null;
+      }
+      userClearedListSelectionRef.current = false;
+      return keys[0]!;
+    });
+  }, [sorted, onSurplusChartFocusChange]);
 
   const selectedGoal = sorted.find((g) => stableGoalKey(g) === selectedKey);
   const selectedProjection = selectedGoal
@@ -281,6 +301,21 @@ export function GoalExplorer({
     const n = new Date();
     return new Date(n.getFullYear(), n.getMonth(), n.getDate());
   }, [asOfDate]);
+
+  function handleGoalRowActivate(goal: SimulationGoal) {
+    const key = stableGoalKey(goal);
+    const prev = selectedKeyRef.current;
+    if (prev === key) {
+      userClearedListSelectionRef.current = true;
+      onSurplusChartFocusChange?.(null);
+      setSelectedKey(null);
+      return;
+    }
+    userClearedListSelectionRef.current = false;
+    const p = projectionFor(projections, goal);
+    onSurplusChartFocusChange?.(p?.goal_name ?? goal.name);
+    setSelectedKey(key);
+  }
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -612,8 +647,9 @@ export function GoalExplorer({
       <CardHeader className="space-y-1 pb-2">
         <CardTitle className="text-base">Goal explorer</CardTitle>
         <CardDescription>
-          Drag goals in the list to change priority (lower rank = funded first). Select a
-          goal for read-only simulation metrics.
+          Drag goals to change priority (lower rank = funded first). Tap a goal for details; tap
+          the same goal again to clear your selection and bring back every colour on the surplus
+          chart above. You can still tap a colour label under that chart to focus one slice.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -634,7 +670,7 @@ export function GoalExplorer({
                       key={stableGoalKey(g)}
                       goal={g}
                       selected={stableGoalKey(g) === selectedKey}
-                      onSelect={() => setSelectedKey(stableGoalKey(g))}
+                      onSelect={() => handleGoalRowActivate(g)}
                       projection={projectionFor(projections, g)}
                     />
                   ))}

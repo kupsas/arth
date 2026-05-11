@@ -85,6 +85,20 @@ export function AgentChatLlmSettings() {
     onError: (e: Error) => setBanner(e.message),
   });
 
+  /** Empty string clears that slot in ``UserSecrets`` (same as API contract). */
+  const removeStoredAgentKey = useMutation({
+    mutationFn: (which: "openai" | "anthropic" | "google") => {
+      if (which === "openai") return postAgentKeys({ openai_api_key: "" });
+      if (which === "anthropic") return postAgentKeys({ anthropic_api_key: "" });
+      return postAgentKeys({ google_api_key: "" });
+    },
+    onSuccess: async () => {
+      setBanner("Removed that saved key from this device.");
+      await qc.invalidateQueries({ queryKey: ["agent-keys-status"] });
+    },
+    onError: (e: Error) => setBanner(e.message),
+  });
+
   const saveModel = useMutation({
     mutationFn: () =>
       postAgentConfig({
@@ -108,7 +122,7 @@ export function AgentChatLlmSettings() {
     <>
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Agent chat — API keys</CardTitle>
+          <CardTitle className="text-base">API keys - Chat</CardTitle>
           <CardDescription>
             Stored encrypted on this device. You need at least one provider before the chat tab can run models (unless you configure keys only on the server).
           </CardDescription>
@@ -121,20 +135,44 @@ export function AgentChatLlmSettings() {
           )}
           {statusQ.isLoading && <p className="text-sm text-muted-foreground">Loading key status…</p>}
           {st && (
-            <p className="text-sm text-muted-foreground">
-              Active providers:{" "}
-              {[
-                st.has_openai_api_key ? "OpenAI" : null,
-                st.has_anthropic_api_key ? "Anthropic" : null,
-                st.has_google_api_key ? "Google" : null,
-              ]
-                .filter(Boolean)
-                .join(", ") || "none detected"}
-            </p>
+            <div className="space-y-1 text-sm text-muted-foreground">
+              <p>
+                Active providers:{" "}
+                {[
+                  st.has_openai_api_key ? "OpenAI" : null,
+                  st.has_anthropic_api_key ? "Anthropic" : null,
+                  st.has_google_api_key ? "Google" : null,
+                ]
+                  .filter(Boolean)
+                  .join(", ") || "none detected"}
+              </p>
+              {(st.stored_has_openai_api_key ||
+                st.stored_has_anthropic_api_key ||
+                st.stored_has_google_api_key) && (
+                <p className="text-xs">
+                  A saved key stays on this device until you remove it — empty boxes above do not
+                  remove old keys.
+                </p>
+              )}
+            </div>
           )}
           <div className="grid gap-3">
             <div className="space-y-1">
-              <Label htmlFor="settings-agent-openai">OpenAI</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor="settings-agent-openai">OpenAI</Label>
+                {st?.stored_has_openai_api_key && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto py-0 text-xs text-muted-foreground"
+                    disabled={removeStoredAgentKey.isPending}
+                    onClick={() => void removeStoredAgentKey.mutateAsync("openai")}
+                  >
+                    Remove saved key
+                  </Button>
+                )}
+              </div>
               <Input
                 id="settings-agent-openai"
                 type="password"
@@ -145,7 +183,21 @@ export function AgentChatLlmSettings() {
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="settings-agent-anthropic">Anthropic</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor="settings-agent-anthropic">Anthropic</Label>
+                {st?.stored_has_anthropic_api_key && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto py-0 text-xs text-muted-foreground"
+                    disabled={removeStoredAgentKey.isPending}
+                    onClick={() => void removeStoredAgentKey.mutateAsync("anthropic")}
+                  >
+                    Remove saved key
+                  </Button>
+                )}
+              </div>
               <Input
                 id="settings-agent-anthropic"
                 type="password"
@@ -156,7 +208,21 @@ export function AgentChatLlmSettings() {
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="settings-agent-google">Google AI</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor="settings-agent-google">Google AI</Label>
+                {st?.stored_has_google_api_key && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto py-0 text-xs text-muted-foreground"
+                    disabled={removeStoredAgentKey.isPending}
+                    onClick={() => void removeStoredAgentKey.mutateAsync("google")}
+                  >
+                    Remove saved key
+                  </Button>
+                )}
+              </div>
               <Input
                 id="settings-agent-google"
                 type="password"

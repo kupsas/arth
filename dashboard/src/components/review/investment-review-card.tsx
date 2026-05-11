@@ -84,7 +84,7 @@ export function InvestmentReviewCard({
               {txn.txn_type}
             </Badge>
             <span className="text-muted-foreground">
-              {txn.quantity.toLocaleString()} @ {formatCurrency(txn.price_per_unit)}
+              {txn.quantity.toLocaleString("en-IN")} @ {formatCurrency(txn.price_per_unit)}
             </span>
           </div>
 

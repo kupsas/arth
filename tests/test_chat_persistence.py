@@ -130,7 +130,17 @@ def api_client(engine):
     app.dependency_overrides.clear()
 
 
-def test_list_chat_sessions_http(client: TestClient) -> None:
+def test_list_chat_sessions_http(engine, client: TestClient) -> None:
     r = client.get("/api/chat/sessions")
     assert r.status_code == 200
     assert r.json() == []
+
+    with Session(engine) as db:
+        chat_service.create_session(db, "sashank")
+
+    r2 = client.get("/api/chat/sessions")
+    assert r2.status_code == 200
+    body = r2.json()
+    assert len(body) == 1
+    assert body[0]["message_count"] == 0
+    assert body[0]["title"] is None

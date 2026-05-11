@@ -23,7 +23,8 @@ Usage (from repo root)::
     python3 scripts/run_security_probes_live.py --skip-screening
 
 Requires ``.env`` with ``GOOGLE_API_KEY_FOR_SINGLE_AGENT`` (or whichever provider your
-``SCREENING_MODEL`` uses) and optionally ``OPENAI_API_KEY_FOR_SINGLE_AGENT`` for moderation.
+``SCREENING_MODEL`` uses) and optionally ``OPENAI_API_KEY_FOR_MODERATION`` for Layer-1
+OpenAI moderation (falls back to skipping Layer 1 if unset).
 """
 
 from __future__ import annotations

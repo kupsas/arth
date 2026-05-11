@@ -107,6 +107,9 @@ AGENT_OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY_FOR_SINGLE_AGENT", "").str
 AGENT_ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY_FOR_SINGLE_AGENT", "").strip()
 AGENT_GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY_FOR_SINGLE_AGENT", "").strip()
 
+# Bundled moderation-only key (``OPENAI_API_KEY_FOR_MODERATION``) — Layer-1 screening; not for chat completions.
+AGENT_MODERATION_API_KEY: str = os.getenv("OPENAI_API_KEY_FOR_MODERATION", "").strip()
+
 # ---------------------------------------------------------------------------
 # Cost estimation (USD per 1M tokens) — LiteLLM ``model`` id keys.
 # Update when provider list prices change; used only for logging / soft alerts.

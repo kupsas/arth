@@ -353,7 +353,7 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
           <div className="flex flex-wrap gap-3">
             <div className="bg-white/70 dark:bg-white/5 rounded-xl px-4 py-3 border border-emerald-100 dark:border-emerald-800/60">
               <p className="text-3xl font-bold tabular-nums text-emerald-700 dark:text-emerald-300 leading-none">
-                {totalTxnsFromGaps.toLocaleString()}
+                {totalTxnsFromGaps.toLocaleString("en-IN")}
               </p>
               <p className="text-xs text-muted-foreground mt-1.5">transactions imported</p>
             </div>
@@ -469,7 +469,7 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
               >
                 <span className="text-foreground font-medium">{r.source_label}</span>
                 {" · "}
-                {r.transaction_count.toLocaleString()} txns
+                {r.transaction_count.toLocaleString("en-IN")} txns
               </li>
             ))}
           </ul>

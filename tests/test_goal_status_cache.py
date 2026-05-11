@@ -159,6 +159,55 @@ def test_expense_limit_skips_sim_cache(client: TestClient, engine):
         assert session.exec(select(GoalStatusCache).where(GoalStatusCache.goal_id == gid)).first() is None
 
 
+def test_point_in_time_progress_matches_saved_over_inflated_target(client: TestClient, engine):
+    """Dashboard bar uses already saved ÷ inflation-adjusted deadline target (not trajectory %)."""
+    r = client.post(
+        "/api/goals",
+        json={
+            "name": "Car fund",
+            "goal_type": "SAVINGS",
+            "goal_class": "POINT_IN_TIME",
+            "target_amount": 1_000_000,
+            "target_date": "2029-02-08",
+            "current_value": 600_000,
+            "starting_balance": 600_000,
+            "priority": 2,
+            "linked_layer": 3,
+        },
+    )
+    assert r.status_code == 201, r.text
+    lst = client.get("/api/goals")
+    assert lst.status_code == 200
+    g0 = lst.json()[0]
+    sd = g0["status_data"]
+    assert sd is not None
+    infl = float(sd["inflation_adjusted_target_at_deadline"])
+    assert infl > 0
+    expected_pct = round(100.0 * 600_000 / infl, 1)
+    assert abs(g0["computed_percentage"] - expected_pct) < 0.15
+    assert g0["computed_current_value"] == 600_000.0
+
+
+def test_recurring_timeline_pct_matches_elapsed_billing_periods() -> None:
+    """Recurring bar % = completed calendar periods / total periods (not periods_met from sim)."""
+    from api.models import Goal
+    from api.services.goal_status_cache import _recurring_timeline_pct
+
+    g = Goal(
+        name="Sub",
+        goal_type="SAVINGS",
+        user_id="u",
+        priority=2,
+        linked_layer=3,
+        recurrence_start=datetime.date(2025, 1, 10),
+        recurrence_end=datetime.date(2025, 12, 1),
+        recurrence_frequency="MONTHLY",
+    )
+    assert _recurring_timeline_pct(g, datetime.date(2024, 6, 1)) == 0.0
+    assert abs(_recurring_timeline_pct(g, datetime.date(2025, 7, 15)) - 50.0) < 0.01
+    assert _recurring_timeline_pct(g, datetime.date(2025, 12, 1)) == 100.0
+
+
 def test_fingerprint_changes_when_transaction_inserted(client: TestClient, engine):
     """New bank rows for the user invalidate the hash (surplus inputs change)."""
     fp1 = simulation_fingerprint(Session(engine), "cache_user")

@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNetWorthHistory } from "@/hooks/use-portfolio";
+import { sanitizeHtmlDateInputValue } from "@/lib/onboarding-input-validation";
 import type { NetWorthGranularity } from "@/lib/types";
 import {
   formatCurrency,
@@ -83,8 +84,18 @@ export function NetWorthChart({ userId }: NetWorthChartProps) {
               <Input
                 id="nw-start"
                 type="date"
+                min="1900-01-01"
+                max="9999-12-31"
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setStartDate("");
+                    return;
+                  }
+                  const v = sanitizeHtmlDateInputValue(raw);
+                  if (v != null) setStartDate(v);
+                }}
                 className="w-full sm:w-[11rem]"
               />
             </div>
@@ -95,8 +106,18 @@ export function NetWorthChart({ userId }: NetWorthChartProps) {
               <Input
                 id="nw-end"
                 type="date"
+                min="1900-01-01"
+                max="9999-12-31"
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setEndDate("");
+                    return;
+                  }
+                  const v = sanitizeHtmlDateInputValue(raw);
+                  if (v != null) setEndDate(v);
+                }}
                 className="w-full sm:w-[11rem]"
               />
             </div>
@@ -135,13 +156,13 @@ export function NetWorthChart({ userId }: NetWorthChartProps) {
             No history points in this range — widen the dates or import prices.
           </p>
         ) : (
-          <div className="relative h-[320px] w-full">
+          <div className="relative h-[320px] w-full min-w-0">
             {isFetching && !isLoading && (
               <div className="absolute right-2 top-0 z-10 rounded bg-muted/80 px-2 py-0.5 text-[10px] text-muted-foreground">
                 Updating…
               </div>
             )}
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height={320}>
               <ComposedChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border/60" />
                 <XAxis

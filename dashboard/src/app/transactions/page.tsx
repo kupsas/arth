@@ -13,8 +13,9 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { useSearchParams } from "next/navigation"
-import { CheckCircle2 } from "lucide-react"
+import { CheckCircle2, ClipboardList } from "lucide-react"
 import type { RowSelectionState } from "@tanstack/react-table"
 
 import { Button } from "@/components/ui/button"
@@ -30,6 +31,7 @@ import { useAuthMe } from "@/hooks/use-auth"
 import { useInvestmentTransactions } from "@/hooks/use-portfolio"
 import { useTransactions } from "@/hooks/use-transactions"
 import { useBulkUpdate } from "@/hooks/use-transactions"
+import { cn } from "@/lib/utils"
 import type {
   Transaction,
   TransactionFilters,
@@ -262,20 +264,52 @@ function TransactionsPageInner() {
   return (
     <div className="flex flex-col gap-4">
 
-      {/* ── Page heading ────────────────────────────────────────────────── */}
-      <div>
-        <h1 className="text-xl font-semibold">Transactions</h1>
-        <p className="text-sm text-muted-foreground">
-          Browse bank activity and broker ledger lines — filter, review, and reconcile.
-        </p>
+      {/* ── Page heading — Review moved here from the sidebar (top-right CTA) ─ */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold">Transactions</h1>
+          <p className="text-sm text-muted-foreground">
+            Browse bank activity and broker ledger lines — filter, review, and reconcile.
+          </p>
+        </div>
+        {/*
+          Review CTA — vertical icon over label (matches the mock), pill, lifted shadow.
+          Uses sidebar-primary tokens so it feels like the old sidebar “Review” chip.
+          Plain Link + cn (not Button asChild) so hover/focus colors aren’t overridden.
+        */}
+        <Link
+          href="/review"
+          aria-label="Open the review queue"
+          className={cn(
+            "inline-flex shrink-0 flex-col items-center justify-center gap-1 rounded-full border border-sidebar-border bg-sidebar-primary px-4 py-2.5 text-sidebar-primary-foreground shadow-lg outline-none transition-[box-shadow,background-color,transform] select-none",
+            "hover:bg-sidebar-primary/90 hover:shadow-xl active:translate-y-px",
+            "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            "self-end sm:self-start",
+          )}
+        >
+          <ClipboardList className="size-5" strokeWidth={2} aria-hidden />
+          <span className="text-[11px] font-semibold leading-none tracking-tight">
+            Review
+          </span>
+        </Link>
       </div>
 
       <Tabs defaultValue="bank" className="w-full">
-        <TabsList variant="line" className="mb-1 h-9 w-full min-w-0 justify-start">
-          <TabsTrigger value="bank" className="text-xs">
+        {/*
+          Segmented control style (default Tabs variant): bordered rail, muted fill,
+          raised active segment — reads clearly as clickable tabs vs. plain underlined text.
+        */}
+        <TabsList className="mb-2 h-10 w-full min-w-0 justify-stretch gap-1 rounded-lg border border-border bg-muted p-1 shadow-sm">
+          <TabsTrigger
+            value="bank"
+            className="text-xs font-medium cursor-pointer px-3 [&:not([data-active])]:text-muted-foreground [&:not([data-active])]:hover:bg-background/60"
+          >
             Bank transactions
           </TabsTrigger>
-          <TabsTrigger value="investments" className="text-xs">
+          <TabsTrigger
+            value="investments"
+            className="text-xs font-medium cursor-pointer px-3 [&:not([data-active])]:text-muted-foreground [&:not([data-active])]:hover:bg-background/60"
+          >
             Investment transactions
           </TabsTrigger>
         </TabsList>

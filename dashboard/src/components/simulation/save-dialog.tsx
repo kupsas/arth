@@ -22,7 +22,7 @@ import {
   diffGoalRow,
   findGoalInParams,
 } from "@/lib/simulation-diff";
-import { createGoal, reorderGoals, updateGoal } from "@/lib/api";
+import { createGoal, reorderGoals, updateGoal, putSimulationSandboxPreferences } from "@/lib/api";
 import type {
   GoalCreate,
   GoalUpdate,
@@ -178,6 +178,12 @@ export function SaveSimulationDialog({
         if (order.length >= 1) await reorderGoals(order);
       }
 
+      await putSimulationSandboxPreferences({
+        monthly_surplus: draftParams.monthly_surplus,
+        salary_growth_rate: draftParams.salary_growth_rate ?? 5,
+        general_inflation_rate: draftParams.general_inflation_rate ?? 6,
+      });
+
       await onSuccess();
       onOpenChange(false);
     } catch (e) {
@@ -193,7 +199,8 @@ export function SaveSimulationDialog({
         <DialogHeader>
           <DialogTitle>Save simulation changes?</DialogTitle>
           <DialogDescription>
-            This updates your stored goals to match the sandbox. Review the diff below.
+            This updates your stored goals and your saved simulation sliders (surplus, salary
+            growth, headline inflation) to match the sandbox. Review the diff below.
           </DialogDescription>
         </DialogHeader>
 
@@ -212,10 +219,10 @@ export function SaveSimulationDialog({
 
             {summary.globalChanges.length > 0 && (
               <div>
-                <p className="mb-1 font-medium text-foreground">Global (sandbox-only)</p>
+                <p className="mb-1 font-medium text-foreground">Global simulation settings</p>
                 <p className="text-xs text-muted-foreground">
-                  Monthly surplus and horizon are not persisted as a single profile — only
-                  goal rows below are saved. Global changes are shown for context.
+                  Monthly surplus, salary growth, and general inflation are saved when you confirm.
+                  Horizon length still follows your goal dates (not stored as a fixed number).
                 </p>
                 <ul className="mt-1 list-inside list-disc text-muted-foreground">
                   {summary.globalChanges.map((c) => (
