@@ -28,7 +28,7 @@ beautifulsoup4>=4.12
 apscheduler>=3.11.2
 
 # Auth — password hashing and signed session tokens
-bcrypt>=4.0
+bcrypt>=5.0.0
 itsdangerous>=2.2.0
 
 # CI tooling — lint, type-checking, coverage
