@@ -43,14 +43,7 @@ from agent.security import CostTracker, SessionRateLimiter, screen_message
 from pipeline.llm_errors import AgentPausedError
 from api.auth import COOKIE_NAME, create_session_token, get_current_user, verify_session_token
 from api.constants import DEFAULT_LOCAL_USER
-from api.database import SQLiteSerializingSession, get_effective_engine, get_session
-from api.demo import (
-    ARTH_DEMO_SID_QUERY,
-    DEMO_USER_ID,
-    DemoSessionManager,
-    current_demo_browser_session_id,
-    is_demo_mode,
-)
+from api.database import SQLiteSerializingSession, get_engine, get_session
 from api.services import chat_service
 from api.services.agent_runtime import user_agent_runtime
 
@@ -154,30 +147,19 @@ def delete_chat_session(
 def get_ws_ticket(user: str = Depends(get_current_user)) -> dict[str, str]:
     """Return a short-lived token the browser passes as ``?ticket=`` on the
     WebSocket URL.  Needed because the WS may connect directly to FastAPI
-    (bypassing the Next.js proxy), so the httpOnly session cookie is absent.
-
-    In demo mode, also returns ``arth_demo_sid`` (same value as ``demo_session_id`` cookie)
-    so the client can append ``?arth_demo_sid=…`` to the WS URL: some stacks only attach
-    cookies to ``localhost`` while the WS uses ``127.0.0.1``, which would otherwise mint
-    a fresh SQLite file on every handshake.
-    """
-    out: dict[str, str] = {"ticket": create_session_token(user)}
-    if is_demo_mode():
-        sid = current_demo_browser_session_id()
-        if sid:
-            out[ARTH_DEMO_SID_QUERY] = sid
-    return out
+    (bypassing the Next.js proxy), so the httpOnly session cookie is absent."""
+    return {"ticket": create_session_token(user)}
 
 
 # --- WebSocket ------------------------------------------------------------
 
 def _user_from_token(token: str | None) -> str | None:
-    """Verify a session token or WS ticket — return the appropriate user identity."""
+    """Verify a session token or WS ticket — identity is always the local install user."""
     if not token:
         return None
     try:
         verify_session_token(token)
-        return DEMO_USER_ID if is_demo_mode() else DEFAULT_LOCAL_USER
+        return DEFAULT_LOCAL_USER
     except HTTPException:
         return None
 
@@ -243,7 +225,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
         ticket = websocket.query_params.get("ticket")
         user = _user_from_token(ticket)
     if user is None:
-        user = DEMO_USER_ID if is_demo_mode() else DEFAULT_LOCAL_USER
+        user = DEFAULT_LOCAL_USER
 
     await websocket.accept()
 
@@ -253,9 +235,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
     chat_session_id: str | None = session_id
 
     # Load or create persisted session row + hydrate memory.
-    # Single DB session — avoids a second SQLite open just to re-read the title.
 
-    with SQLiteSerializingSession(get_effective_engine()) as db:
+    with SQLiteSerializingSession(get_engine()) as db:
         if chat_session_id:
             cs = chat_service.get_session(db, chat_session_id, user)
             if cs is None:
@@ -273,8 +254,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
     assert chat_session_id is not None
 
+    with SQLiteSerializingSession(get_engine()) as db:
+        cs_row = chat_service.get_session(db, chat_session_id, user)
+    title = cs_row.title if cs_row else None
     await websocket.send_json(
-        {"type": "session_ready", "session_id": chat_session_id, "title": cs.title}
+        {"type": "session_ready", "session_id": chat_session_id, "title": title}
     )
 
     current_turn: asyncio.Task | None = None
@@ -284,13 +268,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
     async def persist_memory() -> None:
         """Snapshot OpenAI-format messages to SQLite after each successful turn."""
-        with SQLiteSerializingSession(get_effective_engine()) as db:
+        with SQLiteSerializingSession(get_engine()) as db:
             chat_service.replace_session_messages(db, chat_session_id, user, memory.get_messages())
 
     async def run_one_turn(user_text: str) -> None:
         nonlocal memory
-        demo_sid = current_demo_browser_session_id()
-
         if not rate_limiter.check_and_record():
             await emit(
                 ResponseEvent(
@@ -308,20 +290,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await websocket.send_json({"type": "done"})
             return
 
-        if is_demo_mode() and demo_sid:
-            if DemoSessionManager.chat_turns_remaining(demo_sid) <= 0:
-                await emit(
-                    ResponseEvent(
-                        content=(
-                            "You've reached the demo chat message limit. "
-                            "Tap **Reset demo** in the banner to keep exploring."
-                        )
-                    )
-                )
-                await websocket.send_json({"type": "done"})
-                return
-
-        with SQLiteSerializingSession(get_effective_engine()) as db_agent:
+        with SQLiteSerializingSession(get_engine()) as db_agent:
             with user_agent_runtime(db_agent, user):
                 sr = await screen_message(user_text, cost_tracker=cost_tracker)
                 if not sr.allowed:
@@ -349,8 +318,6 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     )
 
         await persist_memory()
-        if is_demo_mode() and demo_sid:
-            DemoSessionManager.record_chat_user_turn(demo_sid)
         await websocket.send_json({"type": "done"})
 
     try:

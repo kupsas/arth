@@ -1,12 +1,12 @@
 name: CI
 
-# Run on every push to main and on all pull requests.
-# Goal: catch regressions (lint, type errors, test failures) before they land.
+# Run on every push to main or demo, and on PRs targeting those branches.
+# demo is the public demo / Fly traffic branch — same quality bar as main.
 on:
   push:
-    branches: [main]
+    branches: [main, demo]
   pull_request:
-    branches: [main]
+    branches: [main, demo]
 
 jobs:
   test:

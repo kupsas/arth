@@ -32,6 +32,7 @@ import {
   CHART_KEY_INVESTMENT_NET,
 } from "@/lib/chart-keys"
 import type { BarDrilldownChart, DashboardCategorySeries } from "@/lib/types"
+import posthog from "posthog-js"
 
 export default function ExpenseTrendsPage() {
   const [trendMonths, setTrendMonths] = React.useState<TrendMonths>(6)
@@ -61,6 +62,11 @@ export default function ExpenseTrendsPage() {
     month: string
     series?: DashboardCategorySeries
   }) {
+    posthog.capture("expense_chart_bar_clicked", {
+      chart: p.chart,
+      month: p.month,
+      category: p.series ?? null,
+    })
     setDrill(p)
   }
 

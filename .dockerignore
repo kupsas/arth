@@ -13,5 +13,3 @@ data/logs
 *.log
 .env
 .env.*
-dashboard/.env
-dashboard/.env.*

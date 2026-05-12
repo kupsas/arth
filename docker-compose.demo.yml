@@ -45,6 +45,7 @@ services:
         NEXT_PUBLIC_API_URL: same-origin
         NEXT_PUBLIC_WS_URL: ws://localhost:8000
         NEXT_PUBLIC_DEMO_MODE: "1"
+        NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN: ""
     ports:
       - "3000:3000"
     environment:

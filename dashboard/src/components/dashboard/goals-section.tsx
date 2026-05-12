@@ -28,6 +28,7 @@ import {
   TrendingDown,
   Trash2,
 } from "lucide-react"
+import posthog from "posthog-js"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -459,8 +460,15 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
     )
   }
 
+  function handleEditSheetOpenChange(next: boolean) {
+    if (next) {
+      posthog.capture("goal_card_opened", { action: "edit", goal_type: goal.goal_type })
+    }
+    setOpen(next)
+  }
+
   return (
-    <Sheet open={open} onOpenChange={setOpen}>
+    <Sheet open={open} onOpenChange={handleEditSheetOpenChange}>
       <SheetTrigger
         render={
           <Button
@@ -953,6 +961,7 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
     if (next && isDemoMode) return
     setOpen(next)
     if (next) {
+      posthog.capture("goal_card_opened", { action: "new" })
       const base = defaultAddGoalForm()
       const pre = prefillAddFormForChartKey(prefillChartKey)
       setForm({ ...base, ...pre })

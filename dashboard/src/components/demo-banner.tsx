@@ -21,6 +21,7 @@ import {
   type DemoRateLimitState,
 } from "@/lib/demo-rate-limit";
 import { Button } from "@/components/ui/button";
+import posthog from "posthog-js";
 
 /** Poll rate-limit state from localStorage; ticks every second when limited, every 5s otherwise. */
 function useDemoRateLimit(): DemoRateLimitState {
@@ -110,7 +111,10 @@ export function DemoBanner() {
           className="h-8 border-amber-600/40 bg-background/80 hover:bg-background"
           disabled={reset.isPending || !seedOk}
           title="Deletes your temporary copy of the sample database and downloads a fresh clone. Resets all your data changes but the 30-minute chat window keeps ticking."
-          onClick={() => reset.mutate()}
+          onClick={() => {
+            posthog.capture("demo_reset");
+            reset.mutate();
+          }}
         >
           {reset.isPending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />

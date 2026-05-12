@@ -7,13 +7,12 @@
  * When the URL has no ``session_id``, FastAPI creates a thread and emits ``session_ready``.
  * The chat page avoids that when an empty draft already exists (see ``/chat`` bootstrap).
  *
- * In same-origin mode, the WS bypasses the Next.js proxy (which can't upgrade
- * WebSocket) and connects directly to FastAPI.  A one-time auth ticket fetched
- * via REST (where the httpOnly cookie *does* travel through the proxy) is passed
- * as ``?ticket=`` so FastAPI can authenticate the connection.
+ * When ``sessionIdProp`` is set, the WebSocket waits until ``GET /api/chat/sessions/{id}``
+ * succeeds so a wiped demo DB or stale ``?session=`` cannot open a doomed socket before
+ * the URL is cleared (avoids WS ↔ 404 races).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { apiViaSameOrigin, buildChatWebSocketUrl } from "@/lib/api-base";
 import type {
@@ -32,6 +31,7 @@ import {
 } from "@/lib/api";
 import { isDemoMode } from "@/lib/demo";
 import { formatCountdown, getDemoRateLimitState, recordDemoMessage } from "@/lib/demo-rate-limit";
+import posthog from "posthog-js";
 
 export type ChatConnectionStatus =
   | "idle"
@@ -150,6 +150,35 @@ export function useChat(
    */
   const serverAssignedSessionRef = useRef<string | null>(null);
 
+  /**
+   * When the URL (or parent) passes a concrete ``session_id``, we must not open a
+   * WebSocket against it until ``GET /api/chat/sessions/{id}`` succeeds. Otherwise
+   * a stale bookmark (e.g. demo DB wiped after Fly machine sleep) opens WS →
+   * server closes with policy error while REST 404 races to clear the URL →
+   * reconnect loop.
+   *
+   * ``true`` when there is no session id to verify, or when REST has confirmed
+   * the current id, or when this id was just assigned by ``session_ready`` on an
+   * already-open socket (see ``useLayoutEffect`` + WebSocket effect handshake).
+   */
+  const [restSessionGateOk, setRestSessionGateOk] = useState(true);
+
+  /**
+   * Run before the WebSocket ``useEffect`` so ``restSessionGateOk`` is false for a
+   * newly-selected thread id in the same commit (avoids opening WS before REST runs).
+   */
+  useLayoutEffect(() => {
+    if (!sessionIdProp) {
+      setRestSessionGateOk(true);
+      return;
+    }
+    if (serverAssignedSessionRef.current === sessionIdProp) {
+      setRestSessionGateOk(true);
+    } else {
+      setRestSessionGateOk(false);
+    }
+  }, [sessionIdProp]);
+
   const flushPendingToolsToActivity = useCallback(() => {
     const live = liveAssistantRef.current;
     const tools = live?.tools ?? [];
@@ -226,13 +255,16 @@ export function useChat(
     let cancelled = false;
     fetchChatSession(sessionIdProp)
       .then((d) => {
-        if (!cancelled)
+        if (!cancelled) {
           setMessages(normalizeOpenAiMessagesToUi(d.messages ?? []));
+          setRestSessionGateOk(true);
+        }
       })
       .catch((e: unknown) => {
         if (cancelled) return;
         setMessages([]);
         resetStreamingUi();
+        setRestSessionGateOk(false);
         if (e instanceof ApiError && e.status === 404) {
           onSessionNotFoundRef.current?.();
         }
@@ -248,7 +280,9 @@ export function useChat(
   useEffect(() => {
     let cancelled = false;
 
-    if (!enabled) {
+    const wsEnabled = enabled && restSessionGateOk;
+
+    if (!wsEnabled) {
       serverAssignedSessionRef.current = null;
       const staleWs = wsRef.current;
       if (staleWs) {
@@ -309,12 +343,21 @@ export function useChat(
         setConnection("open");
       };
 
-      ws.onclose = () => {
+      ws.onclose = (evt) => {
         setConnection("closed");
         if (wsRef.current === ws) wsRef.current = null;
+        // FastAPI closes with 1008 when the requested chat session row is missing.
+        if (evt.code === 1008 && sessionIdProp) {
+          onSessionNotFoundRef.current?.();
+        }
       };
 
       ws.onerror = () => {
+        posthog.capture("chat_stream_error", {
+          session_id: sessionIdProp ?? null,
+          recoverable: false,
+          source: "websocket_transport",
+        });
         setConnection("error");
         setLastError(
           "Can't connect to Arth right now. Make sure the app is running and try again.",
@@ -611,6 +654,13 @@ export function useChat(
 
         if (typ === "error") {
           const msg = String(data.message ?? "Error");
+          // Non-recoverable errors include "session row missing" — parent drops stale
+          // ``?session=`` so we start fresh instead of looping on a dead thread id.
+          const recoverable = (data as { recoverable?: boolean }).recoverable !== false;
+          if (!recoverable) {
+            onSessionNotFoundRef.current?.();
+            return;
+          }
           liveAssistantRef.current = null;
           streamDraftIdRef.current = null;
           setIsResponseStreaming(false);
@@ -628,6 +678,13 @@ export function useChat(
         }
 
         if (typ === "done") {
+          const toolCount = liveAssistantRef.current?.tools.length ?? 0;
+          const hasThinking = turnThinkingRef.current.trim().length > 0;
+          posthog.capture("chat_stream_completed", {
+            session_id: sessionIdProp ?? null,
+            tool_count: toolCount,
+            has_thinking: hasThinking,
+          });
           setIsGenerating(false);
           setIsResponseStreaming(false);
           setLiveTools([]);
@@ -670,6 +727,7 @@ export function useChat(
   }, [
     sessionIdProp,
     enabled,
+    restSessionGateOk,
     flushPendingToolsToActivity,
     pushActivitySegment,
     syncWipTools,
@@ -688,6 +746,10 @@ export function useChat(
     if (isDemoMode) {
       const rl = getDemoRateLimitState();
       if (rl.isLimited) {
+        posthog.capture("demo_rate_limit_hit", {
+          messages_used: rl.count,
+          ms_until_reset: rl.msUntilReset,
+        });
         const countdown = formatCountdown(rl.msUntilReset);
         setMessages((prev) => [
           ...prev,
@@ -723,9 +785,15 @@ export function useChat(
     liveAssistantRef.current = null;
     streamDraftIdRef.current = null;
 
+    posthog.capture("chat_message_sent", {
+      session_id: sessionIdProp,
+      message_length: content.length,
+      is_demo: isDemoMode,
+    });
+
     const payload: ClientChatWireMessage = { type: "send_message", content };
     ws.send(JSON.stringify(payload));
-  }, [resetTurnActivity]);
+  }, [resetTurnActivity, sessionIdProp]);
 
   const clearAgentPaused = useCallback(() => {
     setAgentPausedFailures(null);

@@ -22,6 +22,7 @@ import {
   useQueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query";
+import posthog from "posthog-js";
 
 import {
   createGoal,
@@ -135,7 +136,13 @@ export function useCreateGoal() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: GoalCreate) => createGoal(body),
-    onSuccess: () => {
+    onSuccess: (_, body) => {
+      posthog.capture("goal_created", {
+        goal_type: body.goal_type,
+        goal_class: body.goal_class,
+        has_target_amount: body.target_amount != null,
+        has_target_date: Boolean(body.target_date),
+      });
       invalidateGoalRelatedCaches(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["metrics"] });
     },
@@ -158,7 +165,11 @@ export function useUpdateGoal() {
   return useMutation({
     mutationFn: ({ id, update }: { id: number; update: GoalUpdate }) =>
       updateGoal(id, update),
-    onSuccess: (_, { id }) => {
+    onSuccess: (_, { id, update }) => {
+      posthog.capture("goal_updated", {
+        goal_id: id,
+        fields_updated: Object.keys(update),
+      });
       invalidateGoalRelatedCaches(queryClient);
       queryClient.invalidateQueries({ queryKey: goalKeys.detail(id) });
       void queryClient.invalidateQueries({ queryKey: ["metrics"] });
@@ -174,7 +185,8 @@ export function useDeleteGoal() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => deleteGoal(id),
-    onSuccess: () => {
+    onSuccess: (_, id) => {
+      posthog.capture("goal_deleted", { goal_id: id });
       invalidateGoalRelatedCaches(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["metrics"] });
     },

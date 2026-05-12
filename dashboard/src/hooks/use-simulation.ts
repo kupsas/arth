@@ -15,6 +15,7 @@
 
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import posthog from "posthog-js";
 
 import { fetchSimulateFromCurrent, runSimulation } from "@/lib/api";
 import { isDemoMode } from "@/lib/demo";
@@ -195,6 +196,11 @@ export function useSimulation() {
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
+      posthog.capture("simulation_rerun", {
+        goal_count: draftParams.goals?.length ?? 0,
+        // Hypothetical sandbox rows are created without a server `id` (see SimulationGoal in types).
+        has_hypothetical_goals: draftParams.goals?.some((g) => g.id == null) ?? false,
+      });
       runSimulateMutation(draftParams);
     }, 300);
 

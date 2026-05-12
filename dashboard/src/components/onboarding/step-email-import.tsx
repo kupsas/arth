@@ -13,6 +13,7 @@ import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
 import { humanizeSourceKey } from "@/lib/source-label"
 import { cn } from "@/lib/utils"
+import posthog from "posthog-js"
 
 export type BackfillProgressSnapshot = {
   source: string
@@ -316,7 +317,19 @@ export function StepEmailImport({
             </p>
           )}
           {progress?.status === "paused" && onResumeFromPause && (
-            <Button type="button" variant="secondary" disabled={resumeBusy} onClick={onResumeFromPause}>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={resumeBusy}
+              onClick={() => {
+                posthog.capture("email_import_resumed", {
+                  source: progress.source,
+                  emails_processed: progress.emails_processed,
+                  transactions_parsed: progress.transactions_parsed,
+                });
+                onResumeFromPause();
+              }}
+            >
               {resumeBusy ? "Resuming…" : "Continue import"}
             </Button>
           )}

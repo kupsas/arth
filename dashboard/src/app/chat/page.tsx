@@ -41,6 +41,7 @@ import {
   postAgentKeys,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import posthog from "posthog-js";
 
 function AgentKeysBlockingModal({ onSaved }: { onSaved: () => void }) {
   const [anthropic, setAnthropic] = React.useState("");
@@ -81,6 +82,11 @@ function AgentKeysBlockingModal({ onSaved }: { onSaved: () => void }) {
     },
     onSuccess: () => {
       setError(null);
+      posthog.capture("agent_keys_saved", {
+        reused_classifier_keys: reuseClassifier && classifierHasAny,
+        has_anthropic: Boolean(anthropic.trim()) || (reuseClassifier && classifierHasAnthropic),
+        has_google: Boolean(google.trim()) || (reuseClassifier && classifierHasGoogle),
+      });
       onSaved();
     },
     onError: (e: Error) => setError(e.message),
@@ -268,8 +274,10 @@ function ChatPageInner() {
   );
 
   const onSessionNotFound = useCallback(() => {
+    // Drop stale sidebar / query state so we do not immediately re-select a ghost thread.
+    void queryClient.invalidateQueries({ queryKey: chatSessionsQueryKey });
     router.replace("/chat", { scroll: false });
-  }, [router]);
+  }, [queryClient, router]);
 
   const {
     messages,

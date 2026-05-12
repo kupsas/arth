@@ -16,13 +16,26 @@
  *   - TooltipProvider : shadcn/Radix — needed globally for all Tooltip components
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
+import posthog from "posthog-js";
 
 import { SetupGate } from "@/components/setup-gate";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAuthMe } from "@/hooks/use-auth";
+
+/** Identifies the authenticated user in PostHog once the session resolves. */
+function PostHogIdentity() {
+  const { data } = useAuthMe();
+  useEffect(() => {
+    if (data?.authenticated && data.username) {
+      posthog.identify(data.username, { username: data.username });
+    }
+  }, [data]);
+  return null;
+}
 
 export function Providers({ children }: { children: React.ReactNode }) {
   // useState ensures a new QueryClient per browser session, not per render
@@ -46,6 +59,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delay={300}>
+          <PostHogIdentity />
           <SetupGate>{children}</SetupGate>
         </TooltipProvider>
       </QueryClientProvider>

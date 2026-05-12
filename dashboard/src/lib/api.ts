@@ -92,6 +92,7 @@ import type {
 import { buildApiUrl } from "@/lib/api-base";
 import { parseApiErrorResponseBody } from "@/lib/user-facing-api-error";
 import type { ChatSessionDetail, ChatSessionSummary } from "@/lib/chat-types";
+import posthog from "posthog-js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error type
@@ -143,6 +144,13 @@ function throwApiHttpError(status: number, raw: string, emptyMessageFallback?: s
     p.message.trim() ||
     emptyMessageFallback ||
     "Something broke on our end. Try refreshing — if it keeps happening, let us know.";
+  if (typeof window !== "undefined") {
+    posthog.capture("api_error", {
+      status_code: status,
+      error_code: p.errorCode ?? null,
+      message: msg.slice(0, 120),
+    });
+  }
   throw new ApiError(status, msg, { errorCode: p.errorCode, hint: p.hint });
 }
 

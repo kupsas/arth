@@ -59,6 +59,7 @@ import {
 } from "@/lib/goal-target-money";
 import { formatCurrency, formatInrChartAxis } from "@/lib/utils";
 import type { GoalProjection, SimulationGoal } from "@/lib/types";
+import posthog from "posthog-js";
 
 const CHART_SAMPLE = 3;
 
@@ -324,6 +325,11 @@ export function GoalExplorer({
     const newIndex = sorted.findIndex((g) => stableGoalKey(g) === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
     const next = arrayMove(sorted, oldIndex, newIndex);
+    posthog.capture("goal_priority_reordered", {
+      goal_count: sorted.length,
+      old_index: oldIndex,
+      new_index: newIndex,
+    });
     onReorderList(next);
   }
 
@@ -682,7 +688,10 @@ export function GoalExplorer({
               variant="secondary"
               size="sm"
               className="mt-3 w-full shrink-0"
-              onClick={onAddHypothetical}
+              onClick={() => {
+                posthog.capture("hypothetical_goal_added", { goal_count: sorted.length });
+                onAddHypothetical();
+              }}
             >
               <Plus className="mr-1 h-3.5 w-3.5" />
               Add hypothetical

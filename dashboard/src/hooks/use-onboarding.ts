@@ -14,6 +14,7 @@ import {
   useQueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query"
+import posthog from "posthog-js"
 
 import {
   fetchOnboardingBackfillSources,
@@ -268,6 +269,7 @@ export function useOnboardingComplete() {
   return useMutation({
     mutationFn: postOnboardingComplete,
     onSuccess: () => {
+      posthog.capture("onboarding_completed")
       void qc.invalidateQueries({ queryKey: [...onboardingStateKey] })
       void qc.invalidateQueries({ queryKey: SETUP_STATUS_QUERY_KEY })
     },

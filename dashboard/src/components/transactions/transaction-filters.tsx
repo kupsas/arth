@@ -37,6 +37,7 @@ import {
 } from "@/components/dashboard/date-range-picker"
 import { useAccountsSummary } from "@/hooks/use-metrics"
 import type { TransactionFilters, Direction, CounterpartyCategory, TxnType, DateRange } from "@/lib/types"
+import posthog from "posthog-js"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -235,9 +236,10 @@ export function TransactionFiltersBar({
         {/* Category */}
         <Select
           value={filters.category ?? ""}
-          onValueChange={(v) =>
-            onFiltersChange({ category: v || undefined, page: 1 })
-          }
+          onValueChange={(v) => {
+            if (v) posthog.capture("transaction_category_filter_applied", { category: v });
+            onFiltersChange({ category: v || undefined, page: 1 });
+          }}
         >
           <SelectTrigger size="sm" className="w-[160px]">
             <SelectValue placeholder="All categories" />

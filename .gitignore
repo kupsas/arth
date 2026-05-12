@@ -1,5 +1,6 @@
 # Ignore Cursor project metadata (use `.cursor` not `.cursor/` — symlinks are not “directories” for ignore rules)
 .cursor
+.ci-worktrees
 
 # Python virtual environments
 .venv/

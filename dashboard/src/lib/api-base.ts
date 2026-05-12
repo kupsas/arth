@@ -65,29 +65,11 @@ export function buildApiUrl(path: string, params?: QueryParams): string {
  * runs in same-origin mode the WS must bypass the ``/api-backend`` proxy and
  * connect straight to FastAPI.
  *
- * **Demo session:** ``demo_session_id`` is HttpOnly. The WS may hit ``127.0.0.1`` while
- * REST went through ``localhost`` (or vice versa), so the cookie is sometimes missing
- * on the handshake. ``GET /api/chat/ws-ticket`` returns ``arth_demo_sid`` in demo mode;
- * pass it as a query param on the WS URL so FastAPI binds the same SQLite as REST.
- *
- * When ``NEXT_PUBLIC_WS_URL`` is unset, we default to ``ws(s)://{same hostname as the page}:8000``.
- * Override explicitly if your API listens on a non‑8000 port.
+ * Set ``NEXT_PUBLIC_WS_URL`` to the FastAPI ws(s) origin when same-origin is
+ * active (defaults to ``ws://127.0.0.1:8000`` for local dev).
  */
-const WS_DIRECT_ENV = (process.env.NEXT_PUBLIC_WS_URL ?? "").trim().replace(/\/$/, "");
-
-function _defaultLoopbackWsOrigin(): string {
-  if (typeof window === "undefined") {
-    return "ws://127.0.0.1:8000";
-  }
-  const hostname = window.location.hostname;
-  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  // Local dev: FastAPI on a separate port. Production (behind Caddy/reverse proxy):
-  // WebSocket routes through the same origin on the standard port.
-  if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return `${scheme}://${hostname}:8000`;
-  }
-  return `${scheme}://${hostname}`;
-}
+const WS_DIRECT =
+  (process.env.NEXT_PUBLIC_WS_URL ?? "ws://127.0.0.1:8000").trim().replace(/\/$/, "");
 
 /**
  * WebSocket URL for the Arth agent chat endpoint.
@@ -101,7 +83,6 @@ function _defaultLoopbackWsOrigin(): string {
 export function buildChatWebSocketUrl(
   sessionId?: string | null,
   ticket?: string | null,
-  /** Demo only — binds the same per-browser SQLite when the WS cookie is missing. */
   arthDemoSid?: string | null,
 ): string {
   const params = new URLSearchParams();
@@ -116,8 +97,7 @@ export function buildChatWebSocketUrl(
   }
 
   if (apiViaSameOrigin) {
-    const origin = WS_DIRECT_ENV || _defaultLoopbackWsOrigin();
-    return `${origin}${path}`;
+    return `${WS_DIRECT}${path}`;
   }
 
   if (API_BASE.startsWith("http")) {

@@ -30,6 +30,7 @@ import {
   postAgentConfig,
   postAgentKeys,
 } from "@/lib/api";
+import posthog from "posthog-js";
 
 const MODEL_PRESETS = [
   "gemini/gemini-3-flash-preview",
@@ -92,7 +93,8 @@ export function AgentChatLlmSettings() {
       if (which === "anthropic") return postAgentKeys({ anthropic_api_key: "" });
       return postAgentKeys({ google_api_key: "" });
     },
-    onSuccess: async () => {
+    onSuccess: async (_, which) => {
+      posthog.capture("agent_key_removed", { provider: which });
       setBanner("Removed that saved key from this device.");
       await qc.invalidateQueries({ queryKey: ["agent-keys-status"] });
     },
@@ -106,6 +108,10 @@ export function AgentChatLlmSettings() {
         agent_fallback_chain: fallback.trim(),
       }),
     onSuccess: async () => {
+      posthog.capture("agent_model_settings_saved", {
+        model: modelChoice.trim(),
+        has_fallback_chain: Boolean(fallback.trim()),
+      });
       setBanner("Saved agent model settings.");
       await qc.invalidateQueries({ queryKey: ["agent-config"] });
     },

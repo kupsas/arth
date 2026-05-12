@@ -241,15 +241,12 @@ export function TransactionTable({
           return (
             <Badge
               variant="secondary"
-              className="inline-flex h-auto min-h-5 w-max max-w-none items-start justify-start gap-1.5 overflow-visible whitespace-normal rounded-md py-1 text-left font-normal"
+              className="max-w-[130px] truncate font-normal"
             >
               <span
-                className={cn(
-                  "mt-1.5 size-1.5 shrink-0 rounded-full self-start",
-                  categoryColor(cat),
-                )}
+                className={cn("size-1.5 rounded-full shrink-0", categoryColor(cat))}
               />
-              <span className="break-words">{cat}</span>
+              {cat}
             </Badge>
           )
         },
@@ -405,14 +402,7 @@ export function TransactionTable({
                   onClick={() => onRowClick(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell
-                      key={cell.id}
-                      className={
-                        cell.column.id === "counterparty_category"
-                          ? "whitespace-normal text-left align-top"
-                          : undefined
-                      }
-                    >
+                    <TableCell key={cell.id}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
                   ))}
