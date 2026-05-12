@@ -40,6 +40,9 @@ export type ChatConnectionStatus =
   | "closed"
   | "error";
 
+/** Stop retrying after this many consecutive "session not found" 404s. */
+const MAX_SESSION_NOT_FOUND = 3;
+
 function uuid(): string {
   return crypto.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -108,6 +111,12 @@ export function useChat(
   const lastUserMessageRef = useRef<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  /**
+   * Circuit breaker: counts consecutive "session not found" 404s.  If this
+   * exceeds ``MAX_SESSION_NOT_FOUND`` without a successful load or
+   * ``session_ready``, we stop retrying and show a final error message.
+   */
+  const sessionNotFoundCountRef = useRef(0);
   /**
    * After ``thinking_done``, the next ``thinking`` frame starts a new ReAct step —
    * replace ``liveThinking`` instead of appending.  Ref tracks “same step” vs “new step”.
@@ -256,6 +265,7 @@ export function useChat(
     fetchChatSession(sessionIdProp)
       .then((d) => {
         if (!cancelled) {
+          sessionNotFoundCountRef.current = 0;
           setMessages(normalizeOpenAiMessagesToUi(d.messages ?? []));
           setRestSessionGateOk(true);
         }
@@ -266,6 +276,14 @@ export function useChat(
         resetStreamingUi();
         setRestSessionGateOk(false);
         if (e instanceof ApiError && e.status === 404) {
+          sessionNotFoundCountRef.current += 1;
+          if (sessionNotFoundCountRef.current > MAX_SESSION_NOT_FOUND) {
+            setConnection("error");
+            setLastError(
+              "This chat session is gone — probably a server restart. Please start a new chat.",
+            );
+            return;
+          }
           onSessionNotFoundRef.current?.();
         }
       });
@@ -374,6 +392,7 @@ export function useChat(
         const typ = String(data.type ?? "");
 
         if (typ === "session_ready") {
+          sessionNotFoundCountRef.current = 0;
           const sid = String(data.session_id ?? "");
           if (sid) {
             serverAssignedSessionRef.current = sid;

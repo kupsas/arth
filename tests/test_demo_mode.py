@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from api.auth import create_session_token
+from api.constants import DEFAULT_LOCAL_USER
+from api.demo import DEMO_USER_ID
 from api.routes import demo as demo_routes
+from api.routes.chat_ws import _user_from_token
 
 
 def test_require_demo_raises_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,3 +49,40 @@ def test_demo_browser_session_from_websocket_query_http_scope() -> None:
     from api.demo import demo_browser_session_from_websocket_query
 
     assert demo_browser_session_from_websocket_query({"type": "http"}) is None
+
+
+# ---------------------------------------------------------------------------
+# Regression: _user_from_token must return DEMO_USER_ID in demo mode.
+#
+# Without this, WebSocket-created sessions get user_id="local" while REST
+# endpoints query with user_id="demo" → 404 → infinite reconnect loop.
+# This bug has recurred twice; these tests pin the contract.
+# ---------------------------------------------------------------------------
+
+
+def test_user_from_token_returns_demo_user_in_demo_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WS identity MUST be 'demo' when ARTH_DEMO_MODE is on."""
+    monkeypatch.setenv("ARTH_DEMO_MODE", "1")
+    token = create_session_token("demo")
+    result = _user_from_token(token)
+    assert result == DEMO_USER_ID, (
+        f"_user_from_token returned {result!r} in demo mode — "
+        f"must return {DEMO_USER_ID!r} to match get_current_user() on REST endpoints"
+    )
+
+
+def test_user_from_token_returns_local_user_outside_demo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WS identity should be the default local user when demo mode is off."""
+    monkeypatch.delenv("ARTH_DEMO_MODE", raising=False)
+    token = create_session_token("local")
+    result = _user_from_token(token)
+    assert result == DEFAULT_LOCAL_USER
+
+
+def test_user_from_token_returns_none_for_empty_token() -> None:
+    assert _user_from_token(None) is None
+    assert _user_from_token("") is None
+
+
+def test_user_from_token_returns_none_for_invalid_token() -> None:
+    assert _user_from_token("garbage.not.a.real.token") is None

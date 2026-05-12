@@ -274,9 +274,14 @@ function ChatPageInner() {
   );
 
   const onSessionNotFound = useCallback(() => {
-    // Drop stale sidebar / query state so we do not immediately re-select a ghost thread.
+    // Immediately wipe the stale sessions cache so wsSessionId can't re-select
+    // a dead draft during the refetch window (invalidateQueries only marks as
+    // stale — old data persists until the background refetch completes).
+    queryClient.setQueryData(chatSessionsQueryKey, []);
     void queryClient.invalidateQueries({ queryKey: chatSessionsQueryKey });
-    router.replace("/chat", { scroll: false });
+    // ?new=1 bypasses the draft-reuse logic in wsSessionId, guaranteeing
+    // a clean WS open with no session_id (server creates a fresh one).
+    router.replace("/chat?new=1", { scroll: false });
   }, [queryClient, router]);
 
   const {

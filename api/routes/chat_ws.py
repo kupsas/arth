@@ -43,7 +43,8 @@ from agent.security import CostTracker, SessionRateLimiter, screen_message
 from pipeline.llm_errors import AgentPausedError
 from api.auth import COOKIE_NAME, create_session_token, get_current_user, verify_session_token
 from api.constants import DEFAULT_LOCAL_USER
-from api.database import SQLiteSerializingSession, get_engine, get_session
+from api.database import SQLiteSerializingSession, get_effective_engine, get_session
+from api.demo import DEMO_USER_ID, is_demo_mode
 from api.services import chat_service
 from api.services.agent_runtime import user_agent_runtime
 
@@ -154,14 +155,22 @@ def get_ws_ticket(user: str = Depends(get_current_user)) -> dict[str, str]:
 # --- WebSocket ------------------------------------------------------------
 
 def _user_from_token(token: str | None) -> str | None:
-    """Verify a session token or WS ticket — identity is always the local install user."""
+    """Verify a session token or WS ticket and return the effective user identity.
+
+    In demo mode the identity must be ``DEMO_USER_ID`` so WS-created rows
+    match what ``get_current_user()`` returns on the REST side.  Otherwise
+    sessions created over WS (user="local") are invisible to REST (user="demo")
+    and every ``GET /api/chat/sessions/{id}`` returns 404.
+    """
     if not token:
         return None
     try:
         verify_session_token(token)
-        return DEFAULT_LOCAL_USER
     except HTTPException:
         return None
+    if is_demo_mode():
+        return DEMO_USER_ID
+    return DEFAULT_LOCAL_USER
 
 
 def _event_to_wire(ev: AgentEvent) -> dict[str, Any]:
@@ -236,7 +245,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
     # Load or create persisted session row + hydrate memory.
 
-    with SQLiteSerializingSession(get_engine()) as db:
+    with SQLiteSerializingSession(get_effective_engine()) as db:
         if chat_session_id:
             cs = chat_service.get_session(db, chat_session_id, user)
             if cs is None:
@@ -254,7 +263,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
     assert chat_session_id is not None
 
-    with SQLiteSerializingSession(get_engine()) as db:
+    with SQLiteSerializingSession(get_effective_engine()) as db:
         cs_row = chat_service.get_session(db, chat_session_id, user)
     title = cs_row.title if cs_row else None
     await websocket.send_json(
@@ -268,7 +277,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
     async def persist_memory() -> None:
         """Snapshot OpenAI-format messages to SQLite after each successful turn."""
-        with SQLiteSerializingSession(get_engine()) as db:
+        with SQLiteSerializingSession(get_effective_engine()) as db:
             chat_service.replace_session_messages(db, chat_session_id, user, memory.get_messages())
 
     async def run_one_turn(user_text: str) -> None:
@@ -290,7 +299,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await websocket.send_json({"type": "done"})
             return
 
-        with SQLiteSerializingSession(get_engine()) as db_agent:
+        with SQLiteSerializingSession(get_effective_engine()) as db_agent:
             with user_agent_runtime(db_agent, user):
                 sr = await screen_message(user_text, cost_tracker=cost_tracker)
                 if not sr.allowed:
