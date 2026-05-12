@@ -105,6 +105,12 @@ def user_stored_classifier_api_key_presence(session: Session, user_id: str) -> t
     )
 
 
+def merged_secrets_have_stored_classifier_key(data: dict[str, str]) -> bool:
+    """True if merged ``UserSecrets``-style dict still holds at least one classifier key."""
+    o, a, g = _triplet_from_secrets_dict(data)
+    return bool((o or "").strip()) or bool((a or "").strip()) or bool((g or "").strip())
+
+
 def user_has_classifier_api_key(session: Session, user_id: str) -> bool:
     """True if env **or** stored user secrets provide at least one LLM provider key."""
     ho, ha, hg = user_classifier_api_key_presence(session, user_id)

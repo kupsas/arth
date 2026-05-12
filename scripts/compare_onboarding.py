@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Compare a **reference** SQLite database (typically a frozen ``arth.db`` or
+Compare a **reference** SQLite database (typically a frozen ``arth_main.db`` or
 ``arth_reference.db``) against a **candidate** produced by onboarding (e.g.
 ``arth_onboarding.db``).
 
@@ -17,12 +17,12 @@ Two alignment modes are reported:
 
 **Typical usage** (from repo root)::
 
-    # After copying a baseline:  cp data/arth.db data/arth_reference.db
+    # After copying a baseline:  cp data/arth_main.db data/arth_reference.db
     python3 scripts/compare_onboarding.py \\
         --reference data/arth_reference.db \\
         --candidate data/arth_onboarding.db
 
-Defaults point at ``data/arth.db`` vs ``data/arth_onboarding.db`` so a quick
+Defaults point at ``data/arth_main.db`` vs ``data/arth_onboarding.db`` so a quick
 check works once those files exist.
 """
 
@@ -306,8 +306,8 @@ def main() -> int:
     parser.add_argument(
         "--reference",
         type=Path,
-        default=REPO_ROOT / "data" / "arth.db",
-        help="Reference / gold SQLite file (default: data/arth.db).",
+        default=REPO_ROOT / "data" / "arth_main.db",
+        help="Reference / gold SQLite file (default: data/arth_main.db).",
     )
     parser.add_argument(
         "--candidate",

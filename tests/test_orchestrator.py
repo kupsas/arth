@@ -167,18 +167,13 @@ class TestTransactionEmailProcessed:
         assert txn.source_type == "email"
 
     def test_transaction_is_unreviewed(self, session):
-        """Email-sourced transactions default to unreviewed unless auto-review applies.
-
-        High-confidence rules can set ``is_reviewed=True`` (see ``should_auto_review_email``);
-        patch that off here so this test stays focused on the review-queue path.
-        """
+        """Live Gmail poll inserts email rows with is_reviewed=False (Review queue)."""
         html = (FIXTURES / "alerts_hdfcbank_net_01.html").read_text()
         msg = _make_msg()
         client = _sender_client(HDFC_SENDER, [msg], body=html)
 
         with patch("pipeline.config.LLM_MODEL", "none"):
-            with patch("pipeline.db_writer.should_auto_review_email", return_value=False):
-                scrape_new_emails(session=session, client=client)
+            scrape_new_emails(session=session, client=client)
 
         txn = session.exec(select(Transaction)).first()
         assert txn.is_reviewed is False

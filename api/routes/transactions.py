@@ -227,18 +227,45 @@ def update_transaction(
     if not txn or txn.user_id != current_user:
         raise HTTPException(status_code=404, detail=f"Transaction {txn_id} not found")
 
+    was_reviewed = bool(txn.is_reviewed)
     apply_future = body.apply_to_future is True
     _apply_update(txn, body)
     txn.classification_source = "USER_REVIEWED"
     session.add(txn)
-    if apply_future and (
-        body.counterparty is not None or body.counterparty_category is not None
-    ):
+
+    # Persist a keyword rule when the user marks reviewed (review queue / approve) or
+    # explicitly opts in from the edit sheet (apply_to_future).
+    learn_merchant = bool(
+        txn.counterparty
+        and txn.counterparty_category
+        and (
+            apply_future
+            or (bool(txn.is_reviewed) and not was_reviewed)
+        )
+    )
+    if learn_merchant:
         _upsert_learned_merchant_rule(session, current_user, txn)
+
+    auto_approved_count = 0
+    if bool(txn.is_reviewed) and not was_reviewed:
+        auto_approved_count = _propagate_approval_to_similar(
+            session,
+            current_user,
+            txn,
+            exclude_id=txn_id,
+        )
+
     session.commit()
     session.refresh(txn)
-    logger.debug("Transaction patched id=%s apply_future_rules=%s", txn_id, apply_future)
-    return _txn_to_dict(txn)
+    logger.debug(
+        "Transaction patched id=%s apply_future_rules=%s auto_propagated=%s",
+        txn_id,
+        apply_future,
+        auto_approved_count,
+    )
+    out = _txn_to_dict(txn)
+    out["auto_approved_count"] = auto_approved_count
+    return out
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -297,6 +324,38 @@ def upsert_user_merchant_correction_rule(
             source="USER_CORRECTION",
         )
     )
+
+
+def _propagate_approval_to_similar(
+    session: Session,
+    user_id: str,
+    txn: Transaction,
+    *,
+    exclude_id: int,
+) -> int:
+    """Approve every other unreviewed row with the same merchant label and category.
+
+    Used when the user reviews one transaction so duplicates in the queue disappear
+    without repeated clicks.
+    """
+    if not txn.counterparty or not txn.counterparty_category:
+        return 0
+    rows = session.exec(
+        select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.counterparty == txn.counterparty,
+            Transaction.counterparty_category == txn.counterparty_category,
+            col(Transaction.is_reviewed).is_(False),
+            col(Transaction.id) != exclude_id,
+        )
+    ).all()
+    touched = 0
+    for row in rows:
+        row.is_reviewed = True
+        row.classification_source = "USER_REVIEWED"
+        session.add(row)
+        touched += 1
+    return touched
 
 
 def _upsert_learned_merchant_rule(

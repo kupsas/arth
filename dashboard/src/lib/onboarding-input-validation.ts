@@ -59,6 +59,59 @@ export function guardApiKeyInput(input: string, max: number): string {
   return clampTextLength(oneLine, max).text
 }
 
+/** Which LLM provider row in the classifier API key card (matches backend body fields). */
+export type ClassifierProviderField = "openai" | "anthropic" | "google"
+
+/** Typical Google Cloud / AI Studio API key length (heuristic). */
+const GOOGLE_CLASSIFIER_KEY_LEN = 39
+
+/**
+ * Returns a short user-facing message if the pasted string doesn’t look like that provider’s key,
+ * or `null` if it passes loose shape checks.
+ */
+export function describeClassifierKeyShapeError(
+  field: ClassifierProviderField,
+  guarded: string,
+): string | null {
+  if (!guarded) return null
+  if (field === "google") {
+    if (!guarded.startsWith("AIza")) {
+      return "That doesn’t look like a Google AI key — copy the one that starts with AIza."
+    }
+    if (guarded.length !== GOOGLE_CLASSIFIER_KEY_LEN) {
+      return `Google AI keys are usually ${GOOGLE_CLASSIFIER_KEY_LEN} characters. Double-check the full key.`
+    }
+    if (!/^AIza[A-Za-z0-9_-]+$/.test(guarded)) {
+      return "That doesn’t look like a complete Google AI key — letters, numbers, hyphens, or underscores only."
+    }
+    return null
+  }
+  if (field === "openai") {
+    if (!guarded.startsWith("sk-")) {
+      return "That doesn’t look like an OpenAI key — copy the one that starts with sk-."
+    }
+    // Length varies a lot across older vs newer project keys; keep a wide band.
+    if (guarded.length < 20 || guarded.length > ONBOARDING_INPUT_LIMITS.llmApiKeyChars) {
+      return "That OpenAI key doesn’t look the right length — paste the full key from OpenAI."
+    }
+    if (!/^sk-[a-zA-Z0-9_-]+$/.test(guarded)) {
+      return "That doesn’t look like a complete OpenAI key — use only the characters from your key."
+    }
+    return null
+  }
+  // anthropic
+  if (!guarded.startsWith("sk-ant-")) {
+    return "That doesn’t look like an Anthropic key — copy the one that starts with sk-ant-."
+  }
+  if (guarded.length < 28 || guarded.length > ONBOARDING_INPUT_LIMITS.llmApiKeyChars) {
+    return "That Anthropic key doesn’t look the right length — paste the full key from Anthropic."
+  }
+  if (!/^sk-ant-[a-zA-Z0-9_-]+$/.test(guarded)) {
+    return "That doesn’t look like a complete Anthropic key — use only the characters from your key."
+  }
+  return null
+}
+
 /**
  * Parses user decimal input for goal amount / years.
  * Returns `null` if the string is not a finite real number we should accept while typing

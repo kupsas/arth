@@ -386,3 +386,26 @@ class TestICICINEFT:
 
     def test_amount(self):
         assert self._parse()[0].debit_amount == Decimal("1.00")
+
+
+def test_hdfc_alert_registry_merges_net_and_bank_in_account_maps() -> None:
+    """Regression: mappings are often split — savings last-4 on .net, CC last-4 on .bank.in.
+
+    ``build_email_parser_registry`` must union both so CC alerts from either domain resolve.
+    """
+    from parsers.email_registry import build_email_parser_registry
+
+    bs = {
+        "alerts@hdfcbank.net": {
+            "accounts": {"3703": {"account_id": "HDFC_SAL_3703", "source_key": "hdfc_savings"}},
+        },
+        "alerts@hdfcbank.bank.in": {
+            "accounts": {"1905": {"account_id": "HDFC_CC_1905", "source_key": "hdfc_cc"}},
+        },
+    }
+    reg = build_email_parser_registry(bs)
+    cc_bi = next(p for p in reg["alerts@hdfcbank.bank.in"] if isinstance(p, HDFCCreditCardAlertParser))
+    cc_net = next(p for p in reg["alerts@hdfcbank.net"] if isinstance(p, HDFCCreditCardAlertParser))
+    merged_keys = {"3703", "1905"}
+    assert set(cc_bi.accounts.keys()) == merged_keys
+    assert cc_net.accounts == cc_bi.accounts

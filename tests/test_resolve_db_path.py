@@ -11,8 +11,8 @@ from pipeline.config import resolve_db_path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_default_prod_uses_arth_db() -> None:
-    assert resolve_db_path(REPO_ROOT, "prod", None, None) == (REPO_ROOT / "data" / "arth.db").resolve()
+def test_default_prod_uses_arth_main_db() -> None:
+    assert resolve_db_path(REPO_ROOT, "prod", None, None) == (REPO_ROOT / "data" / "arth_main.db").resolve()
 
 
 def test_app_env_test_uses_arth_test_db() -> None:

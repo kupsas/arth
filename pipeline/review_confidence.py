@@ -30,15 +30,11 @@ def compute_review_confidence(txn: CanonicalTransaction) -> ReviewConfidence:
 
 
 def should_auto_review_email(confidence: ReviewConfidence) -> bool:
-    """Return True if an email-sourced row can skip the human review queue.
+    """Legacy helper for env-driven HIGH→auto-review experiments.
 
-    Controlled by ``ARTH_EMAIL_AUTO_REVIEW`` (default ``1``): when disabled, never
-    auto-marks. When enabled, ``HIGH`` confidence rows are auto-reviewed; set
-    ``ARTH_EMAIL_AUTO_REVIEW_INCLUDE_MEDIUM=1`` to also auto-review ``MEDIUM``.
-
-    For manual QA of the review UI, ``ARTH_REVIEW_QUEUE_INCLUDE_HIGH=1`` keeps
-    ``HIGH`` rows in the queue (``is_reviewed=False``) instead of auto-approving them.
-    Remove or unset that variable when you only want ``MEDIUM`` and ``LOW`` in the queue.
+    **Note:** :func:`pipeline.db_writer.write_to_db` no longer calls this for Gmail inserts —
+    live scraper rows always stay on the Review queue (``is_reviewed=False``); historical
+    sweeps pass ``email_presumes_reviewed=True`` instead. Kept for unit tests and tooling.
     """
     raw = (os.getenv("ARTH_EMAIL_AUTO_REVIEW") or "1").strip().lower()
     if raw in ("0", "false", "no", "off"):

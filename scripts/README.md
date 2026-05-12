@@ -34,7 +34,7 @@ Rare upgrades and one-off repairs — see `[archive/README.md](archive/README.md
 
 **Runbook (test DB first, then prod):**
 
-1. **Backup prod** if you will touch it: `scripts/backup_db.sh` or copy `data/arth.db`.
+1. **Backup prod** if you will touch it: `scripts/backup_db.sh` or copy `data/arth_main.db`.
 2. **Test DB:** `APP_ENV=test python3 scripts/backfill_price_history.py --days 365`
 3. Inspect: `SELECT symbol, COUNT(*), MIN(date), MAX(date) FROM prices GROUP BY symbol;`
 4. **Prod:** `python3 scripts/backfill_price_history.py --days 365` (or `APP_ENV=prod` explicitly).
@@ -56,11 +56,11 @@ Rare upgrades and one-off repairs — see `[archive/README.md](archive/README.md
 
 ## `merge_prices_from_db.py`
 
-**When to use:** You already backfilled `prices` on `arth_test.db` and want the same rows in `arth.db` **without** another NSE/AMFI history crawl.
+**When to use:** You already backfilled `prices` on `arth_test.db` and want the same rows in `arth_main.db` **without** another NSE/AMFI history crawl.
 
 ```bash
-python3 scripts/merge_prices_from_db.py --source data/arth_test.db --into data/arth.db --dry-run
-python3 scripts/merge_prices_from_db.py --source data/arth_test.db --into data/arth.db
+python3 scripts/merge_prices_from_db.py --source data/arth_test.db --into data/arth_main.db --dry-run
+python3 scripts/merge_prices_from_db.py --source data/arth_test.db --into data/arth_main.db
 ```
 
 **Caveat:** Prod holdings must use the **same** `symbol` strings (NSE tickers, AMFI codes) you used when backfilling test; otherwise you will have price rows the UI never looks up. **Backup prod** before merging.

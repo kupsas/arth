@@ -152,7 +152,15 @@ def _db_merchant_rules_to_pipeline(rows: list[UserMerchantRule]) -> list[Merchan
 def load_user_classification_config(session: Session, user_id: str) -> UserClassificationConfig:
     """Build the config object used by :func:`pipeline.rules_classifier.classify_rules`."""
     merge_starter_pack_for_user(session, user_id)
-    session.flush()
+    # flush_and_commit() holds _SQLITE_WRITER_LOCK across flush+commit so the write
+    # transaction from merge_starter_pack_for_user is closed atomically rather than
+    # leaving an open write transaction (with the Python lock released) while the
+    # caller continues doing reads and classification work before its next commit.
+    _fac = getattr(session, "flush_and_commit", None)
+    if _fac is not None:
+        _fac()
+    else:
+        session.flush()
 
     settings = session.exec(
         select(UserClassificationSettings).where(UserClassificationSettings.user_id == user_id)

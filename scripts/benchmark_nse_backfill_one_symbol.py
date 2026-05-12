@@ -7,11 +7,11 @@ wall-clock time, rows upserted, and how many ``prices`` rows exist for that
 symbol in the requested date range after the run.
 
 **Database:** Same resolution as the API (see ``pipeline.config.resolve_db_path``).
-``APP_ENV`` defaults to **prod** → ``data/arth.db``. For benchmarks, prefer::
+``APP_ENV`` defaults to **prod** → ``data/arth_main.db``. For benchmarks, prefer::
 
     APP_ENV=onboarding python3 scripts/benchmark_nse_backfill_one_symbol.py SYMBOL
 
-Writes to ``data/arth.db`` are **blocked** unless you pass ``--allow-prod``.
+Writes to ``data/arth_main.db`` are **blocked** unless you pass ``--allow-prod``.
 
 Examples::
 
@@ -46,7 +46,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("benchmark_nse_backfill_one_symbol")
 
 # Canonical production file — writes refused unless ``--allow-prod``.
-_PROD_SQLITE = (REPO_ROOT / "data" / "arth.db").resolve()
+_PROD_SQLITE = (REPO_ROOT / "data" / "arth_main.db").resolve()
 
 
 def _print_database_target() -> None:
@@ -64,7 +64,7 @@ def _print_database_target() -> None:
     print(f"SQLite file (absolute): {resolved}")
     if resolved == _PROD_SQLITE:
         print(
-            "WARNING: This is the production database (data/arth.db). "
+            "WARNING: This is the production database (data/arth_main.db). "
             "Benchmark writes are blocked unless you pass --allow-prod.",
         )
     print("-----------------------")
@@ -110,7 +110,7 @@ def main() -> int:
         "--allow-prod",
         action="store_true",
         help=(
-            "Allow writing to data/arth.db (production). Without this flag, the "
+            "Allow writing to data/arth_main.db (production). Without this flag, the "
             "script exits if the resolved DB is the canonical prod file."
         ),
     )
@@ -127,7 +127,7 @@ def main() -> int:
                 "ERROR: Refusing to write to production SQLite "
                 f"({_PROD_SQLITE}).\n"
                 "  Set APP_ENV=onboarding (or APP_ENV=test), or pass --allow-prod "
-                "only if you intentionally want to modify arth.db.",
+                "only if you intentionally want to modify arth_main.db.",
             )
             return 2
 

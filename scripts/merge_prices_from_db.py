@@ -3,7 +3,7 @@
 Copy rows from one SQLite ``prices`` table into another (upsert on symbol+date).
 
 **Use case:** Run ``backfill_price_history.py`` against ``data/arth_test.db``, sanity-check
-counts, then merge those rows into ``data/arth.db`` so NSE/mfapi are not hit again.
+counts, then merge those rows into ``data/arth_main.db`` so NSE/mfapi are not hit again.
 
 Uses :func:`api.services.price_feed.upsert_prices` so behavior matches the app and we do not
 rely on SQLite UPSERT (older ``sqlite3`` builds lack ``ON CONFLICT ... DO UPDATE``).
@@ -12,8 +12,8 @@ This touches **only** the ``prices`` table — not holdings, transactions, or an
 
 Example::
 
-    python3 scripts/merge_prices_from_db.py --source data/arth_test.db --into data/arth.db --dry-run
-    python3 scripts/merge_prices_from_db.py --source data/arth_test.db --into data/arth.db
+    python3 scripts/merge_prices_from_db.py --source data/arth_test.db --into data/arth_main.db --dry-run
+    python3 scripts/merge_prices_from_db.py --source data/arth_test.db --into data/arth_main.db
 
 Paths are relative to the repo root (or absolute).
 """
@@ -45,8 +45,8 @@ def main() -> int:
     parser.add_argument(
         "--into",
         type=Path,
-        default=_ROOT / "data" / "arth.db",
-        help="SQLite file to write prices into (default: data/arth.db).",
+        default=_ROOT / "data" / "arth_main.db",
+        help="SQLite file to write prices into (default: data/arth_main.db).",
     )
     parser.add_argument(
         "--dry-run",

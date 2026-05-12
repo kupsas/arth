@@ -7,7 +7,7 @@ Parse → validate → encrypt PII → upsert ``Holding`` / insert deduped
 Workflow (from plan):
   1. ``APP_ENV=test`` → ``data/arth_test.db`` first
   2. Run ingest + ``scripts/validate_investment_crossref.py``
-  3. Backup ``data/arth.db`` before first prod ingest
+  3. Backup ``data/arth_main.db`` before first prod ingest
 """
 
 from __future__ import annotations
@@ -486,6 +486,7 @@ def ingest_investment_transactions(
     source_type: str | None = None,
     gmail_message_id: str | None = None,
     import_flow_log: EmailImportFlowLog | None = None,
+    email_presumes_reviewed: bool = False,
 ) -> dict[str, Any]:
     """Insert deduped ledger rows. When ``user_id`` is set, resolve ``holding_id`` (MF + equity).
 
@@ -496,8 +497,9 @@ def ingest_investment_transactions(
     (no merge / reconciliation of the existing row).
 
     When ``source_type=\"email\"`` (Gmail scraper / statement PDF attachment path), new rows
-    get ``is_reviewed=False`` so they surface on the investment review queue — same rule as
-    :func:`pipeline.db_writer.write_to_db` for bank transactions.
+    default to ``is_reviewed=False`` so they surface on the investment review queue — same rule as
+    :func:`pipeline.db_writer.write_to_db` for bank transactions. Pass ``email_presumes_reviewed=True``
+    for historical Gmail sweeps or onboarding mail import so rows enter pre-reviewed.
 
     When ``import_flow_log`` is set (onboarding email import HTTP path), append diagnostics to
     ``data/logs/email-import.log`` alongside bank-transaction events from :mod:`scraper.orchestrator`.
@@ -579,8 +581,12 @@ def ingest_investment_transactions(
             hid = find_holding_id_for_parsed_txn(session, uid, t)
             if hid is not None:
                 linked_inline += 1
-        # File/CLI imports omit source_type → reviewed. Email path passes source_type="email".
-        is_reviewed_default = source_type != "email"
+        # File/CLI imports omit source_type → reviewed. Email path: live scrape leaves rows
+        # unreviewed unless ``email_presumes_reviewed`` (historical / onboarding mail).
+        if source_type == "email":
+            is_reviewed_default = bool(email_presumes_reviewed)
+        else:
+            is_reviewed_default = True
         it = InvestmentTransaction(
             txn_date=t.txn_date,
             symbol=t.symbol,

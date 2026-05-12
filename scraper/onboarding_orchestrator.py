@@ -1584,6 +1584,7 @@ def run_onboarding_backfill(
                 parser_registry=parser_registry,
                 user_id=user_id,
                 import_flow_log=import_flow_log,
+                email_presumes_reviewed=True,
             )
             sender_norm = _normalise_sender(msg.sender)
             _record_email(

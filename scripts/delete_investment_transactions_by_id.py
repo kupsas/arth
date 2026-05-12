@@ -9,7 +9,7 @@ of the ledger.
 **Safety**
 
 - Default is **dry-run**: prints what would be deleted. Pass ``--execute`` to apply.
-- Optionally ``--backup-db`` copies ``arth.db`` first (same idea as other repair scripts).
+- Optionally ``--backup-db`` copies the resolved SQLite file first (same idea as other repair scripts).
 
 Examples (repo root, after ``.env`` / ``APP_ENV`` point at the DB you mean to edit)::
 
@@ -62,7 +62,10 @@ def main() -> int:
     ap.add_argument(
         "--backup-db",
         action="store_true",
-        help=f"Copy {pipeline.config.DB_PATH} to data/arth.db.bak-del-inv-<timestamp> before delete.",
+        help=(
+            f"Copy {pipeline.config.DB_PATH} to a timestamped "
+            "``.bak-del-inv-*`` file beside it before delete."
+        ),
     )
     args = ap.parse_args()
 
@@ -107,7 +110,9 @@ def main() -> int:
 
     if args.backup_db:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        bak = REPO_ROOT / "data" / f"arth.db.bak-del-inv-{ts}"
+        bak = pipeline.config.DB_PATH.parent / (
+            f"{pipeline.config.DB_PATH.name}.bak-del-inv-{ts}"
+        )
         shutil.copy2(pipeline.config.DB_PATH, bak)
         print(f"\nBacked up DB to {bak}")
 

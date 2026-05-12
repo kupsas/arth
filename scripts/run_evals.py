@@ -13,7 +13,7 @@ Examples (from repo root)::
     python scripts/run_evals.py --review agent/evals/results/<file>.json
     python scripts/run_evals.py --compare
 
-Requires ``.env`` with agent provider keys (see ``agent/config.py``) and a usable ``data/arth.db``.
+Requires ``.env`` with agent provider keys (see ``agent/config.py``) and a usable ``data/arth_main.db``.
 """
 
 from __future__ import annotations

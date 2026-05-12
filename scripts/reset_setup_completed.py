@@ -71,7 +71,7 @@ def main() -> None:
             "arth_db_name_env_set": bool((os.environ.get("ARTH_DB_NAME") or "").strip()),
             "database_path": str(pipeline_cfg.DB_PATH),
             "onboarding_db_expected": str((REPO_ROOT / "data" / "arth_onboarding.db").resolve()),
-            "production_db_path": str((REPO_ROOT / "data" / "arth.db").resolve()),
+            "production_db_path": str((REPO_ROOT / "data" / "arth_main.db").resolve()),
             "target_user": username,
             "user_query": username_input,
             "target_found": target is not None,

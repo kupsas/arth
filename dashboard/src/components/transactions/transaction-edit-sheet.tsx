@@ -185,6 +185,8 @@ export function TransactionEditSheet({
   const [excludeAnalytics, setExcludeAnalytics] = React.useState(false)
   const [exclusionPreset, setExclusionPreset] = React.useState<string>("refund")
   const [exclusionOther, setExclusionOther] = React.useState("")
+  /** Opt-in: persist merchant + category as an auto-label for similar alerts */
+  const [rememberForSimilar, setRememberForSimilar] = React.useState(false)
 
   // ── Sync form state when transaction loads ────────────────────────────────
   // Whenever a new transaction is loaded (txn changes), reset all form fields
@@ -212,6 +214,7 @@ export function TransactionEditSheet({
       setExclusionPreset("refund")
       setExclusionOther("")
     }
+    setRememberForSimilar(false)
   }, [txn, forceReviewed])
 
   // ── Save handler ──────────────────────────────────────────────────────────
@@ -249,6 +252,15 @@ export function TransactionEditSheet({
     // If forceReviewed and not already reviewed, always include it
     if (forceReviewed && txn && !txn.is_reviewed) {
       update.is_reviewed = true
+    }
+
+    // Optional: teach Arth this merchant + category for future alerts (matches backend flag)
+    if (
+      rememberForSimilar &&
+      counterparty.trim() &&
+      category
+    ) {
+      update.apply_to_future = true
     }
 
     try {
@@ -468,6 +480,32 @@ export function TransactionEditSheet({
                 >
                   Mark as reviewed
                 </label>
+              </div>
+
+              {/* Remember merchant + category for similar alerts (optional) */}
+              <div className="rounded-lg border border-border p-3 space-y-2">
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="remember-similar"
+                    checked={rememberForSimilar}
+                    onCheckedChange={(checked) =>
+                      setRememberForSimilar(Boolean(checked))
+                    }
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="remember-similar"
+                      className="text-sm cursor-pointer select-none font-medium"
+                    >
+                      Remember this for similar transactions
+                    </label>
+                    <p className="text-xs text-muted-foreground pl-0">
+                      Future alerts that match this merchant will use the same category.
+                      Turn on when you want this label to stick — skip for one-off fixes.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               {/* Exclude from dashboard metrics */}

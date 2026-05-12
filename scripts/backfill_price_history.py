@@ -10,7 +10,7 @@ Load roughly one calendar year of rows into ``prices`` for the historical portfo
   fully sold positions can still be valued in old months. ``STOONE`` is excluded.
 
 **Database:** Set ``APP_ENV`` before running — same as the API (``test`` → ``data/arth_test.db``,
-default ``prod`` → ``data/arth.db``).  See ``scripts/README.md`` for prerequisites and runbook.
+default ``prod`` → ``data/arth_main.db``).  See ``scripts/README.md`` for prerequisites and runbook.
 
 Run from repo root::
 

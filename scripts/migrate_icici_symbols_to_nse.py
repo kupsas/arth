@@ -14,10 +14,10 @@ rows with ``symbol IS NULL``.
 Examples::
 
     # Preview changes for the DB your env points at (see pipeline.config.DB_PATH)
-    python3 scripts/migrate_icici_symbols_to_nse.py --db-path data/arth.db
+    python3 scripts/migrate_icici_symbols_to_nse.py --db-path data/arth_main.db
 
     # Apply + backup copy next to the DB file
-    python3 scripts/migrate_icici_symbols_to_nse.py --db-path data/arth.db --execute --backup-db
+    python3 scripts/migrate_icici_symbols_to_nse.py --db-path data/arth_main.db --execute --backup-db
 
     # Onboarding copy
     python3 scripts/migrate_icici_symbols_to_nse.py --db-path data/arth_onboarding.db --execute --backup-db
@@ -90,7 +90,7 @@ def main() -> int:
         "--db-path",
         type=Path,
         required=True,
-        help="SQLite database file (e.g. data/arth.db or data/arth_onboarding.db).",
+        help="SQLite database file (e.g. data/arth_main.db or data/arth_onboarding.db).",
     )
     ap.add_argument(
         "--execute",

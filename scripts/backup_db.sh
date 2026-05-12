@@ -3,7 +3,7 @@
 # backup_db.sh — Daily SQLite backup for Arth
 #
 # WHAT IT DOES
-#   1. Creates a timestamped copy of arth.db in data/backups/
+#   1. Creates a timestamped copy of arth_main.db in data/backups/
 #   2. Prunes backups older than 30 days (keeps latest 30)
 #   3. Logs every action to data/logs/backup.log
 #
@@ -33,7 +33,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-DB_SOURCE="$REPO_ROOT/data/arth.db"
+DB_SOURCE="$REPO_ROOT/data/arth_main.db"
 BACKUP_DIR="$REPO_ROOT/data/backups"
 LOG_FILE="$REPO_ROOT/data/logs/backup.log"
 
@@ -64,7 +64,7 @@ fi
 log "Starting backup: $DB_SOURCE → $BACKUP_DEST"
 
 # sqlite3's .backup command creates a consistent snapshot even under concurrent
-# writes.  The "main" keyword refers to the main (only) database in arth.db.
+# writes.  The "main" keyword refers to the main (only) database in arth_main.db.
 sqlite3 "$DB_SOURCE" ".backup '$BACKUP_DEST'"
 
 # Verify the backup is a valid SQLite file (quick integrity check).

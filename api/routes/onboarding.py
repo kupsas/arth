@@ -49,9 +49,11 @@ from api.models import (
 )
 from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
+from api.services.classifier_key_shape import validate_classifier_key_shape
 from api.services.classifier_runtime import (
     effective_onboarding_resume_threshold,
     effective_onboarding_unknown_threshold,
+    merged_secrets_have_stored_classifier_key,
     onboarding_should_resume_after_classify,
     user_stored_classifier_api_key_presence,
 )
@@ -1548,6 +1550,9 @@ def onboarding_store_classifier_api_keys(
     if body.openai_api_key is not None:
         v = body.openai_api_key.strip()
         if v:
+            shape_err = validate_classifier_key_shape("openai", v)
+            if shape_err:
+                raise HTTPException(status_code=400, detail=shape_err)
             data["OPENAI_API_KEY_FOR_CLASSIFIER"] = v
             touched.append("OPENAI_API_KEY_FOR_CLASSIFIER")
         else:
@@ -1556,6 +1561,9 @@ def onboarding_store_classifier_api_keys(
     if body.anthropic_api_key is not None:
         v = body.anthropic_api_key.strip()
         if v:
+            shape_err = validate_classifier_key_shape("anthropic", v)
+            if shape_err:
+                raise HTTPException(status_code=400, detail=shape_err)
             data["ANTHROPIC_API_KEY_FOR_CLASSIFIER"] = v
             touched.append("ANTHROPIC_API_KEY_FOR_CLASSIFIER")
         else:
@@ -1564,11 +1572,25 @@ def onboarding_store_classifier_api_keys(
     if body.google_api_key is not None:
         v = body.google_api_key.strip()
         if v:
+            shape_err = validate_classifier_key_shape("google", v)
+            if shape_err:
+                raise HTTPException(status_code=400, detail=shape_err)
             data["GOOGLE_API_KEY_FOR_CLASSIFIER"] = v
             touched.append("GOOGLE_API_KEY_FOR_CLASSIFIER")
         else:
             data.pop("GOOGLE_API_KEY_FOR_CLASSIFIER", None)
             data.pop("GOOGLE_API_KEY", None)
+
+    before_o, before_a, before_g = user_stored_classifier_api_key_presence(session, current_user)
+    had_any_stored = before_o or before_a or before_g
+    if had_any_stored and not merged_secrets_have_stored_classifier_key(data):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Keep at least one saved smart-label key — add another provider first, "
+                "or paste a replacement key instead of clearing your last one."
+            ),
+        )
 
     payload = json.dumps(data)
     if row is None:

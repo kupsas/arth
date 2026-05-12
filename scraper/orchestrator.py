@@ -17,7 +17,7 @@ Flow for each email:
   5.  Transform            (ParsedTransaction → CanonicalTransaction)
   6.  Rules classify       (fill channel, txn_type, upi_type deterministically)
   7.  LLM classify         (fill counterparty, counterparty_category, remaining gaps)
-  8.  DB write             (write_to_db with source_type='email', is_reviewed=False)
+  8.  DB write             (write_to_db with source_type='email'; live poll leaves rows unreviewed)
   9.  Record in DB         (ProcessedEmail row — status='processed'|'skipped'|'failed')
 """
 
@@ -221,6 +221,7 @@ def _process_email(
     parser_registry: dict[str, list[BaseEmailParser]],
     user_id: str,
     import_flow_log: EmailImportFlowLog | None = None,
+    email_presumes_reviewed: bool = False,
 ) -> tuple[str, int]:
     """Process one email through the full pipeline.
 
@@ -380,11 +381,8 @@ def _process_email(
                 import_flow_log.write("llm_phase", "classify_llm() finished for this group")
 
             # ── Step 8: write to DB ──────────────────────────────────────────────
-            # source_type="email" means:
-            #   - is_reviewed=False (transaction surfaces on Review)
-            #   - gmail_message_id is stamped on each row for audit trail
-            #   - reconciliation logic is SKIPPED for this write (we ARE the email row,
-            #     not the statement row — the statement pipeline will reconcile against us)
+            # source_type="email": ``email_presumes_reviewed`` is False for live polls (Review queue)
+            # and True for historical sweeps + onboarding Gmail import (pre-reviewed).
             run = write_to_db(
                 canonical,
                 source_key=source_key,
@@ -392,6 +390,7 @@ def _process_email(
                 session=session,
                 source_type="email",
                 gmail_message_id=msg.id,
+                email_presumes_reviewed=email_presumes_reviewed,
             )
             total_new += run.new_count
             if import_flow_log:
@@ -414,6 +413,7 @@ def _process_email(
             source_type="email",
             gmail_message_id=msg.id,
             import_flow_log=import_flow_log,
+            email_presumes_reviewed=email_presumes_reviewed,
         )
         total_new += int(hr.get("inserted", 0)) + int(tr.get("inserted", 0))
         if import_flow_log:
@@ -659,6 +659,7 @@ def run_historical_backfill(
                     session=session,
                     parser_registry=parser_registry,
                     user_id=uid,
+                    email_presumes_reviewed=True,
                 )
                 _record_email(session, msg, sender=sender_norm, status=status, txn_count=txn_count)
                 if status == "processed":
@@ -734,6 +735,7 @@ def run_historical_backfill(
                     session=session,
                     parser_registry=parser_registry,
                     user_id=uid,
+                    email_presumes_reviewed=True,
                 )
                 _record_email(session, msg, sender=sender_norm, status=status, txn_count=txn_count)
                 if status == "processed":

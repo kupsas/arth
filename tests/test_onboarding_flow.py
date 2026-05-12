@@ -368,14 +368,68 @@ def test_classifier_status_and_stored_api_key(
     with Session(engine) as session:  # type: ignore[call-arg]
         row = session.exec(select(UserSecrets).where(UserSecrets.user_id == "flow_user")).first()
         assert row and row.secrets_json and "insecure" in row.secrets_json
-    # Teardown: clear the key so a later test does not see process-level env as “filled”
+    # Teardown: remove secrets row so later tests do not see stored keys as “filled”
+    with Session(engine) as session:  # type: ignore[call-arg]
+        row = session.exec(select(UserSecrets).where(UserSecrets.user_id == "flow_user")).first()
+        if row:
+            session.delete(row)
+            session.commit()
+
+
+def test_classifier_api_key_rejects_clearing_last_stored_key(
+    engine: object,
+    flow_client: TestClient,
+) -> None:
+    """Cannot POST an empty key when it would remove the user's last saved classifier key."""
+    r = flow_client.post(
+        "/api/onboarding/api-key", json={"openai_api_key": "sk-insecure-test-xyz"}
+    )
+    assert r.status_code == 200, r.text
     r_clear = flow_client.post("/api/onboarding/api-key", json={"openai_api_key": ""})
-    assert r_clear.status_code == 200
-    s3 = flow_client.get("/api/onboarding/classifier-status")
-    assert s3.status_code == 200
-    j3 = s3.json()
-    assert j3["has_any_api_key"] is False
-    assert j3["has_openai_api_key"] is False
+    assert r_clear.status_code == 400, r_clear.text
+    s = flow_client.get("/api/onboarding/classifier-status")
+    assert s.status_code == 200
+    assert s.json()["has_any_api_key"] is True
+    with Session(engine) as session:  # type: ignore[call-arg]
+        row = session.exec(select(UserSecrets).where(UserSecrets.user_id == "flow_user")).first()
+        if row:
+            session.delete(row)
+            session.commit()
+
+
+def test_classifier_api_key_allows_clear_when_another_remains(
+    engine: object,
+    flow_client: TestClient,
+) -> None:
+    """Removing one stored provider is OK when another classifier key remains."""
+    google_39 = "AIza" + "Sy" + ("x" * 33)
+    assert len(google_39) == 39
+    assert flow_client.post(
+        "/api/onboarding/api-key", json={"openai_api_key": "sk-insecure-test-xyz"}
+    ).status_code == 200
+    assert flow_client.post(
+        "/api/onboarding/api-key", json={"google_api_key": google_39}
+    ).status_code == 200
+    r_clear = flow_client.post("/api/onboarding/api-key", json={"openai_api_key": ""})
+    assert r_clear.status_code == 200, r_clear.text
+    s = flow_client.get("/api/onboarding/classifier-status").json()
+    assert s["has_openai_api_key"] is False
+    assert s["has_google_api_key"] is True
+    assert s["has_any_api_key"] is True
+    with Session(engine) as session:  # type: ignore[call-arg]
+        row = session.exec(select(UserSecrets).where(UserSecrets.user_id == "flow_user")).first()
+        if row:
+            session.delete(row)
+            session.commit()
+
+
+def test_classifier_api_key_rejects_misshapen_google_key(flow_client: TestClient) -> None:
+    """Shape validation rejects obviously wrong Google keys before persist."""
+    r = flow_client.post(
+        "/api/onboarding/api-key",
+        json={"google_api_key": "AIza-short"},
+    )
+    assert r.status_code == 400, r.text
 
 
 def test_preclassification_get_returns_saved_raw(

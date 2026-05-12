@@ -1,16 +1,16 @@
 """
 DB Migration Script — Phase 4 Email Scraper
 
-Run this script ONCE if you have an existing arth.db that was created before
+Run this script ONCE if you have an existing arth_main.db (or legacy arth_v1.db) that was created before
 Phase 4.  It safely adds the new columns and index to the transactions table
 and creates the new processed_emails table.
 
-If you are starting fresh (no arth.db yet), you do NOT need to run this —
+If you are starting fresh (no database file yet), you do NOT need to run this —
 `init_db()` (called when the API server starts) will create all tables with
 the correct schema from scratch.
 
 Usage:
-    python scripts/migrate_db.py              # applies to data/arth.db
+    python scripts/migrate_db.py              # applies to data/arth_main.db
     APP_ENV=test python scripts/migrate_db.py # applies to data/arth_test.db
 
 What it does:

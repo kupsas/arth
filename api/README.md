@@ -58,7 +58,7 @@ Swagger’s “Try it out” is awkward with cookies — use the real website or
 
 | Mode               | File                | How to start                      |
 | ------------------ | ------------------- | --------------------------------- |
-| Normal             | `data/arth.db`      | default `uvicorn` command         |
+| Normal             | `data/arth_main.db` | default `uvicorn` command         |
 | Local test profile | `data/arth_test.db` | `APP_ENV=test` + e.g. port `8001` |
 | Automated tests    | in-memory           | `pytest`                          |
 

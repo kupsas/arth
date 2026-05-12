@@ -40,7 +40,7 @@ def resolve_db_path(
     3. ``APP_ENV=test`` → ``data/arth_test.db``.
     4. ``APP_ENV=onboarding`` or ``onboarding_test`` → ``data/arth_onboarding.db``
        (dedicated onboarding SQLite; same file for both env names).
-    5. Otherwise → ``data/arth.db``.
+    5. Otherwise → ``data/arth_main.db`` (default production database).
 
     Parameters ``arth_db_name`` / ``arth_db_path`` are the raw env string or ``None``
     when unset, so unit tests can call this without mutating the environment.
@@ -58,7 +58,7 @@ def resolve_db_path(
         return (data_dir / "arth_test.db").resolve()
     if app_env in ("onboarding", "onboarding_test"):
         return (data_dir / "arth_onboarding.db").resolve()
-    return (data_dir / "arth.db").resolve()
+    return (data_dir / "arth_main.db").resolve()
 
 
 # ---------------------------------------------------------------------------

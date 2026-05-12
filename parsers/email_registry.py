@@ -43,7 +43,10 @@ def build_email_parser_registry(
         row = bs.get(sender) or {}
         return row.get("accounts") or {}
 
-    hdfc_a = _acct("alerts@hdfcbank.net")
+    # HDFC uses two From-address domains (.net vs .bank.in). Users often map savings
+    # last-4 under one sender and credit-card last-4 under the other. Both registry
+    # keys must see the union so CC/UPI alerts resolve accounts whichever domain Gmail used.
+    hdfc_a = {**_acct("alerts@hdfcbank.net"), **_acct("alerts@hdfcbank.bank.in")}
     icici_stmt = _acct("estatement@icicibank.com")
     hdfc_cc = _acct("emailstatements.cards@hdfcbank.net")
     hdfc_comb = _acct("hdfcbanksmartstatement@hdfcbank.net")

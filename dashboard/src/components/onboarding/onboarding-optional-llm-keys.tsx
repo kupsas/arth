@@ -10,7 +10,7 @@
  *
  * ``GET /api/onboarding/classifier-status`` reports only keys **saved via this UI**
  * (encrypted ``UserSecrets``). Server ``.env`` keys are ignored here so they don’t look like “you
- * pasted keys”, and remove/update reflects immediately.
+ * pasted keys”, and updates reflect immediately after save.
  */
 
 import * as React from "react";
@@ -29,7 +29,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   ONBOARDING_INDICATIVE_CLOUD_ROWS_PER_1000,
-  ONBOARDING_INDICATIVE_OVERALL_PCT,
   ONBOARDING_PRIMARY_COST_USD_PER_100,
   costUsdForCloudRowCount,
   formatUsd,
@@ -42,12 +41,13 @@ import {
 } from "@/lib/user-facing-api-error";
 import {
   describeApiKeySanitiseFailure,
+  describeClassifierKeyShapeError,
   guardApiKeyInput,
   ONBOARDING_INPUT_LIMITS,
 } from "@/lib/onboarding-input-validation";
 import { cn } from "@/lib/utils";
 
-/** Partial POST body: only sent keys are merged; empty string clears that provider. */
+/** Partial POST body: only sent keys are merged; empty string clears that provider (when allowed). */
 async function postKeys(body: {
   openai_api_key?: string;
   anthropic_api_key?: string;
@@ -67,8 +67,11 @@ async function postKeys(body: {
   }
 }
 
-/** Which cloud provider row we’re adding a key for (input shown only for this row). */
+/** Which cloud provider row we’re pasting into. */
 type ProviderField = "openai" | "anthropic" | "google";
+
+/** `add` = new provider row; `replace` = rotate key for a provider that already has one saved. */
+type KeyPanel = { field: ProviderField; mode: "add" | "replace" } | null;
 
 /**
  * One row per LLM provider: same layout, different copy and which field we read/write in state.
@@ -116,6 +119,20 @@ const PROVIDER_ROWS: Array<{
   },
 ];
 
+/** Clear the other two paste buffers so one Save sends a single provider key. */
+function clearOtherProviderInputs(
+  field: ProviderField,
+  setters: {
+    setOpenai: (s: string) => void;
+    setAnthropic: (s: string) => void;
+    setGoogle: (s: string) => void;
+  },
+) {
+  if (field !== "google") setters.setGoogle("");
+  if (field !== "anthropic") setters.setAnthropic("");
+  if (field !== "openai") setters.setOpenai("");
+}
+
 export function OnboardingOptionalLlmKeys() {
   const qc = useQueryClient();
   /** Server-side presence flags refetched on mount and after save/remove. */
@@ -124,13 +141,18 @@ export function OnboardingOptionalLlmKeys() {
   const [openai, setOpenai] = React.useState("");
   const [anthropic, setAnthropic] = React.useState("");
   const [google, setGoogle] = React.useState("");
-  /** Key paste UI is hidden until “Add” is clicked for that provider. */
-  const [addExpanded, setAddExpanded] = React.useState<ProviderField | null>(null);
-  /** Inline remove confirmation for one provider at a time. */
+  /** Single paste target: adding a new provider or replacing an existing key. */
+  const [panel, setPanel] = React.useState<KeyPanel>(null);
+  /** When multiple keys exist, confirm removing one provider (cannot drop the last saved key). */
   const [removeConfirm, setRemoveConfirm] = React.useState<ProviderField | null>(null);
   const [msg, setMsg] = React.useState<string | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+
+  const setters = React.useMemo(
+    () => ({ setOpenai, setAnthropic, setGoogle }),
+    [],
+  );
 
   const invalidateClassifierStatus = React.useCallback(() => {
     void qc.invalidateQueries({ queryKey: [...onboardingClassifierStatusKey] });
@@ -139,13 +161,7 @@ export function OnboardingOptionalLlmKeys() {
   async function onSave() {
     setMsg(null);
     setErr(null);
-    // Only send providers the user actually typed into — omit empty fields so we do not
-    // accidentally clear keys (clearing is explicit via “Remove saved key”).
-    const body: {
-      openai_api_key?: string;
-      anthropic_api_key?: string;
-      google_api_key?: string;
-    } = {};
+
     const o = guardApiKeyInput(openai, ONBOARDING_INPUT_LIMITS.llmApiKeyChars);
     const a = guardApiKeyInput(anthropic, ONBOARDING_INPUT_LIMITS.llmApiKeyChars);
     const g = guardApiKeyInput(google, ONBOARDING_INPUT_LIMITS.llmApiKeyChars);
@@ -159,15 +175,67 @@ export function OnboardingOptionalLlmKeys() {
       return;
     }
 
+    if (panel?.mode === "replace") {
+      const field = panel.field;
+      const val = field === "google" ? g : field === "anthropic" ? a : o;
+      if (!val) {
+        setErr("Paste the new key before saving.");
+        return;
+      }
+      const shapeErr = describeClassifierKeyShapeError(field, val);
+      if (shapeErr) {
+        setErr(shapeErr);
+        return;
+      }
+      const body =
+        field === "openai"
+          ? { openai_api_key: val }
+          : field === "anthropic"
+            ? { anthropic_api_key: val }
+            : { google_api_key: val };
+      setBusy(true);
+      try {
+        await postKeys(body);
+        invalidateClassifierStatus();
+        setOpenai("");
+        setAnthropic("");
+        setGoogle("");
+        setPanel(null);
+        setMsg("Saved. Your key is encrypted on this machine.");
+      } catch (e) {
+        setErr(getUserFacingErrorMessage(e) || "Couldn't save keys. Try again.");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    // Add flow: user opened “Add” on a provider without a key.
+    const body: {
+      openai_api_key?: string;
+      anthropic_api_key?: string;
+      google_api_key?: string;
+    } = {};
     if (o) body.openai_api_key = o;
     if (a) body.anthropic_api_key = a;
     if (g) body.google_api_key = g;
+
+    const shapeErr =
+      (o && describeClassifierKeyShapeError("openai", o)) ||
+      (a && describeClassifierKeyShapeError("anthropic", a)) ||
+      (g && describeClassifierKeyShapeError("google", g));
+    if (shapeErr) {
+      setErr(shapeErr);
+      return;
+    }
+
     if (Object.keys(body).length === 0) {
       setMsg(
-        "Open a provider above with “Add”, paste the key, then click “Save key”.",
+        'Open a provider above with “Add”, paste the key, then click “Save key”.',
       );
       return;
     }
+
     setBusy(true);
     try {
       await postKeys(body);
@@ -175,10 +243,8 @@ export function OnboardingOptionalLlmKeys() {
       setOpenai("");
       setAnthropic("");
       setGoogle("");
-      setAddExpanded(null);
-      setMsg(
-        "Saved. Key is encrypted at rest — use “Remove” if you ever need to delete it.",
-      );
+      setPanel(null);
+      setMsg("Saved. Your key is encrypted on this machine.");
     } catch (e) {
       setErr(getUserFacingErrorMessage(e) || "Couldn't save keys. Try again.");
     } finally {
@@ -203,6 +269,7 @@ export function OnboardingOptionalLlmKeys() {
       if (field === "anthropic") setAnthropic("");
       if (field === "google") setGoogle("");
       setRemoveConfirm(null);
+      setPanel(null);
       setMsg("Removed that saved key.");
     } catch (e) {
       setErr(getUserFacingErrorMessage(e) || "Couldn't remove that key. Try again?");
@@ -211,7 +278,6 @@ export function OnboardingOptionalLlmKeys() {
     }
   }
 
-  const acc = ONBOARDING_INDICATIVE_OVERALL_PCT;
   const cloudRowsPer1k = ONBOARDING_INDICATIVE_CLOUD_ROWS_PER_1000;
   /** $ for classifying exactly `cloudRowsPer1k` cloud rows, from benchmark “$/100 similar rows”. */
   const costForCloudSlice = costUsdForCloudRowCount(
@@ -252,7 +318,7 @@ export function OnboardingOptionalLlmKeys() {
         )}
         {!loadingStatus && st?.has_any_api_key && (
           <p className="text-sm text-muted-foreground rounded-md border border-border bg-muted/40 px-3 py-2">
-            Key saved — you&apos;re good to go. Remove and re-add below if you want to swap providers.
+            Key saved — you&apos;re good to go.
           </p>
         )}
 
@@ -281,8 +347,7 @@ export function OnboardingOptionalLlmKeys() {
 
               /**
                * With zero keys saved, every “Add” is high-contrast. Once any key exists, only
-               * “Remove” stays loud; other “Add”s stay muted (still clickable — opens the paste
-               * field so you can add another provider or replace without hunting for a dead control).
+               * “Replace” on the active row stays loud; other “Add”s stay muted (still clickable).
                */
               const addLooksPrimary =
                 !loadingStatus && !hasKey && savedKeyCount === 0;
@@ -299,6 +364,13 @@ export function OnboardingOptionalLlmKeys() {
                     ? setAnthropic
                     : setOpenai;
 
+              const showPastePanel =
+                panel?.field === field &&
+                ((panel.mode === "add" && !hasKey) ||
+                  (panel.mode === "replace" && hasKey));
+
+              const canRemoveThisRow = hasKey && savedKeyCount > 1;
+
               return (
                 <div key={field} className="grid gap-2">
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -307,50 +379,69 @@ export function OnboardingOptionalLlmKeys() {
                     </Label>
                     <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
                       {hasKey ? (
-                        removeConfirm === field ? (
-                          <div
-                            className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto"
-                            role="group"
-                            aria-label={`Confirm remove ${shortName} key`}
-                          >
-                            <span className="text-xs text-muted-foreground">
-                              Remove saved {shortName} key?
-                            </span>
+                        <>
+                          {canRemoveThisRow &&
+                            (removeConfirm === field ? (
+                              <div
+                                className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto"
+                                role="group"
+                                aria-label={`Confirm remove ${shortName} key`}
+                              >
+                                <span className="text-xs text-muted-foreground">
+                                  Remove saved {shortName} key?
+                                </span>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-border bg-background text-foreground hover:bg-muted"
+                                  disabled={busy}
+                                  onClick={() => void removeKey(field)}
+                                >
+                                  Remove
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  disabled={busy}
+                                  onClick={() => setRemoveConfirm(null)}
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="border-border bg-background text-foreground hover:bg-muted"
+                                disabled={busy}
+                                onClick={() => {
+                                  setRemoveConfirm(field);
+                                  setPanel(null);
+                                }}
+                              >
+                                Remove
+                              </Button>
+                            ))}
+                          {!removeConfirm || removeConfirm !== field ? (
                             <Button
                               type="button"
                               size="sm"
                               variant="outline"
                               className="border-border bg-background text-foreground hover:bg-muted"
                               disabled={busy}
-                              onClick={() => void removeKey(field)}
+                              onClick={() => {
+                                setRemoveConfirm(null);
+                                setPanel({ field, mode: "replace" });
+                                clearOtherProviderInputs(field, setters);
+                              }}
                             >
-                              Remove
+                              Replace
                             </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              disabled={busy}
-                              onClick={() => setRemoveConfirm(null)}
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        ) : (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="border-border bg-background text-foreground hover:bg-muted"
-                            disabled={busy}
-                            onClick={() => {
-                              setRemoveConfirm(field);
-                              setAddExpanded(null);
-                            }}
-                          >
-                            Remove
-                          </Button>
-                        )
+                          ) : null}
+                        </>
                       ) : (
                         <Button
                           type="button"
@@ -366,11 +457,8 @@ export function OnboardingOptionalLlmKeys() {
                           )}
                           onClick={() => {
                             setRemoveConfirm(null);
-                            setAddExpanded(field);
-                            // Only one paste target at a time — avoid sending two keys in one save.
-                            if (field !== "google") setGoogle("");
-                            if (field !== "anthropic") setAnthropic("");
-                            if (field !== "openai") setOpenai("");
+                            setPanel({ field, mode: "add" });
+                            clearOtherProviderInputs(field, setters);
                           }}
                         >
                           Add
@@ -379,7 +467,7 @@ export function OnboardingOptionalLlmKeys() {
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground">{hint}</p>
-                  {addExpanded === field && !hasKey && (
+                  {showPastePanel && (
                     <div className="grid gap-1">
                       <Input
                         id={inputId}
@@ -419,7 +507,7 @@ export function OnboardingOptionalLlmKeys() {
               {err}
             </p>
           )}
-          {addExpanded !== null && (
+          {panel !== null && (
             <Button type="button" onClick={() => void onSave()} disabled={busy}>
               {busy ? "Saving…" : "Save key"}
             </Button>

@@ -4,7 +4,7 @@ python-dotenv>=1.0
 openai>=2.0
 anthropic>=0.30
 google-genai>=2.0.1
-pyyaml>=6.0
+pyyaml>=6.0.3
 types-PyYAML>=6.0  # stub package so mypy can type-check `import yaml`
 pytest>=8.0
 pdfplumber>=0.11.9
@@ -15,6 +15,7 @@ uvicorn[standard]>=0.34
 # litellm 1.83.x pins httpx==0.28.1; a bare >=0.27 lets pip pick 0.28.0 and the solver fails.
 httpx==0.28.1
 requests>=2.31
+urllib3>=2.7.0  # patched transitive (pip-audit / OSV); bounds CVE fixes on urllib3
 # Goals architecture — IMF CPI via SDMX (inflation_service); pulls pandas via sdmx1
 sdmx1>=1.0
 python-multipart>=0.0.27
@@ -27,8 +28,8 @@ beautifulsoup4>=4.12
 apscheduler>=3.11.2
 
 # Auth — password hashing and signed session tokens
-bcrypt>=4.0
-itsdangerous>=2.1
+bcrypt>=5.0.0
+itsdangerous>=2.2.0
 
 # CI tooling — lint, type-checking, coverage
 ruff>=0.4
