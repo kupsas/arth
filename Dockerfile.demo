@@ -8,9 +8,12 @@ WORKDIR /build
 COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci
 COPY dashboard .
+RUN rm -f .env .env.local .env.*
+ARG CACHE_BUST=1
 ARG NEXT_PUBLIC_DEMO_MODE=1
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_PUBLIC_API_URL=same-origin \
+    NEXT_PUBLIC_WS_URL= \
     NEXT_PUBLIC_DEMO_MODE=${NEXT_PUBLIC_DEMO_MODE}
 RUN npm run build
 
