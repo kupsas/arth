@@ -20,11 +20,11 @@ primary_region = 'bom'
 
   # Caddy answers this path immediately; / can still 502 while Next.js boots.
   [[http_service.checks]]
-    grace_period = "15s"
+    grace_period = "45s"
     interval = "30s"
     method = "GET"
     path = "/fly-healthz"
-    timeout = "5s"
+    timeout = "10s"
 
 [[vm]]
   memory = '1gb'
