@@ -55,13 +55,13 @@ AGENT_FALLBACK_CHAIN: list[str] = [
 
 # Layer-2 input screening (cheap classifier; separate chain from main agent).
 SCREENING_MODEL: str = os.getenv(
-    "SCREENING_MODEL", "gemini/gemini-3.1-flash-lite-preview"
+    "SCREENING_MODEL", "gemini/gemini-3.1-flash-lite"
 )
 SCREENING_FALLBACK_CHAIN: list[str] = [
     m.strip()
     for m in os.getenv(
         "SCREENING_FALLBACK_CHAIN",
-        "gemini/gemini-3.1-flash-lite-preview,gemini/gemini-2.5-flash-lite,anthropic/claude-haiku-4-5",
+        "gemini/gemini-3.1-flash-lite,gemini/gemini-2.5-flash-lite,anthropic/claude-haiku-4-5",
     ).split(",")
     if m.strip()
 ]
@@ -123,7 +123,7 @@ AGENT_MODERATION_API_KEY: str = os.getenv("OPENAI_API_KEY_FOR_MODERATION", "").s
 AGENT_MODEL_PRICING: dict[str, dict[str, float]] = {
     # Google Gemini (paid tier, per 1M tokens USD)
     "gemini/gemini-3-flash-preview": {"input": 0.50, "output": 3.00},
-    "gemini/gemini-3.1-flash-lite-preview": {"input": 0.25, "output": 1.50},
+    "gemini/gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50},
     "gemini/gemini-2.5-flash": {"input": 0.30, "output": 2.50},
     "gemini/gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
     # Anthropic Claude (base input, per 1M tokens USD)
