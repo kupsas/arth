@@ -141,7 +141,7 @@ LLM_MODEL_MAP: dict[str, tuple[str, str]] = {
     "gpt-5.4-mini":          ("openai",    "gpt-5.4-mini"),
     "gpt-5.4-nano":          ("openai",    "gpt-5.4-nano"),
     "gpt-5.4-pro":           ("openai",    "gpt-5.4-pro"),
-    "gemini-3.1-flash-lite": ("google",    "gemini-3.1-flash-lite-preview"),
+    "gemini-3.1-flash-lite": ("google",    "gemini-3.1-flash-lite"),
     "gemini-3-flash":        ("google",    "gemini-3-flash-preview"),
     "gemini-2.5-flash":      ("google",    "gemini-2.5-flash"),
     "gemini-2.5-flash-lite": ("google",    "gemini-2.5-flash-lite"),
