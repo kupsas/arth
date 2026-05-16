@@ -154,9 +154,13 @@ async def lifespan(app: FastAPI):
         async def _demo_cleanup_loop() -> None:
             from api.demo import DemoSessionManager
 
+            # How often we *scan* for stale session DB files. Actual deletion still uses
+            # ``ARTH_DEMO_SESSION_TTL_HOURS`` (default 4h) — this is not a shorter TTL.
+            cleanup_interval_sec = 600
+
             while True:
                 try:
-                    await asyncio.sleep(1800)
+                    await asyncio.sleep(cleanup_interval_sec)
                     DemoSessionManager.cleanup_stale_files()
                 except asyncio.CancelledError:
                     raise

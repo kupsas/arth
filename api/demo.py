@@ -6,6 +6,12 @@ Each browser gets a ``demo_session_id`` cookie (or ``arth_demo_sid`` on WebSocke
 when the cookie is not sent to the API host); the API copies the seed
 database (``ARTH_DEMO_SEED_PATH`` or ``data/arth_demo_seed.db``) into a temp
 file and serves all ORM traffic from that copy via :data:`api.database._demo_db_path`.
+
+On Fly.io with multiple Machines, ``FLY_MACHINE_ID`` is set and we also set
+``arth_demo_fly_instance`` (see :data:`DEMO_FLY_INSTANCE_COOKIE`). If a request
+lands on the wrong Machine, we return ``fly-replay`` (HTTP) or close the
+WebSocket so the proxy can route to the owner; ``fly.toml`` replay_cache pins
+by ``demo_session_id`` after the first replay.
 """
 
 from __future__ import annotations
@@ -16,8 +22,10 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Callable
 
@@ -30,6 +38,11 @@ logger = logging.getLogger(__name__)
 
 # Cookie + identity (must match seeded ``arth_demo_seed.db`` rows).
 DEMO_SESSION_COOKIE = "demo_session_id"
+# Fly.io multi-machine: the Machine ID that created this visitor's SQLite copy.
+# When a request lands on a different Machine, we return ``fly-replay`` (HTTP) or
+# close the WebSocket so the client retries; Fly's replay_cache then pins by
+# ``demo_session_id`` once a replay has happened.
+DEMO_FLY_INSTANCE_COOKIE = "arth_demo_fly_instance"
 # When the dashboard opens WS directly to FastAPI (bypassing Next), some browsers send
 # ``demo_session_id`` only for the page host (``localhost``) and not for ``127.0.0.1``.
 # ``GET /api/chat/ws-ticket`` returns this value so the client can pass it on the WS URL.
@@ -102,10 +115,26 @@ def _sqlite_wal_connect(dbapi_conn, _connection_record) -> None:
 
 
 class DemoSessionManager:
-    """Per-cookie SQLite file + engine cache + chat budget."""
+    """Per-cookie SQLite file + engine cache + chat budget.
 
-    _engines: dict[str, Engine] = {}
+    ``_engines`` is an LRU-ordered map (path → Engine) capped so Fly demo
+    machines do not grow RAM forever with one engine per visitor. Access and
+    eviction are serialized with ``_engines_lock`` so cache mutations stay
+    consistent with ``dispose_engine`` / ``cleanup_stale_files``.
+    """
+
+    _engines: "OrderedDict[str, Engine]" = OrderedDict()
+    _engines_lock = threading.RLock()
     _chat_user_turns: dict[str, int] = {}
+
+    @classmethod
+    def _max_cached_engines(cls) -> int:
+        """Upper bound on pooled SQLAlchemy engines per process (demo Fly)."""
+        try:
+            n = int(os.getenv("ARTH_DEMO_ENGINE_CACHE_MAX", "100").strip())
+        except ValueError:
+            n = 100
+        return max(1, min(n, 5000))
 
     @classmethod
     def ensure_session_db(cls, session_id: str) -> Path:
@@ -131,22 +160,35 @@ class DemoSessionManager:
         return dest
 
     @classmethod
+    def _trim_engine_cache_unlocked(cls) -> None:
+        """Drop least-recently-used engines until we are at or below the cap."""
+        cap = cls._max_cached_engines()
+        while len(cls._engines) > cap:
+            _old_path, old_eng = cls._engines.popitem(last=False)
+            old_eng.dispose()
+
+    @classmethod
     def engine_for_path(cls, db_path: str) -> Engine:
-        eng = cls._engines.get(db_path)
-        if eng is not None:
+        with cls._engines_lock:
+            eng = cls._engines.get(db_path)
+            if eng is not None:
+                cls._engines.move_to_end(db_path)
+                return eng
+            eng = create_engine(
+                f"sqlite:///{db_path}",
+                echo=False,
+                connect_args={"check_same_thread": False, "timeout": 30},
+            )
+            event.listens_for(eng, "connect")(_sqlite_wal_connect)
+            cls._engines[db_path] = eng
+            cls._engines.move_to_end(db_path)
+            cls._trim_engine_cache_unlocked()
             return eng
-        eng = create_engine(
-            f"sqlite:///{db_path}",
-            echo=False,
-            connect_args={"check_same_thread": False, "timeout": 30},
-        )
-        event.listens_for(eng, "connect")(_sqlite_wal_connect)
-        cls._engines[db_path] = eng
-        return eng
 
     @classmethod
     def dispose_engine(cls, db_path: str) -> None:
-        eng = cls._engines.pop(db_path, None)
+        with cls._engines_lock:
+            eng = cls._engines.pop(db_path, None)
         if eng is not None:
             eng.dispose()
 
@@ -260,6 +302,49 @@ class DemoSessionASGIMiddleware:
 
         cookies = parse_cookie_header(scope)
         cookie_sid = _safe_session_id(cookies.get(DEMO_SESSION_COOKIE))
+        fly_machine = os.environ.get("FLY_MACHINE_ID", "").strip()
+        fly_instance_cookie = (cookies.get(DEMO_FLY_INSTANCE_COOKIE) or "").strip()
+        # Wrong Machine: replay HTTP to the owner before we touch SQLite (per-visitor DB is local disk).
+        if (
+            fly_machine
+            and fly_instance_cookie
+            and fly_instance_cookie != fly_machine
+        ):
+            if scope["type"] == "http":
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 307,
+                        "headers": [
+                            (b"fly-replay", f"instance={fly_instance_cookie}".encode("ascii")),
+                            (b"content-length", b"0"),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": b"", "more_body": False})
+                return
+            # WebSocket: cannot emit fly-replay after upgrade; deny so the client retries
+            # (Fly replay_cache often routes the retry straight to the owner).
+            if scope["type"] == "websocket":
+
+                async def _deny_wrong_ws() -> None:
+                    while True:
+                        msg = await receive()
+                        if msg["type"] == "websocket.connect":
+                            await send(
+                                {
+                                    "type": "websocket.close",
+                                    # 1012 = service restart (RFC 6455). Avoid 1008 — the dashboard
+                                    # treats 1008 as "chat session missing" and clears the URL.
+                                    "code": 1012,
+                                    "reason": b"fly-sticky-retry",
+                                }
+                            )
+                            return
+
+                await _deny_wrong_ws()
+                return
+
         query_sid = demo_browser_session_from_websocket_query(scope)
         # Prefer the HttpOnly cookie so a crafted WS URL cannot override an established session.
         sid = cookie_sid or query_sid
@@ -296,23 +381,45 @@ class DemoSessionASGIMiddleware:
             f"{DEMO_SESSION_COOKIE}={cookie_val}; "
             "Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
         ).encode("latin-1")
+        # Pin this visitor's ephemeral DB to the current Fly Machine (empty outside Fly).
+        fly_pin_bytes: bytes | None = None
+        if fly_machine:
+            fly_pin_bytes = (
+                f"{DEMO_FLY_INSTANCE_COOKIE}={fly_machine}; "
+                "Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
+            ).encode("latin-1")
+        # Legacy or query-only WS: pin this session to the current Machine once.
+        migrate_fly_pin = bool(
+            fly_machine
+            and not fly_instance_cookie
+            and not new_cookie
+            and (cookie_sid or query_sid)
+        )
+        inject_demo_session_cookie = new_cookie
+        inject_any_cookie = inject_demo_session_cookie or migrate_fly_pin
 
         def _inject_set_cookie(message: dict) -> dict:
-            if not new_cookie:
+            if not inject_any_cookie:
                 return message
             mtype = message.get("type")
             if mtype == "http.response.start":
                 headers = list(message.get("headers") or [])
-                headers.append((b"set-cookie", cookie_bytes))
+                if inject_demo_session_cookie:
+                    headers.append((b"set-cookie", cookie_bytes))
+                if fly_pin_bytes and (inject_demo_session_cookie or migrate_fly_pin):
+                    headers.append((b"set-cookie", fly_pin_bytes))
                 return {**message, "headers": headers}
             if mtype == "websocket.accept":
                 headers = list(message.get("headers") or [])
-                headers.append((b"set-cookie", cookie_bytes))
+                if inject_demo_session_cookie:
+                    headers.append((b"set-cookie", cookie_bytes))
+                if fly_pin_bytes and (inject_demo_session_cookie or migrate_fly_pin):
+                    headers.append((b"set-cookie", fly_pin_bytes))
                 return {**message, "headers": headers}
             return message
 
         try:
-            if new_cookie:
+            if inject_any_cookie:
 
                 async def send_wrapper(message):
                     await send(_inject_set_cookie(message))

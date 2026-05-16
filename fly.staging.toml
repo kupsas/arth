@@ -1,9 +1,8 @@
-# fly.toml app configuration file generated for arth-demo on 2026-05-12T04:11:13+05:30
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
+# Staging Fly app — same image and routing as production ``fly.toml``, different ``app`` name.
+# Deploy: ``fly deploy --config fly.staging.toml``
+# URL: https://arth-demo-staging.fly.dev (after ``fly apps create arth-demo-staging``)
 
-app = 'arth-demo'
+app = 'arth-demo-staging'
 primary_region = 'bom'
 
 [build]
@@ -18,16 +17,12 @@ primary_region = 'bom'
   auto_start_machines = true
   min_machines_running = 1
 
-  # After the first ``fly-replay`` for a given ``demo_session_id`` cookie value, Fly
-  # Proxy routes subsequent requests (including WebSocket upgrades) to the same
-  # Machine without another app hop. See ``DEMO_FLY_INSTANCE_COOKIE`` in ``api/demo.py``.
   [[http_service.http_options.replay_cache]]
     path_prefix = "/"
     ttl_seconds = 86400
     type = "cookie"
     name = "demo_session_id"
 
-  # Caddy answers this path immediately; / can still 502 while Next.js boots.
   [[http_service.checks]]
     grace_period = "45s"
     interval = "30s"

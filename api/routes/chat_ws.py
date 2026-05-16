@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Any, assert_never
 from fastapi import (
@@ -51,6 +52,26 @@ from api.services.agent_runtime import user_agent_runtime
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["Agent chat"])
+
+# Demo Fly: cap concurrent agent turns machine-wide so RAM / provider rate limits
+# do not spike when many visitors chat at once. Self-hosted / non-demo: unlimited.
+# (Keep the Semaphore instance and the getter as *different* names — a function named
+# the same as the global would overwrite the binding and break ``async with``.)
+_demo_llm_slots_sem: asyncio.Semaphore | None = None
+
+
+def _get_demo_llm_slots_semaphore() -> asyncio.Semaphore | None:
+    """Return a process-wide semaphore for LLM-heavy chat work, or ``None`` outside demo."""
+    global _demo_llm_slots_sem
+    if not is_demo_mode():
+        return None
+    if _demo_llm_slots_sem is None:
+        try:
+            n = max(1, int(os.getenv("ARTH_DEMO_LLM_CONCURRENCY", "8").strip()))
+        except ValueError:
+            n = 8
+        _demo_llm_slots_sem = asyncio.Semaphore(n)
+    return _demo_llm_slots_sem
 
 
 # --- REST -----------------------------------------------------------------
@@ -299,32 +320,40 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await websocket.send_json({"type": "done"})
             return
 
-        with SQLiteSerializingSession(get_effective_engine()) as db_agent:
-            with user_agent_runtime(db_agent, user):
-                sr = await screen_message(user_text, cost_tracker=cost_tracker)
-                if not sr.allowed:
-                    await emit(
-                        ScreeningBlockedEvent(
-                            category=sr.category or "unknown",
-                            message=sr.rejection_message or "",
-                            layer=sr.layer or "unknown",
-                            latency_ms=sr.latency_ms,
+        async def _run_screening_and_agent() -> None:
+            with SQLiteSerializingSession(get_effective_engine()) as db_agent:
+                with user_agent_runtime(db_agent, user):
+                    sr = await screen_message(user_text, cost_tracker=cost_tracker)
+                    if not sr.allowed:
+                        await emit(
+                            ScreeningBlockedEvent(
+                                category=sr.category or "unknown",
+                                message=sr.rejection_message or "",
+                                layer=sr.layer or "unknown",
+                                latency_ms=sr.latency_ms,
+                            )
                         )
-                    )
-                    await websocket.send_json({"type": "done"})
-                    return
+                        await websocket.send_json({"type": "done"})
+                        return
 
-                async with agent_http_client() as client:
-                    profile = await generate_user_profile(client)
-                    await run_agent_turn(
-                        user_message=user_text,
-                        memory=memory,
-                        client=client,
-                        user_profile=profile,
-                        event_callback=emit,
-                        run_logger=None,
-                        cost_tracker=cost_tracker,
-                    )
+                    async with agent_http_client() as client:
+                        profile = await generate_user_profile(client)
+                        await run_agent_turn(
+                            user_message=user_text,
+                            memory=memory,
+                            client=client,
+                            user_profile=profile,
+                            event_callback=emit,
+                            run_logger=None,
+                            cost_tracker=cost_tracker,
+                        )
+
+        sem = _get_demo_llm_slots_semaphore()
+        if sem is not None:
+            async with sem:
+                await _run_screening_and_agent()
+        else:
+            await _run_screening_and_agent()
 
         await persist_memory()
         await websocket.send_json({"type": "done"})
