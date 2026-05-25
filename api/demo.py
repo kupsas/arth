@@ -304,19 +304,40 @@ class DemoSessionASGIMiddleware:
         cookie_sid = _safe_session_id(cookies.get(DEMO_SESSION_COOKIE))
         fly_machine = os.environ.get("FLY_MACHINE_ID", "").strip()
         fly_instance_cookie = (cookies.get(DEMO_FLY_INSTANCE_COOKIE) or "").strip()
-        # Wrong Machine: replay HTTP to the owner before we touch SQLite (per-visitor DB is local disk).
+
+        # Detect stale machine cookies: Fly sets ``fly-replay-failed`` when a
+        # replay with ``fallback=force_self`` times out (target machine gone).
+        # Also check ``fly-replay-src`` for non-cached replays.  Either header
+        # means the old machine is unreachable — start a fresh session here.
+        _headers_lower = {
+            k.decode("latin-1").lower(): v.decode("latin-1")
+            for k, v in (scope.get("headers") or [])
+        }
+        replay_failed = "fly-replay-failed" in _headers_lower
+        replay_bounced = "fly-replay-src" in _headers_lower
+
+        # Wrong Machine: replay HTTP to the owner before we touch SQLite
+        # (per-visitor DB is local disk).  Use ``timeout`` + ``fallback`` so
+        # Fly returns the request to us with ``fly-replay-failed`` if the
+        # target machine is gone (e.g. destroyed after a deploy).
         if (
             fly_machine
             and fly_instance_cookie
             and fly_instance_cookie != fly_machine
+            and not replay_failed
+            and not replay_bounced
         ):
             if scope["type"] == "http":
+                replay_val = (
+                    f"instance={fly_instance_cookie};"
+                    "timeout=3s;fallback=force_self"
+                )
                 await send(
                     {
                         "type": "http.response.start",
                         "status": 307,
                         "headers": [
-                            (b"fly-replay", f"instance={fly_instance_cookie}".encode("ascii")),
+                            (b"fly-replay", replay_val.encode("ascii")),
                             (b"content-length", b"0"),
                         ],
                     }
@@ -344,6 +365,22 @@ class DemoSessionASGIMiddleware:
 
                 await _deny_wrong_ws()
                 return
+
+        # Stale machine cookie: the replay target is gone (deploy replaced
+        # it).  Start a fresh session on the current machine and overwrite
+        # both cookies so subsequent requests stick here.
+        if (
+            (replay_failed or replay_bounced)
+            and fly_instance_cookie
+            and fly_instance_cookie != fly_machine
+        ):
+            logger.warning(
+                "Demo: stale fly-instance cookie %s (current machine %s) — "
+                "resetting visitor to a fresh session on this machine.",
+                fly_instance_cookie,
+                fly_machine,
+            )
+            cookie_sid = None
 
         query_sid = demo_browser_session_from_websocket_query(scope)
         # Prefer the HttpOnly cookie so a crafted WS URL cannot override an established session.
@@ -396,7 +433,10 @@ class DemoSessionASGIMiddleware:
             and (cookie_sid or query_sid)
         )
         inject_demo_session_cookie = new_cookie
-        inject_any_cookie = inject_demo_session_cookie or migrate_fly_pin
+        # When recovering from a stale fly-instance cookie, tell Fly to
+        # invalidate its replay cache so it stops routing to the dead machine.
+        invalidate_replay_cache = replay_failed or replay_bounced
+        inject_any_cookie = inject_demo_session_cookie or migrate_fly_pin or invalidate_replay_cache
 
         def _inject_set_cookie(message: dict) -> dict:
             if not inject_any_cookie:
@@ -406,14 +446,16 @@ class DemoSessionASGIMiddleware:
                 headers = list(message.get("headers") or [])
                 if inject_demo_session_cookie:
                     headers.append((b"set-cookie", cookie_bytes))
-                if fly_pin_bytes and (inject_demo_session_cookie or migrate_fly_pin):
+                if fly_pin_bytes and (inject_demo_session_cookie or migrate_fly_pin or invalidate_replay_cache):
                     headers.append((b"set-cookie", fly_pin_bytes))
+                if invalidate_replay_cache:
+                    headers.append((b"fly-replay-cache", b"invalidate"))
                 return {**message, "headers": headers}
             if mtype == "websocket.accept":
                 headers = list(message.get("headers") or [])
                 if inject_demo_session_cookie:
                     headers.append((b"set-cookie", cookie_bytes))
-                if fly_pin_bytes and (inject_demo_session_cookie or migrate_fly_pin):
+                if fly_pin_bytes and (inject_demo_session_cookie or migrate_fly_pin or invalidate_replay_cache):
                     headers.append((b"set-cookie", fly_pin_bytes))
                 return {**message, "headers": headers}
             return message

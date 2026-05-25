@@ -175,28 +175,37 @@ class HDFCUPIAlertParser(BaseEmailParser):
     Subject pattern: "UPI txn" (with the ❗ emoji prefix in real emails)
     Example subject: "❗  You have done a UPI txn. Check details!"
 
-    Body text:
+    Body text — legacy:
         Rs.951.00 has been debited from account 3703 to VPA eatclub@icici
         EatClub on 15-03-26.
-        Your UPI transaction reference number is 120080887305.
+
+    Body text — 2026+ (~May):
+        Dear Customer, Greetings from HDFC Bank! Rs.299.00 is debited from your
+        account ending 3703 towards VPA spotify.bdsi@hdfcbank (SPOTIFY INDIA PVT LTD)
+        on 22-05-26.
     """
 
-    # Regex groups: (amount, acct_last4, vpa, merchant|None, date_str)
+    # Regex groups: (amount, acct_last4, vpa, merchant_paren|None, merchant_plain|None, date_str)
     # Legacy (~2023) bodies mask savings as ``account **3703``; some omit the merchant
-    # fragment between VPA and ``on`` (only ``… to VPA handle@ybl on DD-MM-YY``).
+    # fragment between VPA and ``on``. 2026+ uses ``towards VPA`` and merchant in ``(...)``.
     _PATTERN = re.compile(
-        r"Rs\.(\d[\d,]*(?:\.\d+)?)"
-        r"\s+has been debited from account\s+\**(\d{4})"
-        r"\s+to VPA\s+(\S+)"
-        r"(?:\s+(.+?))?"  # merchant — absent in some legacy templates
+        r"(?:Dear Customer,\s+)?(?:Greetings from HDFC Bank!\s+)?"
+        r"(?:We would like to inform you that\s+)?"
+        r"Rs\.\s*(\d[\d,]*(?:\.\d+)?)"
+        r"\s+(?:has been|is) debited from "
+        r"(?:your (?:HDFC Bank )?(?:savings )?)?account(?: ending)?\s+\**(\d{4})"
+        r"\s+(?:to|towards) VPA\s+(\S+)"
+        r"(?:\s*\(([^)]+)\)|\s+(.+?))?"
         r"\s+on\s+(\d{2}-\d{2}-\d{2})",
         re.IGNORECASE | re.DOTALL,
     )
 
     # Account-to-account (no VPA), e.g. "to account **4875" on 17-09-23.
     _ACCT_TRANSFER_PATTERN = re.compile(
-        r"Rs\.(\d[\d,]*(?:\.\d+)?)"
-        r"\s+has been debited from account\s+\**(\d{4})"
+        r"(?:Dear Customer,\s+)?(?:Greetings from HDFC Bank!\s+)?"
+        r"Rs\.\s*(\d[\d,]*(?:\.\d+)?)"
+        r"\s+(?:has been|is) debited from "
+        r"(?:your )?account(?: ending)?\s+\**(\d{4})"
         r"\s+to account\s+\**(\d{4})"
         r"\s+on\s+(\d{2}-\d{2}-\d{2})",
         re.IGNORECASE | re.DOTALL,
@@ -214,7 +223,7 @@ class HDFCUPIAlertParser(BaseEmailParser):
         text = _extract_hdfc_body_text(html_body)
         m = self._PATTERN.search(text)
         if m:
-            amount_str, acct_last4, vpa, merchant, date_str = m.groups()
+            amount_str, acct_last4, vpa, merchant_paren, merchant_plain, date_str = m.groups()
             amount = Decimal(amount_str.replace(",", ""))
 
             txn_date = _parse_ddmmyy(date_str)
@@ -234,7 +243,8 @@ class HDFCUPIAlertParser(BaseEmailParser):
             ref_m = self._REF_PATTERN.search(text)
             ref_number = ref_m.group(1) if ref_m else None
 
-            merchant_clean = " ".join(merchant.split()) if merchant else ""
+            merchant_raw = merchant_paren or merchant_plain
+            merchant_clean = " ".join(merchant_raw.split()) if merchant_raw else ""
             raw_desc = (
                 f"UPI: {vpa} {merchant_clean}".strip()
                 if merchant_clean

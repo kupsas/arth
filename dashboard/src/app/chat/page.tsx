@@ -225,6 +225,8 @@ function ChatPageInner() {
   const sessionFromUrl = searchParams.get("session") ?? undefined;
   /** When true, skip reusing an empty draft and open a brand-new server thread (see "New chat"). */
   const forceNew = searchParams.get("new") === "1";
+  /** Bumped on "New chat" so repeat clicks still reset state when URL is already ``?new=1``. */
+  const [newChatRequestId, setNewChatRequestId] = React.useState(0);
   const queryClient = useQueryClient();
 
   const keysQ = useQuery({
@@ -281,6 +283,7 @@ function ChatPageInner() {
     void queryClient.invalidateQueries({ queryKey: chatSessionsQueryKey });
     // ?new=1 bypasses the draft-reuse logic in wsSessionId, guaranteeing
     // a clean WS open with no session_id (server creates a fresh one).
+    setNewChatRequestId((n) => n + 1);
     router.replace("/chat?new=1", { scroll: false });
   }, [queryClient, router]);
 
@@ -303,6 +306,7 @@ function ChatPageInner() {
   } = useChat(wsSessionId, onSessionReady, {
     enabled: chatWsEnabled,
     onSessionNotFound,
+    newChatRequestId,
   });
 
   const onSwitchProviderKeys = useCallback(() => {
@@ -318,7 +322,8 @@ function ChatPageInner() {
   const archive = useArchiveChatSessionMutation();
 
   const onNewChat = useCallback(() => {
-    router.push("/chat?new=1", { scroll: false });
+    setNewChatRequestId((n) => n + 1);
+    router.replace("/chat?new=1", { scroll: false });
   }, [router]);
 
   const onSelectSession = useCallback(
@@ -334,7 +339,8 @@ function ChatPageInner() {
     (id: string) => {
       void archive.mutateAsync(id).then(() => {
         if (sessionFromUrl === id) {
-          router.push("/chat", { scroll: false });
+          setNewChatRequestId((n) => n + 1);
+          router.replace("/chat?new=1", { scroll: false });
         }
       });
     },

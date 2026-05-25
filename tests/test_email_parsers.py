@@ -153,6 +153,27 @@ class TestHDFCUPIOutbound:
         assert self._parse()[0].metadata["vpa"] == "eatclub@icici"
 
 
+class TestHDFCUPIOutbound2026Template:
+    """May 2026+ template: greetings lead-in, ``is debited``, ``account ending``, ``towards VPA``, merchant in parens."""
+
+    HTML = """<!DOCTYPE html><html><body>
+<table><tr><td class="td esd-text">
+Dear Customer, Greetings from HDFC Bank! Rs.299.00 is debited from your account ending 3703
+towards VPA spotify.bdsi@hdfcbank (SPOTIFY INDIA PVT LTD) on 22-05-26.
+Your UPI transaction reference number is 900112233445.
+</td></tr></table></body></html>"""
+
+    def test_parses_2026_shape(self):
+        rows = HDFC_UPI_PARSER.parse(self.HTML, RECEIVED)
+        assert len(rows) == 1
+        t = rows[0]
+        assert t.debit_amount == Decimal("299.00")
+        assert t.txn_date == datetime.date(2026, 5, 22)
+        assert t.raw_description == "UPI: spotify.bdsi@hdfcbank SPOTIFY INDIA PVT LTD"
+        assert t.metadata["vpa"] == "spotify.bdsi@hdfcbank"
+        assert t.ref_number == "900112233445"
+
+
 class TestHDFCUPIOutboundLegacyMaskedAndNoMerchant:
     """~2023 template: ``account **3703``, VPA immediately before ``on`` (no merchant text)."""
 

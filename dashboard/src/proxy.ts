@@ -18,6 +18,9 @@ const DEMO =
 export function proxy(request: NextRequest) {
   if (DEMO) {
     const path = request.nextUrl.pathname;
+    if (path === "/") {
+      return NextResponse.redirect(new URL("/welcome", request.url));
+    }
     if (path === "/login" || path === "/setup") {
       return NextResponse.redirect(new URL("/chat", request.url));
     }

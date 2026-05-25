@@ -22,6 +22,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import posthog from "posthog-js";
 
+import { DemoWelcomeGate } from "@/components/demo-welcome-gate";
 import { SetupGate } from "@/components/setup-gate";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuthMe } from "@/hooks/use-auth";
@@ -61,7 +62,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delay={300}>
           <PostHogIdentity />
-          <SetupGate>{children}</SetupGate>
+          <DemoWelcomeGate>
+            <SetupGate>{children}</SetupGate>
+          </DemoWelcomeGate>
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

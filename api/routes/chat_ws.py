@@ -169,8 +169,22 @@ def delete_chat_session(
 def get_ws_ticket(user: str = Depends(get_current_user)) -> dict[str, str]:
     """Return a short-lived token the browser passes as ``?ticket=`` on the
     WebSocket URL.  Needed because the WS may connect directly to FastAPI
-    (bypassing the Next.js proxy), so the httpOnly session cookie is absent."""
-    return {"ticket": create_session_token(user)}
+    (bypassing the Next.js proxy), so the httpOnly session cookie is absent.
+
+    In demo mode, also returns ``arth_demo_sid`` — the browser session that
+    owns this visitor's ephemeral SQLite copy. The WS connects directly to
+    FastAPI (different host from the Next proxy), so the ``demo_session_id``
+    cookie is not sent; the frontend passes this value as a query param
+    instead so the middleware resolves to the same DB.
+    """
+    from api.demo import current_demo_browser_session_id
+
+    out: dict[str, str] = {"ticket": create_session_token(user)}
+    if is_demo_mode():
+        sid = current_demo_browser_session_id()
+        if sid:
+            out["arth_demo_sid"] = sid
+    return out
 
 
 # --- WebSocket ------------------------------------------------------------

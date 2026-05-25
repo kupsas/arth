@@ -16,7 +16,8 @@ import { SETUP_STATUS_QUERY_KEY, fetchSetupStatus } from "@/lib/api";
 
 function pathIsExempt(pathname: string | null): boolean {
   if (!pathname) return true;
-  if (pathname === "/setup" || pathname === "/login") return true;
+  if (pathname === "/setup" || pathname === "/login" || pathname === "/welcome")
+    return true;
   if (pathname.startsWith("/_next")) return true;
   return false;
 }

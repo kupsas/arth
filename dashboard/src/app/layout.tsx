@@ -21,6 +21,7 @@ import { Outfit, Geist_Mono } from "next/font/google";
 
 import { Providers } from "@/components/providers";
 import { DemoBanner } from "@/components/demo-banner";
+import { DemoFeedbackBanner } from "@/components/demo-feedback-banner";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { MobileBlocker } from "@/components/layout/mobile-blocker";
@@ -66,6 +67,7 @@ export default function RootLayout({
         <Providers>
           <div className="flex h-full min-h-0 flex-col">
             <DemoBanner />
+            <DemoFeedbackBanner />
             <MobileBlocker>
               {/*
                * Full-height flex row:

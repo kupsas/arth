@@ -71,6 +71,11 @@ export type UseChatOptions = {
    * old DB while demo reset issued a new SQLite file. Parent should drop the stale query param.
    */
   onSessionNotFound?: () => void;
+  /**
+   * Incremented when the user clicks "New chat" while already on ``?new=1`` so we still
+   * clear the transcript and reopen the WebSocket (the URL alone would not change).
+   */
+  newChatRequestId?: number;
 };
 
 export function useChat(
@@ -79,6 +84,7 @@ export function useChat(
   options?: UseChatOptions,
 ) {
   const enabled = options?.enabled ?? true;
+  const newChatRequestId = options?.newChatRequestId ?? 0;
   const onReadyRef = useRef(onSessionReady);
   useEffect(() => {
     onReadyRef.current = onSessionReady;
@@ -250,6 +256,16 @@ export function useChat(
       serverAssignedSessionRef.current = null;
     };
   }, []);
+
+  /** "New chat" while URL is already ``?new=1`` — URL does not change, so reset explicitly. */
+  useEffect(() => {
+    if (newChatRequestId === 0) return;
+    setMessages([]);
+    resetStreamingUi();
+    sessionNotFoundCountRef.current = 0;
+    serverAssignedSessionRef.current = null;
+    setRestSessionGateOk(true);
+  }, [newChatRequestId, resetStreamingUi]);
 
   /** Hydrate transcript when switching threads (REST — same rows the agent loads server-side). */
   useEffect(() => {
@@ -749,6 +765,7 @@ export function useChat(
     sessionIdProp,
     enabled,
     restSessionGateOk,
+    newChatRequestId,
     flushPendingToolsToActivity,
     pushActivitySegment,
     syncWipTools,
