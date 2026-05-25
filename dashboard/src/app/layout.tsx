@@ -45,6 +45,12 @@ export const metadata: Metadata = {
   title: "Arth — Your money, your way",
   description:
     "Track spending, goals, and holdings in one place — built for how money works in India.",
+  // Tab icon, bookmarks, and “Add to Home Screen” — served from public/rupees.png
+  icons: {
+    icon: [{ url: "/rupees.png", type: "image/png" }],
+    apple: [{ url: "/rupees.png", type: "image/png" }],
+    shortcut: "/rupees.png",
+  },
 };
 
 export default function RootLayout({

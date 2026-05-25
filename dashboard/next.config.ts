@@ -26,6 +26,7 @@ const nextConfig: NextConfig = {
     root: dashboardDir,
   },
   ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
+<<<<<<< HEAD
   skipTrailingSlashRedirect: true,
   async rewrites() {
     return [
@@ -42,6 +43,11 @@ const nextConfig: NextConfig = {
         destination: "https://us.i.posthog.com/:path*",
       },
     ];
+=======
+  // Browsers often request /favicon.ico by default; point them at our tab icon.
+  async rewrites() {
+    return [{ source: "/favicon.ico", destination: "/rupees.png" }];
+>>>>>>> b4b6172 (Use rupees icon for the browser tab and bookmarks.)
   },
 };
 
