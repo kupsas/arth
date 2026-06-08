@@ -874,6 +874,16 @@ def _seed_password_templates() -> None:
                 "FIRST4 from your saved identity and aliases + DOB as DDMM. Same rules as ICICI."
             ),
         },
+        {
+            "parser_key": "zerodha_demat_statement",
+            "display_name": "Zerodha monthly demat transaction statement PDF",
+            "required_fields_json": '["pan"]',
+            "password_formula": "{pan}",
+            "notes": (
+                "Your income-tax PAN (uppercase), same as Zerodha uses to encrypt the monthly "
+                "demat statement attachment from reportsmailer.zerodha.net."
+            ),
+        },
     ]
 
     try:

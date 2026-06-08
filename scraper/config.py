@@ -79,6 +79,13 @@ _ICICI_DIRECT_BROKER_ACCOUNTS: dict[str, dict] = {
     },
 }
 
+_ZERODHA_BROKER_ACCOUNTS: dict[str, dict] = {
+    "0000": {
+        "account_id": "ZERODHA",
+        "source_key": "zerodha_demat_statement",
+    },
+}
+
 # Shared discovery regex snippets (Subject line hints; case-insensitive).
 _PAT_HDFC_ALERT = [r"(?i)Insta\s*Alert", r"(?i)HDFC"]
 _PAT_ICICI_NOTIF = [r"(?i)ICICI", r"(?i)Transaction"]
@@ -88,6 +95,10 @@ _PAT_HDFC_COMBINED = [r"(?i)Smart\s*Statement", r"(?i)Combined", r"(?i)HDFC"]
 _PAT_ICICI_DIRECT_STMT = [
     r"(?i)Equity\s+Transaction\s+Statement",
     r"(?i)Mutual\s+Fund\s+Account\s+Statement",
+]
+_PAT_ZERODHA_DEMAT = [
+    r"(?i)Zerodha",
+    r"(?i)Monthly\s+Demat\s+Transaction",
 ]
 
 BANK_SENDERS: dict[str, dict] = {
@@ -215,6 +226,18 @@ BANK_SENDERS: dict[str, dict] = {
         "gmail_subject_filter_keywords": [
             "Equity Transaction Statement",
             "Mutual Fund Account Statement",
+        ],
+    },
+    "no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net": {
+        "parser_key": "zerodha_demat_statement",
+        "accounts": _ZERODHA_BROKER_ACCOUNTS,
+        "first_run_lookback_days": 45,
+        "display_name": "Zerodha monthly demat transaction statement",
+        "instrument_type": "broker",
+        "discovery_subject_patterns": _PAT_ZERODHA_DEMAT,
+        "expected_cadence": "monthly",
+        "gmail_subject_filter_keywords": [
+            "Monthly Demat Transaction",
         ],
     },
 }

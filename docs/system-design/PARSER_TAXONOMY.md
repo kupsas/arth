@@ -41,6 +41,7 @@ Every piece of financial data sits at the intersection of four dimensions:
 | HDFC Credit Card (per card) | Card swipe alerts | Monthly CC statement PDF | CSV / PDF (varies by card) |
 | ICICI Direct (equity) | — | Trade confirmations, equity statement PDF | CSV portfolio export |
 | ICICI Direct (MF) | — | MF account statement PDF | CSV holdings export |
+| Zerodha (equity demat) | — | Monthly demat transaction statement PDF (PAN) | Console tradebook CSV |
 | ICICI PPF | — | PPF band in ICICI bank e-statement | CSV passbook |
 | NPS | — | — | Statement of holding PDF |
 

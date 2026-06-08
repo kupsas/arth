@@ -2,11 +2,6 @@
 
 **Arth is a personal finance app built for how money actually moves in India** — one place on your own computer to see spending, investments, and goals, without handing your life’s ledger to a random cloud.
 
-[CI](https://github.com/kupsas/Arth-AFS/actions/workflows/ci.yml)
-[License: AGPL v3](https://www.gnu.org/licenses/agpl-3.0)
-[Python 3.13](https://www.python.org/downloads/)
-[PRs Welcome](http://makeapullrequest.com)
-
 ---
 
 ## What Arth does
@@ -30,7 +25,7 @@ Most people’s first question is “does it know my bank?” Here’s what ship
 | ----------------- | -------------------- |
 | **Savings**       | HDFC Bank ICICI Bank |
 | **Credit cards**  | HDFC Credit Cards    |
-| **Demat brokers** | ICICI Direct         |
+| **Demat brokers** | ICICI Direct, Zerodha |
 
 
 **Yours isn’t listed?** We’ll publish a proper contributing guide soon — till then, open an issue and we’ll figure it out together.

@@ -17,11 +17,13 @@ from parsers.holdings.icici_direct_mf import ICICIDirectMFParser
 from parsers.holdings.icici_ppf import ICICIPPFParser
 from parsers.holdings.liabilities import parse_bike_loan_txt, parse_term_insurance_pdf
 from parsers.holdings.nps import NPSParser
+from parsers.holdings.zerodha_tradebook import ZerodhaTradebookParser
 
 HOLDING_PARSER_REGISTRY: dict[str, type[BaseHoldingParser]] = {
     "icici_direct_mf": ICICIDirectMFParser,
     "icici_ppf": ICICIPPFParser,
     "nps": NPSParser,
+    "zerodha_tradebook": ZerodhaTradebookParser,
 }
 
 __all__ = [

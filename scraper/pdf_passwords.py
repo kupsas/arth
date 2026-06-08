@@ -35,6 +35,8 @@ ICICI_DIRECT_STATEMENT_PASSWORD_KEYS = (
     "ICICI_STATEMENT_MONTHLY_PASSWORD",
     "ICICI_DIRECT_EMAIL_PASSWORD",
 )
+# Zerodha monthly demat statement — test-only env override; production uses PAN from UserSecrets.
+ZERODHA_DEMAT_STATEMENT_PASSWORD_KEYS = ("ZERODHA_DEMAT_STATEMENT_PASSWORD",)
 
 # Env keys tried **in order** for ICICI-issued statement PDFs (savings e-statements +
 # ICICI Securities equity/MF PDFs). ICICI has rotated sender addresses and password *formats*
@@ -64,6 +66,7 @@ EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     "hdfc_cc_statement": ("hdfc_cc_statement",),
     # ICICI Securities equity/MF statement PDFs — same name+DDMM family as ICICI Bank PDFs.
     "icici_direct_statement": ("icici_statement_monthly",),
+    "zerodha_demat_statement": ("zerodha_demat_statement",),
 }
 
 
@@ -328,6 +331,28 @@ def resolve_icici_statement_pdf_password_candidates() -> list[str]:
             if isinstance(raw_secrets, dict):
                 for v in _derive_name_dob_variants_from_secrets(session, user_id, raw_secrets):
                     _add(v)
+
+    return ordered
+
+
+def resolve_zerodha_demat_pdf_password_candidates() -> list[str]:
+    """Zerodha monthly demat statement PDF: optional test env, then PAN from UserSecrets template."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def _add(p: str) -> None:
+        s = (p or "").strip().upper()
+        if s and s not in seen:
+            seen.add(s)
+            ordered.append(s)
+
+    for key in ZERODHA_DEMAT_STATEMENT_PASSWORD_KEYS:
+        _add(resolve_secret_env(key, ""))
+
+    session, uid = get_statement_secrets_scope()
+    user_id = (uid or "").strip()
+    if session is not None and user_id:
+        _add(_derive_password_from_template(session, user_id, "zerodha_demat_statement"))
 
     return ordered
 

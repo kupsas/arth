@@ -25,6 +25,8 @@ PARSER_LABELS: dict[str, str] = {
     "icici_ppf_pdf": "ICICI PPF Account Statement (PDF)",
     "icici_direct_mf": "ICICI Direct Mutual Fund (CSV export)",
     "icici_ppf": "ICICI PPF (CSV export)",
+    "zerodha_tradebook": "Zerodha Tradebook (CSV export)",
+    "zerodha_demat_statement_pdf": "Zerodha Monthly Demat Statement (PDF)",
 }
 
 
@@ -106,11 +108,13 @@ def detect_holding_file(path: Path) -> list[DetectionResult]:
     from parsers.holdings import icici_direct_equity_statement_pdf as eq_pdf_mod
     from parsers.holdings import icici_direct_mf_statement_pdf as mf_pdf_mod
     from parsers.holdings import icici_ppf_pdf as ppf_pdf_mod
+    from parsers.holdings import zerodha_demat_statement_pdf as zd_pdf_mod
 
     for fn in (
         eq_pdf_mod.detect_icici_equity_statement_pdf,
         mf_pdf_mod.detect_icici_mf_statement_pdf,
         ppf_pdf_mod.detect_icici_ppf_pdf,
+        zd_pdf_mod.detect_zerodha_demat_statement_pdf,
     ):
         res = fn(path)
         if res is not None:
