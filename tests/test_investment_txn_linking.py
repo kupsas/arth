@@ -118,6 +118,39 @@ def test_find_mf_parsed_txn_by_amfi_symbol(session: Session) -> None:
     assert find_holding_id_for_parsed_txn(session, "u1", t) == h.id
 
 
+def test_find_zerodha_mf_parsed_txn_by_amfi_symbol(session: Session) -> None:
+    h = Holding(
+        name="HDFC NIFTY 50 ETF FOF Direct Growth",
+        symbol="151234",
+        asset_class=AssetClass.MUTUAL_FUND.value,
+        account_platform="Zerodha",
+        valuation_method=ValuationMethod.MARKET_PRICE.value,
+        liquidity_class=LiquidityClass.T_PLUS_3.value,
+        user_id="u1",
+        quantity=100.0,
+        current_value=50_000.0,
+    )
+    session.add(h)
+    session.commit()
+
+    t = ParsedInvestmentTxn(
+        txn_date=datetime.date(2026, 4, 16),
+        symbol="151234",
+        name="HDFC N50EWIF D-GROW",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=123.635,
+        price_per_unit=0.0,
+        total_amount=0.0,
+        account_platform="Zerodha",
+        metadata={
+            "asset_class": AssetClass.MUTUAL_FUND.value,
+            "amfi_scheme_code": "151234",
+            "isin": "INF179KC1BM8",
+        },
+    )
+    assert find_holding_id_for_parsed_txn(session, "u1", t) == h.id
+
+
 def test_find_equity_parsed_txn_by_symbol(session: Session) -> None:
     h = Holding(
         name="Reliance Industries",

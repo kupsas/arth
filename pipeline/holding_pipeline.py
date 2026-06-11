@@ -204,6 +204,11 @@ def _upsert_holding_value_snapshot(
     session.add(row)
 
 
+# --- Investment price provenance -------------------------------------------
+# Broker PDF/CSV rows carry execution prices; Zerodha demat SOA uses market proxies.
+PRICE_SOURCE_STATEMENT = "statement"
+_PROXY_PRICE_SOURCES = frozenset({"nse_bhav", "amfi_nav"})
+
 # --- Investment dedupe (email vs CSV / statement upload) -----------------
 # ``price_per_unit`` is intentionally *not* part of the key — parsers round differently
 # for the same trade (e.g. 313.58 vs 313.584106) which must still count as one row.
@@ -211,6 +216,8 @@ _INV_QTY_REL_TOL = 1e-5
 _INV_QTY_ABS_TOL = 1e-4
 _INV_AMT_REL_TOL = 1e-4
 _INV_AMT_ABS_TOL = 1.0  # rupees — covers tiny NAV / fee drift between mail vs statement
+# Zerodha demat (NSE bhav / AMFI NAV proxy) vs tradebook execution — same trade, ~1–3% drift.
+_ZERODHA_CROSS_SOURCE_AMT_REL_TOL = 0.03
 
 # Strip boilerplate so "ELSS … Growth" vs "ELSS … Regular Plan - Growth" still match.
 _MF_DEDUPE_NOISE_TOKENS = frozenset(
@@ -236,18 +243,57 @@ def _inv_norm_symbol(sym: str | None) -> str | None:
     return s.upper() if s else None
 
 
-def _inv_qty_total_match(parsed_qty: float, parsed_amt: float, row_qty: float, row_amt: float) -> bool:
+def _price_source_from_parsed(t: ParsedInvestmentTxn) -> str:
+    """Map parser metadata to a persisted ``price_source`` (default: broker statement)."""
+    raw = (t.metadata or {}).get("price_source")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    return PRICE_SOURCE_STATEMENT
+
+
+def _inv_qty_match(parsed_qty: float, row_qty: float) -> bool:
     return math.isclose(
         float(parsed_qty),
         float(row_qty),
         rel_tol=_INV_QTY_REL_TOL,
         abs_tol=_INV_QTY_ABS_TOL,
-    ) and math.isclose(
+    )
+
+
+def _inv_amount_match(parsed_amt: float, row_amt: float) -> bool:
+    return math.isclose(
         float(parsed_amt),
         float(row_amt),
         rel_tol=_INV_AMT_REL_TOL,
         abs_tol=_INV_AMT_ABS_TOL,
     )
+
+
+def _inv_qty_total_match(parsed_qty: float, parsed_amt: float, row_qty: float, row_amt: float) -> bool:
+    return _inv_qty_match(parsed_qty, row_qty) and _inv_amount_match(parsed_amt, row_amt)
+
+
+def _zerodha_platform_match(platform: str | None) -> bool:
+    return (platform or "").strip().upper() == "ZERODHA"
+
+
+def _zerodha_cross_source_amount_match(t: ParsedInvestmentTxn, r: InvestmentTransaction) -> bool:
+    """Demat email (units + proxy price) vs tradebook CSV — same qty/symbol, amount may differ."""
+    if not _zerodha_platform_match(t.account_platform) or not _zerodha_platform_match(
+        r.account_platform
+    ):
+        return False
+    pa = float(t.total_amount)
+    ra = float(r.total_amount)
+    if math.isclose(pa, 0.0, abs_tol=0.01) or math.isclose(ra, 0.0, abs_tol=0.01):
+        return True
+    t_src = str((t.metadata or {}).get("price_source") or "").strip()
+    r_src = str(r.price_source or "").strip()
+    if t_src in _PROXY_PRICE_SOURCES or r_src in _PROXY_PRICE_SOURCES:
+        denom = max(abs(pa), abs(ra), 1.0)
+        return abs(pa - ra) / denom <= _ZERODHA_CROSS_SOURCE_AMT_REL_TOL
+    denom = max(abs(pa), abs(ra), 1.0)
+    return abs(pa - ra) / denom <= _ZERODHA_CROSS_SOURCE_AMT_REL_TOL
 
 
 def _folio_from_parsed_txn(t: ParsedInvestmentTxn) -> str | None:
@@ -349,8 +395,11 @@ def _equity_icici_blank_symbol_identity_match(t: ParsedInvestmentTxn, r: Investm
 
 def _investment_txn_row_matches_parsed(t: ParsedInvestmentTxn, r: InvestmentTransaction) -> bool:
     """True when ``r`` is the same economic event as parsed ``t`` (skip insert, log duplicate)."""
-    if not _inv_qty_total_match(t.quantity, t.total_amount, r.quantity, r.total_amount):
+    if not _inv_qty_match(t.quantity, r.quantity):
         return False
+    if not _inv_amount_match(t.total_amount, r.total_amount):
+        if not _zerodha_cross_source_amount_match(t, r):
+            return False
 
     ps = _inv_norm_symbol(t.symbol)
     rs = _inv_norm_symbol(r.symbol)
@@ -374,7 +423,8 @@ def investment_txn_exists(session: Session, t: ParsedInvestmentTxn) -> bool:
 
     Dedupe key (aggressive, email vs statement upload):
       * Same ``txn_date``, ``account_platform``, ``txn_type``
-      * Quantity + ``total_amount`` close (tolerances — not ``price_per_unit``)
+      * Quantity close; ``total_amount`` close OR Zerodha cross-source relax (₹0 proxy
+        leg vs tradebook, or ≤3% drift when one side used NSE bhav / AMFI NAV)
       * **Equity / symbol rows:** same normalized ``symbol``
       * **ICICI Direct equity, blank ticker:** same **ISIN** (from parsed metadata vs ``notes``) or
         same **name token fingerprint** (overlapping ICICI PDFs often repeat the same line with no
@@ -597,6 +647,7 @@ def ingest_investment_transactions(
             account_platform=t.account_platform,
             holding_id=hid,
             notes="\n".join(notes_parts) if notes_parts else None,
+            price_source=_price_source_from_parsed(t),
             is_reviewed=is_reviewed_default,
             source_type=source_type,
             gmail_message_id=gmail_message_id,

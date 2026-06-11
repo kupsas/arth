@@ -24,13 +24,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 from sqlmodel import Session, col, select
 
 from api.models import Holding, NseEquityReference
 from pipeline.market_cap_data import market_cap_for_symbol
 from api.services.price_feed import (
-    AMFI_NAV_ALL_URL,
     canonical_nse_symbol,
     get_nse_client,
     parse_amfi_navall,
@@ -131,10 +129,9 @@ def enrich_mutual_funds_from_amfi(
     """
     rep = report if report is not None else EnrichmentReport()
     if navall_text is None:
-        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
-            r = client.get(AMFI_NAV_ALL_URL)
-            r.raise_for_status()
-            navall_text = r.text
+        from pipeline.amfi_isin_map import read_cached_navall
+
+        navall_text = read_cached_navall()
 
     _navs, meta = parse_amfi_navall(navall_text)
 

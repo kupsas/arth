@@ -17,14 +17,19 @@ from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, Valua
 _ICICI_DIRECT_EQUITY_PLATFORM = "ICICI Direct"
 
 
-def derive_equity_holdings(txns: list[ParsedInvestmentTxn]) -> list[ParsedHolding]:
+def derive_equity_holdings(
+    txns: list[ParsedInvestmentTxn],
+    *,
+    platform: str = _ICICI_DIRECT_EQUITY_PLATFORM,
+) -> list[ParsedHolding]:
     """Per NSE symbol: average-cost lot tracking; last trade price as mark.
 
-    Ignores mutual-fund platforms and rows without a usable ``symbol``.
+    Ignores rows from other ``account_platform`` values and rows without a usable ``symbol``.
     """
+    plat = (platform or "").strip()
     grouped: dict[str, list[ParsedInvestmentTxn]] = defaultdict(list)
     for t in txns:
-        if (t.account_platform or "").strip() != _ICICI_DIRECT_EQUITY_PLATFORM:
+        if (t.account_platform or "").strip() != plat:
             continue
         sym = (t.symbol or "").strip()
         if not sym:
@@ -71,7 +76,7 @@ def derive_equity_holdings(txns: list[ParsedInvestmentTxn]) -> list[ParsedHoldin
                 quantity=qty_pos,
                 asset_class=AssetClass.EQUITY.value,
                 valuation_method=ValuationMethod.MARKET_PRICE.value,
-                account_platform=_ICICI_DIRECT_EQUITY_PLATFORM,
+                account_platform=plat,
                 average_cost_per_unit=avg_remaining,
                 current_price_per_unit=mark if mark else None,
                 current_value=abs(cur_val),

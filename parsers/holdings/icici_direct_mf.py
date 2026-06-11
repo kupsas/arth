@@ -105,13 +105,30 @@ def parse_icici_mf_csv(path: Path) -> list[ParsedInvestmentTxn]:
     return out
 
 
-def derive_mf_holdings(txns: list[ParsedInvestmentTxn]) -> list[ParsedHolding]:
-    """Per (scheme, folio): average-cost lot tracking + latest NAV for mark."""
+def _mf_group_key(t: ParsedInvestmentTxn) -> tuple[str, str]:
+    meta = t.metadata or {}
+    folio = str(meta.get("folio") or "").strip()
+    code = meta.get("amfi_scheme_code") or (
+        t.symbol if (t.symbol or "").strip().isdigit() else None
+    )
+    if code:
+        return (str(code).strip(), folio)
+    isin = str(meta.get("isin") or "").strip().upper()
+    if isin:
+        return (isin, folio)
+    return (t.name or "MF", folio)
+
+
+def derive_mf_holdings(
+    txns: list[ParsedInvestmentTxn],
+    *,
+    platform: str = "ICICI Direct MF",
+) -> list[ParsedHolding]:
+    """Per (AMFI code or name, folio): average-cost lot tracking + latest NAV for mark."""
+    plat = (platform or "").strip()
     grouped: dict[tuple[str, str], list[ParsedInvestmentTxn]] = defaultdict(list)
     for t in txns:
-        folio = (t.metadata or {}).get("folio") or ""
-        key = (t.name or "MF", folio)
-        grouped[key].append(t)
+        grouped[_mf_group_key(t)].append(t)
 
     holdings: list[ParsedHolding] = []
     for key, series in grouped.items():
@@ -141,26 +158,32 @@ def derive_mf_holdings(txns: list[ParsedInvestmentTxn]) -> list[ParsedHolding]:
         cur_val = nav * qty_pos
 
         sch_sym: str | None = None
+        amfi_meta: str | None = None
+        display_name = name
         for t in series:
             raw = (t.metadata or {}).get("amfi_scheme_code") or t.symbol
             if raw and str(raw).strip().isdigit():
                 sch_sym = str(raw).strip()
+                amfi_meta = sch_sym
                 break
+            if t.name and str(t.name).strip():
+                display_name = str(t.name).strip()
 
         holdings.append(
             ParsedHolding(
                 symbol=sch_sym,
-                name=name,
+                name=display_name,
                 quantity=qty_pos,
                 asset_class=AssetClass.MUTUAL_FUND.value,
                 valuation_method=ValuationMethod.MARKET_PRICE.value,
-                account_platform="ICICI Direct MF",
+                account_platform=plat,
                 average_cost_per_unit=avg_remaining,
                 current_price_per_unit=nav if nav else None,
                 current_value=abs(cur_val),
                 liquidity_class=LiquidityClass.T_PLUS_3.value,
                 folio_number=folio or None,
                 fund_type=MutualFundType.GROWTH.value,
+                amfi_scheme_code=amfi_meta,
                 metadata={"derived_from": "transactions"},
             )
         )

@@ -1173,6 +1173,7 @@ export interface InvestmentTxn {
   holding_id: number | null;
   bank_transaction_id: number | null;
   notes: string | null;
+  price_source: string | null;
   is_reviewed: boolean;
   source_type: string | null;
   gmail_message_id: string | null;

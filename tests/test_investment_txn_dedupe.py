@@ -7,7 +7,7 @@ import datetime
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 
 import os
 
@@ -16,6 +16,7 @@ os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode("ascii"))
 from api.models import InvestmentTransaction  # noqa: E402
 from parsers.holdings.base import ParsedInvestmentTxn  # noqa: E402
 from pipeline.holding_pipeline import (  # noqa: E402
+    PRICE_SOURCE_STATEMENT,
     ingest_investment_transactions,
     investment_txn_exists,
 )
@@ -236,3 +237,39 @@ def test_ingest_skips_csv_when_email_duplicate(session: Session) -> None:
     stats = ingest_investment_transactions(session, [parsed], user_id="u1", dry_run=False)
     assert stats["skipped_duplicate"] == 1
     assert stats["inserted"] == 0
+
+
+def test_ingest_persists_price_source_from_metadata(session: Session) -> None:
+    d = datetime.date(2022, 4, 5)
+    parsed = ParsedInvestmentTxn(
+        txn_date=d,
+        symbol="CDSL",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=1.0,
+        price_per_unit=760.67,
+        total_amount=760.67,
+        account_platform="Zerodha",
+        metadata={"price_source": "nse_bhav"},
+    )
+    stats = ingest_investment_transactions(session, [parsed], user_id="u1", dry_run=False)
+    assert stats["inserted"] == 1
+    row = session.exec(select(InvestmentTransaction)).first()
+    assert row is not None
+    assert row.price_source == "nse_bhav"
+
+
+def test_ingest_defaults_price_source_to_statement(session: Session) -> None:
+    d = datetime.date(2023, 1, 1)
+    parsed = ParsedInvestmentTxn(
+        txn_date=d,
+        symbol="RELIANCE",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=1.0,
+        price_per_unit=2500.0,
+        total_amount=2500.0,
+        account_platform="ICICI Direct",
+    )
+    ingest_investment_transactions(session, [parsed], user_id="u1", dry_run=False)
+    row = session.exec(select(InvestmentTransaction)).first()
+    assert row is not None
+    assert row.price_source == PRICE_SOURCE_STATEMENT

@@ -33,7 +33,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Iterable, cast
 
-import httpx
 import yfinance as yf
 from nse import NSE
 from sqlmodel import Session, col, func, select
@@ -41,14 +40,12 @@ from sqlmodel import Session, col, func, select
 from api.models import Holding, Price
 from pipeline.config import REPO_ROOT
 from parsers.holdings.icici_direct_equity import ICICI_SHORT_TO_NSE
+from pipeline.amfi_isin_map import AMFI_NAV_ALL_URL, read_cached_navall  # noqa: F401 — re-export
 from pipeline.icici_symbol_overrides import merge_with_disk
 from pipeline.isin_nse_resolver import is_curated_ignored_holding_row
 from pipeline.models import AssetClass, ValuationMethod
 
 logger = logging.getLogger(__name__)
-
-# AMFI moved this file behind a 302 to portal.amfiindia.com — follow redirects.
-AMFI_NAV_ALL_URL = "https://www.amfiindia.com/spages/NAVAll.txt"
 
 NSE_DOWNLOAD_DIR = REPO_ROOT / "data" / ".nse_cache"
 
@@ -205,10 +202,7 @@ def fetch_mf_navs(
     If ``as_of_date`` is set, only rows whose published NAV date matches are kept
     (the public file is usually one business day — same date on every row).
     """
-    with httpx.Client(timeout=60.0, follow_redirects=True) as client:
-        r = client.get(AMFI_NAV_ALL_URL)
-        r.raise_for_status()
-    by_code = parse_amfi_nav_rows(r.text)
+    by_code = parse_amfi_nav_rows(read_cached_navall())
     want = {c.strip() for c in scheme_codes if c.strip()}
     out: list[Price] = []
     for code in want:

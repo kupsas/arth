@@ -20,6 +20,7 @@ from api.models import Holding, InvestmentTransaction
 from api.services.price_feed import canonical_nse_symbol
 from parsers.holdings.base import ParsedInvestmentTxn
 from parsers.holdings.nps import NPS_CANONICAL_HOLDING_NAME
+from parsers.holdings.security_kind import is_mf_investment_txn
 from pipeline.models import AssetClass
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,32 @@ def _nps_holdings_matching_pran(hs: list[Holding], pran: str) -> list[Holding]:
     ]
 
 
+def _mf_codes_from_parsed_txn(t: ParsedInvestmentTxn) -> tuple[str | None, str | None, str | None]:
+    """Return ``(folio, name_hint, amfi_code)`` for MF ledger matching."""
+    meta = t.metadata or {}
+    folio_raw = meta.get("folio")
+    folio = str(folio_raw).strip() if folio_raw else None
+    name = _norm_name(t.name) or None
+    code = (
+        (str(meta.get("amfi_scheme_code")).strip() if meta.get("amfi_scheme_code") else None)
+        or extract_amfi_scheme_code(t.name or "")
+        or (str(t.symbol).strip() if t.symbol and str(t.symbol).strip().isdigit() else None)
+    )
+    return folio, name, code
+
+
+def _link_mf_holding(
+    session: Session,
+    user_id: str,
+    platform: str,
+    t: ParsedInvestmentTxn,
+) -> int | None:
+    folio, name, code = _mf_codes_from_parsed_txn(t)
+    return _match_mf_holding(
+        session, user_id, platform, folio=folio, name=name, amfi_code=code
+    )
+
+
 def find_holding_id_for_parsed_txn(session: Session, user_id: str, t: ParsedInvestmentTxn) -> int | None:
     """Resolve ``holding_id`` for a parsed ledger row (call after holdings upserted)."""
     platform = (t.account_platform or "").strip()
@@ -193,21 +220,10 @@ def find_holding_id_for_parsed_txn(session: Session, user_id: str, t: ParsedInve
             return hs[0].id
         return None
 
-    if platform == "ICICI Direct MF":
-        meta = t.metadata or {}
-        folio_raw = meta.get("folio")
-        folio = str(folio_raw).strip() if folio_raw else None
-        name = _norm_name(t.name) or None
-        code = (
-            (str(meta.get("amfi_scheme_code")).strip() if meta.get("amfi_scheme_code") else None)
-            or extract_amfi_scheme_code(t.name or "")
-            or (str(t.symbol).strip() if t.symbol else None)
-        )
-        return _match_mf_holding(
-            session, user_id, platform, folio=folio, name=name, amfi_code=code
-        )
+    if platform == "ICICI Direct MF" or (platform == "Zerodha" and is_mf_investment_txn(t)):
+        return _link_mf_holding(session, user_id, platform, t)
 
-    if t.symbol and str(t.symbol).strip():
+    if t.symbol and str(t.symbol).strip() and not is_mf_investment_txn(t):
         sym = canonical_nse_symbol(t.symbol)
         h = session.exec(
             select(Holding).where(
@@ -286,6 +302,16 @@ def find_holding_id_for_stored_txn(
             folio=folio_hint,
             name=name_hint,
             amfi_code=code,
+        )
+
+    if platform == "Zerodha" and txn.symbol and str(txn.symbol).strip().isdigit():
+        return _match_mf_holding(
+            session,
+            user_id,
+            platform,
+            folio=None,
+            name=_norm_name(txn.notes) or None,
+            amfi_code=str(txn.symbol).strip(),
         )
 
     if txn.symbol and str(txn.symbol).strip():

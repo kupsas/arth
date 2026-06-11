@@ -41,6 +41,12 @@ scripts/seed_goals.py
 # Item C dev seed — real names / household PII; run locally only, never commit
 scripts/seed_sashank_classification_dev.py
 
+# Zerodha demat probe — local dev tool; contains a real PAN + personal email, keep local only
+scripts/zerodha_demat_probe.py
+
+# CI worktree scratch (per-PR checkout dirs + logs) — machine-local, never commit
+.ci-worktrees/
+
 # Personal financial data (do NOT commit)
 # Note: this is a symlink to Arth/docs/personal-data — trailing slash won't match symlinks
 docs/personal-data
@@ -66,6 +72,7 @@ data/.llm_cache/
 
 # NSE package cache — bhav copies are public; nse_cookies_requests.json is session-like and must stay local
 data/.nse_cache/
+data/.amfi_cache/
 
 # Log files — keep the directory itself (via .gitkeep) but ignore log contents
 data/logs/*.log

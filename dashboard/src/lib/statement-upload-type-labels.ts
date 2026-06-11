@@ -12,4 +12,6 @@ export const TRANSACTION_UPLOAD_TYPE_LABELS: readonly string[] = [
   "ICICI Direct Equity Transaction Statement (PDF)",
   "ICICI Direct Mutual Fund Statement (PDF)",
   "ICICI PPF Account Statement (PDF)",
+  "Zerodha Tradebook (CSV export)",
+  "Zerodha Monthly Demat Statement (PDF)",
 ]

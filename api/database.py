@@ -566,6 +566,23 @@ def _apply_sqlite_patches() -> None:
                     "ON investment_transactions (is_reviewed)"
                 )
             )
+        if not _column_exists(conn, "investment_transactions", "price_source"):
+            conn.execute(
+                text("ALTER TABLE investment_transactions ADD COLUMN price_source TEXT")
+            )
+        conn.execute(
+            text(
+                "UPDATE investment_transactions SET price_source = 'statement' "
+                "WHERE price_source IS NULL OR TRIM(price_source) = ''"
+            )
+        )
+        if not _index_exists(conn, "ix_investment_transactions_price_source"):
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_investment_transactions_price_source "
+                    "ON investment_transactions (price_source)"
+                )
+            )
 
         # Sub-Plan B — recurring patterns scoped per user (surplus / goals).
         if not _column_exists(conn, "recurring_patterns", "user_id"):
@@ -872,6 +889,16 @@ def _seed_password_templates() -> None:
             "password_formula": "{icici_first4_upper}{dob_ddmm}",
             "notes": (
                 "FIRST4 from your saved identity and aliases + DOB as DDMM. Same rules as ICICI."
+            ),
+        },
+        {
+            "parser_key": "zerodha_demat_statement",
+            "display_name": "Zerodha monthly demat transaction statement PDF",
+            "required_fields_json": '["pan"]',
+            "password_formula": "{pan}",
+            "notes": (
+                "Your income-tax PAN (uppercase), same as Zerodha uses to encrypt the monthly "
+                "demat statement attachment from reportsmailer.zerodha.net."
             ),
         },
     ]

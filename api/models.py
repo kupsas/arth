@@ -694,6 +694,9 @@ class InvestmentTransaction(SQLModel, table=True):
     holding_id: int | None = Field(default=None, foreign_key="holdings.id")
     bank_transaction_id: int | None = Field(default=None, foreign_key="transactions.id")
     notes: str | None = None
+    # How price_per_unit was determined: ``statement`` (broker PDF/CSV), ``nse_bhav``,
+    # ``amfi_nav`` (Zerodha demat proxy), etc.
+    price_source: str | None = Field(default=None, index=True)
 
     is_reviewed: bool = Field(default=True, index=True)
     # "statement" | "email" | None (legacy / file import — treated as reviewed pipeline)

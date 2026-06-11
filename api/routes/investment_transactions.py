@@ -25,7 +25,7 @@ from api.services.holdings_sync import (
 )
 from api.routes.ingest_utils import parser_input_path, saved_upload_directory
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY
-from pipeline.holding_pipeline import ingest_investment_transactions
+from pipeline.holding_pipeline import PRICE_SOURCE_STATEMENT, ingest_investment_transactions
 from pipeline.models import InvestmentTxnType
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,7 @@ class InvestmentTransactionOut(BaseModel):
     holding_id: int | None
     bank_transaction_id: int | None
     notes: str | None
+    price_source: str | None
     is_reviewed: bool
     source_type: str | None
     gmail_message_id: str | None
@@ -92,6 +93,7 @@ class InvestmentTransactionCreate(BaseModel):
     holding_id: int | None = None
     bank_transaction_id: int | None = None
     notes: str | None = Field(default=None, max_length=10_000)
+    price_source: str | None = Field(default=PRICE_SOURCE_STATEMENT, max_length=64)
 
 
 class InvestmentTransactionUpdate(BaseModel):
@@ -382,6 +384,7 @@ def create_investment_transaction(
         holding_id=body.holding_id,
         bank_transaction_id=body.bank_transaction_id,
         notes=body.notes,
+        price_source=(body.price_source or PRICE_SOURCE_STATEMENT).strip(),
         is_reviewed=True,
         source_type=None,
         gmail_message_id=None,

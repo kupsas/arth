@@ -34,6 +34,9 @@ python3 -m pipeline.run --all-sources --llm none
 # After the first run, ``refresh_all_prices`` merges each new session file automatically.
 python3 -m pipeline.consolidate_bhav_cache
 
+# Download AMFI NAVAll and rebuild ISIN → scheme map (data/.amfi_cache, gitignored).
+python3 -m pipeline.refresh_amfi_cache
+
 # Pick a specific model for smart labels (when not using “auto” chain)
 python3 -m pipeline.run --source hdfc_savings --llm gemini-3.1-flash-lite
 
