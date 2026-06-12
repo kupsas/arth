@@ -18,6 +18,7 @@ from parsers.statements.hdfc_combined import HDFCCombinedStatementEmailParser
 from parsers.statements.icici import ICICIStatementEmailParser
 from parsers.statements.icici_direct_equity import ICICIDirectEquityStatementEmailParser
 from parsers.statements.icici_direct_mf import ICICIDirectMFStatementEmailParser
+from parsers.statements.sbi import SBIStatementEmailParser
 from parsers.statements.zerodha_demat import ZerodhaDematStatementEmailParser
 
 
@@ -53,6 +54,9 @@ def build_email_parser_registry(
     hdfc_comb = _acct("hdfcbanksmartstatement@hdfcbank.net")
     icici_sec_svc = _acct("service@icicisecurities.com")
     zerodha_demat = _acct("no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net")
+    sbi_stmt_new = _acct("cbssbi.cas@alerts.sbi.bank.in")
+    sbi_stmt_old = _acct("cbssbi.cas@alerts.sbi.co.in")
+    sbi_stmt = {**sbi_stmt_new, **sbi_stmt_old}
 
     return {
         "alerts@hdfcbank.net": _hdfc_parser_list(hdfc_a),
@@ -87,6 +91,12 @@ def build_email_parser_registry(
         ],
         "no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net": [
             ZerodhaDematStatementEmailParser(zerodha_demat),
+        ],
+        "cbssbi.cas@alerts.sbi.bank.in": [
+            SBIStatementEmailParser(sbi_stmt),
+        ],
+        "cbssbi.cas@alerts.sbi.co.in": [
+            SBIStatementEmailParser(sbi_stmt),
         ],
     }
 

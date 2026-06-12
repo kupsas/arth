@@ -103,6 +103,7 @@ from scraper.pdf_passwords import (
     ARTH_PDF_INGREDIENT_DOB_ISO,
     ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID,
     ARTH_PDF_INGREDIENT_PAN,
+    ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5,
     EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS,
     list_pdf_password_holder_names,
 )
@@ -407,6 +408,10 @@ class PasswordIngredientsBody(BaseModel):
         default=None,
         description="HDFC Bank net-banking customer ID (combined statement PDF password).",
     )
+    sbi_mobile_last5: str | None = Field(
+        default=None,
+        description="Last five digits of mobile number registered with SBI (e-account statement PDF).",
+    )
 
 
 class PasswordIngredientsSaved(BaseModel):
@@ -415,6 +420,7 @@ class PasswordIngredientsSaved(BaseModel):
     pan: str | None = None
     dob_iso: str | None = None
     hdfc_customer_id: str | None = None
+    sbi_mobile_last5: str | None = None
 
 
 @router.get("/password-ingredients", response_model=PasswordIngredientsSaved)
@@ -436,15 +442,23 @@ def get_password_ingredients_saved(
     pan_raw = data.get(ARTH_PDF_INGREDIENT_PAN)
     dob_raw = data.get(ARTH_PDF_INGREDIENT_DOB_ISO)
     cid_raw = data.get(ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID)
+    sbi_m_raw = data.get(ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5)
     pan = str(pan_raw).strip().upper() if pan_raw else None
     dob_iso = str(dob_raw).strip()[:10] if dob_raw else None
     if dob_iso == "":
         dob_iso = None
     digits = "".join(c for c in str(cid_raw) if c.isdigit()) if cid_raw else ""
     hdfc_customer_id = digits if digits else None
+    sbi_digits = "".join(c for c in str(sbi_m_raw) if c.isdigit()) if sbi_m_raw else ""
+    sbi_mobile_last5 = sbi_digits[-5:] if len(sbi_digits) >= 5 else (sbi_digits or None)
     if pan == "":
         pan = None
-    return PasswordIngredientsSaved(pan=pan, dob_iso=dob_iso, hdfc_customer_id=hdfc_customer_id)
+    return PasswordIngredientsSaved(
+        pan=pan,
+        dob_iso=dob_iso,
+        hdfc_customer_id=hdfc_customer_id,
+        sbi_mobile_last5=sbi_mobile_last5,
+    )
 
 
 @router.get("/password-requirements", response_model=list[PasswordRequirementRow])
@@ -561,6 +575,12 @@ def onboarding_password_ingredients(
             data[ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID] = cid
         else:
             data.pop(ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID, None)
+    if body.sbi_mobile_last5 is not None:
+        mob = "".join(c for c in body.sbi_mobile_last5 if c.isdigit())
+        if len(mob) >= 5:
+            data[ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5] = mob[-5:]
+        else:
+            data.pop(ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5, None)
 
     payload = json.dumps(data)
     now = datetime.datetime.now(datetime.UTC)

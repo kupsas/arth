@@ -37,6 +37,8 @@ ICICI_DIRECT_STATEMENT_PASSWORD_KEYS = (
 )
 # Zerodha monthly demat statement — test-only env override; production uses PAN from UserSecrets.
 ZERODHA_DEMAT_STATEMENT_PASSWORD_KEYS = ("ZERODHA_DEMAT_STATEMENT_PASSWORD",)
+# SBI e-account (CAS) statement — test-only env override; production uses mobile last-5 + DOB DDMMYY.
+SBI_STATEMENT_PASSWORD_KEYS = ("SBI_STATEMENT_PASSWORD",)
 
 # Env keys tried **in order** for ICICI-issued statement PDFs (savings e-statements +
 # ICICI Securities equity/MF PDFs). ICICI has rotated sender addresses and password *formats*
@@ -58,6 +60,7 @@ ARTH_PDF_INGREDIENT_ICICI_REGISTERED_NAME = "ARTH_PDF_INGREDIENT_ICICI_REGISTERE
 ARTH_PDF_INGREDIENT_HDFC_ACCOUNT_NUMBER = "ARTH_PDF_INGREDIENT_HDFC_ACCOUNT_NUMBER"
 ARTH_PDF_INGREDIENT_HDFC_CC_LAST4 = "ARTH_PDF_INGREDIENT_HDFC_CC_LAST4"
 ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID = "ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID"
+ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5 = "ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5"
 
 # ``scraper.config.BANK_SENDERS`` ``parser_key`` → :class:`~api.models.PasswordTemplate.parser_key` rows.
 EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
@@ -67,6 +70,7 @@ EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     # ICICI Securities equity/MF statement PDFs — same name+DDMM family as ICICI Bank PDFs.
     "icici_direct_statement": ("icici_statement_monthly",),
     "zerodha_demat_statement": ("zerodha_demat_statement",),
+    "sbi_statement": ("sbi_statement",),
 }
 
 
@@ -104,6 +108,21 @@ def _first4_alpha_only(name: str) -> str:
     """Strip non-letters, take first four — ICICI/HDFC CC PDF passwords use this base."""
     letters_only = re.sub(r"[^a-zA-Z]", "", (name or "").strip())
     return letters_only[:4]
+
+
+def _dob_iso_to_ddmmyy(iso: str) -> str:
+    """Turn ``YYYY-MM-DD`` into ``DDMMYY`` (SBI e-account statement PDF pattern)."""
+    raw = (iso or "").strip()[:10]
+    parts = raw.split("-")
+    if len(parts) != 3:
+        return ""
+    try:
+        y, m, d = (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return ""
+    if y < 1900 or m < 1 or m > 12 or d < 1 or d > 31:
+        return ""
+    return f"{d:02d}{m:02d}{y % 100:02d}"
 
 
 def _dob_iso_to_ddmmyyyy(iso: str) -> str:
@@ -190,6 +209,8 @@ def build_pdf_template_kwargs(
     hdfc_acct = str(raw_secrets.get(ARTH_PDF_INGREDIENT_HDFC_ACCOUNT_NUMBER, "")).strip()
     hdfc_cc4 = str(raw_secrets.get(ARTH_PDF_INGREDIENT_HDFC_CC_LAST4, "")).strip()
     hdfc_cust = str(raw_secrets.get(ARTH_PDF_INGREDIENT_HDFC_CUSTOMER_ID, "")).strip()
+    sbi_mobile_raw = "".join(c for c in str(raw_secrets.get(ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5, "")) if c.isdigit())
+    sbi_mobile_last5 = sbi_mobile_raw[-5:] if len(sbi_mobile_raw) >= 5 else sbi_mobile_raw
 
     names = _pdf_identity_name_strings(session, user_id, raw_secrets)
     icici_reg = names[0] if names else str(raw_secrets.get(ARTH_PDF_INGREDIENT_ICICI_REGISTERED_NAME, "")).strip()
@@ -198,7 +219,9 @@ def build_pdf_template_kwargs(
         "pan": pan,
         "dob_iso": dob_iso,
         "dob_ddmmyyyy": _dob_iso_to_ddmmyyyy(dob_iso),
+        "dob_ddmmyy": _dob_iso_to_ddmmyy(dob_iso),
         "dob_ddmm": _dob_iso_to_ddmm(dob_iso),
+        "sbi_mobile_last5": sbi_mobile_last5,
         "hdfc_account_number": hdfc_acct,
         "hdfc_customer_id": hdfc_cust,
         "hdfc_cc_last4": hdfc_cc4,
@@ -353,6 +376,28 @@ def resolve_zerodha_demat_pdf_password_candidates() -> list[str]:
     user_id = (uid or "").strip()
     if session is not None and user_id:
         _add(_derive_password_from_template(session, user_id, "zerodha_demat_statement"))
+
+    return ordered
+
+
+def resolve_sbi_statement_pdf_password_candidates() -> list[str]:
+    """SBI e-account (CAS) statement PDF: env override, then mobile last-5 + DOB DDMMYY."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def _add(p: str) -> None:
+        s = (p or "").strip()
+        if s and s not in seen:
+            seen.add(s)
+            ordered.append(s)
+
+    for key in SBI_STATEMENT_PASSWORD_KEYS:
+        _add(resolve_secret_env(key, ""))
+
+    session, uid = get_statement_secrets_scope()
+    user_id = (uid or "").strip()
+    if session is not None and user_id:
+        _add(_derive_password_from_template(session, user_id, "sbi_statement"))
 
     return ordered
 

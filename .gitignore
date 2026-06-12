@@ -41,9 +41,6 @@ scripts/seed_goals.py
 # Item C dev seed — real names / household PII; run locally only, never commit
 scripts/seed_sashank_classification_dev.py
 
-# Zerodha demat probe — local dev tool; contains a real PAN + personal email, keep local only
-scripts/zerodha_demat_probe.py
-
 # CI worktree scratch (per-PR checkout dirs + logs) — machine-local, never commit
 .ci-worktrees/
 
@@ -112,6 +109,9 @@ data/gmail_token.json
 
 # Local find/replace map used when syncing real Gmail HTML into fixtures (may contain PII substrings).
 data/email_fixture_redactions.json
+
+# SBI statement local probe — may embed test message ids / paths during development
+scripts/sbi_statement_probe.py
 
 # Committed HTML under tests/fixtures/email_samples/ is synthetic / scrubbed for CI.
 # After `scripts/sync_email_parser_fixtures.py` with --no-redact, re-review before commit.

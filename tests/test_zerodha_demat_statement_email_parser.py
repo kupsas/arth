@@ -91,13 +91,13 @@ def test_password_from_user_secrets_pan(session) -> None:
     session.add(
         UserSecrets(
             user_id="testuser",
-            secrets_json=json.dumps({"ARTH_PDF_INGREDIENT_PAN": "CKNPB1603B"}),
+            secrets_json=json.dumps({"ARTH_PDF_INGREDIENT_PAN": "ABCDE1234F"}),
         )
     )
     session.commit()
     with statement_secrets_context(session, "testuser"):
         cands = resolve_zerodha_demat_pdf_password_candidates()
-    assert "CKNPB1603B" in cands
+    assert "ABCDE1234F" in cands
 
 
 def test_bank_senders_includes_zerodha() -> None:

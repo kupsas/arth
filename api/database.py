@@ -901,6 +901,16 @@ def _seed_password_templates() -> None:
                 "demat statement attachment from reportsmailer.zerodha.net."
             ),
         },
+        {
+            "parser_key": "sbi_statement",
+            "display_name": "SBI e-account statement PDF",
+            "required_fields_json": '["dob_iso", "sbi_mobile_last5"]',
+            "password_formula": "{sbi_mobile_last5}{dob_ddmmyy}",
+            "notes": (
+                "Last five digits of your mobile number registered with SBI, plus date of birth "
+                "as DDMMYY (e.g. mobile ending 12345 and DOB 16 Sep 1982 → 12345160982)."
+            ),
+        },
     ]
 
     try:

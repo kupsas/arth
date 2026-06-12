@@ -29,3 +29,8 @@ export function needsProfileNameDobPdfStyle(sources: OnboardingBackfillSourceRow
 export function needsPanPdfSource(_sources: OnboardingBackfillSourceRow[] | undefined): boolean {
   return false;
 }
+
+/** SBI e-account (CAS) statement PDF — mobile last-5 + DOB DDMMYY. */
+export function needsSbiStatementSource(sources: OnboardingBackfillSourceRow[] | undefined): boolean {
+  return (sources ?? []).some((s) => s.source_key === "sbi_savings");
+}

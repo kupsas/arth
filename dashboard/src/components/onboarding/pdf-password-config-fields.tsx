@@ -24,6 +24,7 @@ import {
   hasHdfcBankSavingsSource,
   needsPanPdfSource,
   needsProfileNameDobPdfStyle,
+  needsSbiStatementSource,
 } from "@/lib/pdf-password-source-flags";
 import type { OnboardingBackfillSourceRow } from "@/lib/types";
 import { sanitizeHtmlDateInputValue } from "@/lib/onboarding-input-validation";
@@ -40,6 +41,7 @@ export type PdfPasswordPayload = {
   pan: string | null;
   dob_iso: string | null;
   hdfc_customer_id: string | null;
+  sbi_mobile_last5: string | null;
 };
 
 export type PdfPasswordConfigFieldsHandle = {
@@ -50,6 +52,7 @@ const FIELD_LABELS: Record<string, string> = {
   pan: "PAN (10 characters)",
   dob_iso: "Date of birth",
   hdfc_customer_id: "HDFC customer ID (net banking login, digits only)",
+  sbi_mobile_last5: "SBI registered mobile — last 5 digits",
 };
 
 export type PdfPasswordConfigFieldsProps = {
@@ -82,6 +85,7 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
     const [pan, setPan] = React.useState("");
     const [dobIso, setDobIso] = React.useState("");
     const [hdfcCustomerId, setHdfcCustomerId] = React.useState("");
+    const [sbiMobileLast5, setSbiMobileLast5] = React.useState("");
     const [identityNameStrings, setIdentityNameStrings] = React.useState<string[]>([]);
     const [busy, setBusy] = React.useState(false);
     const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -109,6 +113,7 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
           setPan((p) => (p.trim() ? p : saved.pan ?? ""));
           setDobIso((d) => (d.trim() ? d : saved.dob_iso ?? ""));
           setHdfcCustomerId((h) => (h.trim() ? h : saved.hdfc_customer_id ?? ""));
+          setSbiMobileLast5((m) => (m.trim() ? m : saved.sbi_mobile_last5 ?? ""));
         }
         if (reqR.status === "rejected" || prevR.status === "rejected") {
           const e = reqR.status === "rejected" ? reqR.reason : (prevR as PromiseRejectedResult).reason;
@@ -140,13 +145,19 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
     const showDobField =
       neededFields.has("dob_iso") ||
       mode === "resume-import" ||
-      needsProfileNameDobPdfStyle(sources);
+      needsProfileNameDobPdfStyle(sources) ||
+      needsSbiStatementSource(sources);
+
+    const showSbiMobileLast5Field =
+      (mode === "wizard" && needsSbiStatementSource(sources)) ||
+      (mode === "resume-import" && neededFields.has("sbi_mobile_last5"));
 
     React.useImperativeHandle(ref, () => ({
       getPayload: (): PdfPasswordPayload => ({
         pan: pan.trim() || null,
         dob_iso: dobIso.trim() || null,
         hdfc_customer_id: hdfcCustomerId.trim() || null,
+        sbi_mobile_last5: sbiMobileLast5.trim() || null,
       }),
     }));
 
@@ -162,6 +173,7 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
           pan: pan.trim() || null,
           dob_iso: dobIso.trim() || null,
           hdfc_customer_id: hdfcCustomerId.trim() || null,
+          sbi_mobile_last5: sbiMobileLast5.trim() || null,
         });
         await onSubmitSuccess?.();
       } catch (e) {
@@ -240,6 +252,23 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
               onChange={(e) => setHdfcCustomerId(e.target.value)}
               placeholder="Digits only"
             />
+          </div>
+        )}
+
+        {showSbiMobileLast5Field && (
+          <div className="space-y-2">
+            <Label htmlFor="arth-sbi-mobile">{FIELD_LABELS.sbi_mobile_last5}</Label>
+            <Input
+              id="arth-sbi-mobile"
+              inputMode="numeric"
+              maxLength={5}
+              value={sbiMobileLast5}
+              onChange={(e) => setSbiMobileLast5(e.target.value.replace(/\D/g, "").slice(-5))}
+              placeholder="Last 5 digits"
+            />
+            <p className="text-xs text-muted-foreground">
+              Same mobile SBI has on file — combined with your date of birth to open the statement PDF.
+            </p>
           </div>
         )}
 

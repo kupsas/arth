@@ -15,12 +15,8 @@ from parsers.holdings.zerodha_tradebook import (
 from pipeline.models import InvestmentTxnType
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "holdings" / "zerodha_tradebook_min.csv"
-REAL_CSV = (
-    Path(__file__).resolve().parent.parent
-    / "docs"
-    / "personal-data"
-    / "Zerodha_user_upload"
-    / "FY2025-26.csv"
+SAMPLE_CSV = (
+    Path(__file__).resolve().parent / "fixtures" / "holdings" / "zerodha_tradebook_sample.csv"
 )
 
 
@@ -77,9 +73,13 @@ def test_aggregate_zerodha_trades_buckets_by_isin_when_no_symbol() -> None:
     assert out[0].total_amount == pytest.approx(50.0)
 
 
-@pytest.mark.skipif(not REAL_CSV.is_file(), reason="Personal tradebook CSV not present")
-def test_parse_real_fy_tradebook_csv() -> None:
-    holdings, txns = parse_zerodha_tradebook_path(REAL_CSV)
-    assert len(txns) > 100
+def test_parse_sample_tradebook_csv_aggregates_and_derives_holdings() -> None:
+    """Committed synthetic tradebook (no personal-data path)."""
+    holdings, txns = parse_zerodha_tradebook_path(SAMPLE_CSV)
+    assert len(txns) == 5  # 7 legs → 5 aggregated (date, side, symbol) buckets
     assert all(t.account_platform == "Zerodha" for t in txns)
-    assert len(holdings) > 0
+    assert all(t.price_per_unit > 0 for t in txns)
+    assert len(holdings) == 3
+    ztesta = next(t for t in txns if t.symbol == "ZTESTA" and t.txn_type == InvestmentTxnType.BUY.value)
+    assert ztesta.quantity == pytest.approx(15.0)
+    assert ztesta.total_amount == pytest.approx(10 * 100.0 + 5 * 101.0)

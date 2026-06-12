@@ -100,6 +100,14 @@ _PAT_ZERODHA_DEMAT = [
     r"(?i)Zerodha",
     r"(?i)Monthly\s+Demat\s+Transaction",
 ]
+_PAT_SBI_STMT = [
+    r"(?i)E-account\s+statement",
+    r"(?i)SBI",
+    r"(?i)account",
+]
+
+# SBI e-account (CAS) monthly statement — per-user last-4 mappings from DB.
+_SBI_STATEMENT_ACCOUNTS: dict[str, dict] = {}
 
 BANK_SENDERS: dict[str, dict] = {
     "alerts@hdfcbank.net": {
@@ -238,6 +246,30 @@ BANK_SENDERS: dict[str, dict] = {
         "expected_cadence": "monthly",
         "gmail_subject_filter_keywords": [
             "Monthly Demat Transaction",
+        ],
+    },
+    "cbssbi.cas@alerts.sbi.bank.in": {
+        "parser_key": "sbi_statement",
+        "accounts": _SBI_STATEMENT_ACCOUNTS,
+        "first_run_lookback_days": 45,
+        "display_name": "SBI e-account statement",
+        "instrument_type": "savings",
+        "discovery_subject_patterns": _PAT_SBI_STMT,
+        "expected_cadence": "monthly",
+        "gmail_subject_filter_keywords": [
+            "E-account statement",
+        ],
+    },
+    "cbssbi.cas@alerts.sbi.co.in": {
+        "parser_key": "sbi_statement",
+        "accounts": _SBI_STATEMENT_ACCOUNTS,
+        "first_run_lookback_days": 45,
+        "display_name": "SBI e-account statement (.co.in)",
+        "instrument_type": "savings",
+        "discovery_subject_patterns": _PAT_SBI_STMT,
+        "expected_cadence": "monthly",
+        "gmail_subject_filter_keywords": [
+            "E-account statement",
         ],
     },
 }

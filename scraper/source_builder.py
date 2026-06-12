@@ -580,6 +580,29 @@ def _collect_last4s_from_text(
                 "no icici_savings rows in DB yet; cannot infer account mapping"
             )
 
+    # SBI CAS e-statement — PDF-only shell; reuse savings last-4 keys if alerts ran first.
+    if pk == "sbi_statement" and not found and session is not None and user_id:
+        rows = session.exec(
+            select(ScraperAccountMapping).where(
+                ScraperAccountMapping.user_id == user_id,
+                ScraperAccountMapping.source_key == "sbi_savings",
+            )
+        ).all()
+        for r in rows:
+            if len(r.last_4_digits) == 4 and r.last_4_digits.isdigit():
+                found.add(r.last_4_digits)
+        if found:
+            logger.debug(
+                "persist-sources: sbi_statement — no last-4 in email text; "
+                "resolved %s from existing sbi_savings DB mappings",
+                sorted(found),
+            )
+        else:
+            logger.warning(
+                "persist-sources: sbi_statement — no last-4 in email text and "
+                "no sbi_savings rows in DB yet; cannot infer account mapping"
+            )
+
     return found
 
 
@@ -601,6 +624,9 @@ def _infer_account_for_last4(
 
     if pk in ("icici_statement",):
         return (f"ICICI_SAV_{last4}", "icici_savings")
+
+    if pk in ("sbi_statement",):
+        return (f"SBI_SAV_{last4}", "sbi_savings")
 
     if pk in ("icici_bank",):
         return (f"ICICI_SAV_{last4}", "icici_savings")

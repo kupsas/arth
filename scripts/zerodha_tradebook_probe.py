@@ -27,7 +27,7 @@ from parsers.holdings.zerodha_tradebook import (  # noqa: E402
 )
 
 DEFAULT_CSV = (
-    REPO_ROOT / "docs" / "personal-data" / "Zerodha_user_upload" / "FY2025-26.csv"
+    REPO_ROOT / "tests" / "fixtures" / "holdings" / "zerodha_tradebook_sample.csv"
 )
 
 

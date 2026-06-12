@@ -1513,6 +1513,7 @@ export function fetchOnboardingPasswordIngredientsSaved(): Promise<{
   pan: string | null;
   dob_iso: string | null;
   hdfc_customer_id: string | null;
+  sbi_mobile_last5: string | null;
 }> {
   return get("/api/onboarding/password-ingredients");
 }
@@ -1522,6 +1523,7 @@ export function postOnboardingPasswordIngredients(body: {
   pan?: string | null;
   dob_iso?: string | null;
   hdfc_customer_id?: string | null;
+  sbi_mobile_last5?: string | null;
 }): Promise<{ ok: boolean }> {
   return post("/api/onboarding/password-ingredients", body);
 }
