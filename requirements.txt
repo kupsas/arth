@@ -1,5 +1,5 @@
-# litellm 1.83.x declares pydantic==2.12.5; a higher minimum breaks the resolver.
-pydantic==2.12.5
+# litellm 1.83.x declares pydantic==2.13.4; a higher minimum breaks the resolver.
+pydantic==2.13.4
 python-dotenv>=1.0
 openai>=2.0
 anthropic>=0.30
