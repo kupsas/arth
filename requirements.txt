@@ -41,7 +41,7 @@ pytest-cov>=5.0
 yfinance>=0.2
 nse>=2.1
 cryptography>=47.0.0
-pyxirr>=0.10
+pyxirr>=0.10.8
 scipy>=1.14
 
 # Arth conversational agent (Sub-Plan 1)
