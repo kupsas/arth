@@ -24,6 +24,10 @@ from scraper.gmail_client import GmailClient
 
 logger = logging.getLogger(__name__)
 
+# Statement parsers whose account last-4 lives only inside the encrypted PDF — persist the
+# sender during onboarding even when email text has no digits; mapping is filled at parse time.
+_PDF_ONLY_SELF_MAPPING_PARSERS = frozenset({"sbi_statement"})
+
 
 def sync_user_pipeline_sources_from_scraper_mappings(session: Session, user_id: str) -> int:
     """Create missing ``UserPipelineSource`` rows from Gmail ``ScraperAccountMapping``.
@@ -514,12 +518,6 @@ def _collect_last4s_from_text(
                 found.add(d4)
     # Statement subjects often carry product keywords instead of bodies (PDF-only).
     pk = (parser_key or "").strip().lower()
-    if pk == "hdfc_cc_statement":
-        low = blob.lower()
-        if "diners privilege" in low or "diners club" in low:
-            found.add("5778")
-        if "swiggy" in low:
-            found.add("1905")
 
     if pk in ("icici_bank", "icici_statement") and session is not None and user_id:
         tail3 = _icici_three_digit_tails_from_blob(blob)
@@ -890,14 +888,18 @@ def persist_scraper_sources_from_discovery(
         sample_texts = _fetch_sample_texts_for_sender(gmail_client, sender_norm, sample_ids)
 
         accounts = _infer_accounts_dict(cfg, sample_texts, session=session, user_id=uid)
+        parser_key = str(cfg.get("parser_key") or "").strip().lower()
         if not accounts:
-            logger.warning(
-                "persist-sources: no last-4 inferred for sender=%r (parser_key=%r) — skip",
-                sender_norm,
-                cfg.get("parser_key"),
-            )
-            skipped += 1
-            continue
+            if parser_key in _PDF_ONLY_SELF_MAPPING_PARSERS:
+                accounts = {}
+            else:
+                logger.warning(
+                    "persist-sources: no last-4 inferred for sender=%r (parser_key=%r) — skip",
+                    sender_norm,
+                    cfg.get("parser_key"),
+                )
+                skipped += 1
+                continue
 
         inferred_digits += len(accounts)
         _delete_sender_rows(session, uid, sender_norm)

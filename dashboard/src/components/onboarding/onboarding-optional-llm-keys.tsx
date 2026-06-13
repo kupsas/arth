@@ -25,8 +25,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MaskedSecretInput } from "@/components/ui/masked-secret-input";
 import {
   ONBOARDING_INDICATIVE_CLOUD_ROWS_PER_1000,
   ONBOARDING_PRIMARY_COST_USD_PER_100,
@@ -469,10 +469,8 @@ export function OnboardingOptionalLlmKeys() {
                   <p className="text-xs text-muted-foreground">{hint}</p>
                   {showPastePanel && (
                     <div className="grid gap-1">
-                      <Input
+                      <MaskedSecretInput
                         id={inputId}
-                        type="password"
-                        autoComplete="off"
                         maxLength={ONBOARDING_INPUT_LIMITS.llmApiKeyChars}
                         value={inputValue}
                         aria-describedby={`${inputId}-paste-hint`}

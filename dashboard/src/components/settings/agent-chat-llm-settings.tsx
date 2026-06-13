@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MaskedSecretInput } from "@/components/ui/masked-secret-input";
 import {
   Select,
   SelectContent,
@@ -173,10 +174,8 @@ export function AgentChatLlmSettings() {
                   </Button>
                 )}
               </div>
-              <Input
+              <MaskedSecretInput
                 id="settings-agent-openai"
-                type="password"
-                autoComplete="off"
                 value={openai}
                 onChange={(e) => setOpenai(e.target.value)}
                 placeholder="sk-…"
@@ -198,10 +197,8 @@ export function AgentChatLlmSettings() {
                   </Button>
                 )}
               </div>
-              <Input
+              <MaskedSecretInput
                 id="settings-agent-anthropic"
-                type="password"
-                autoComplete="off"
                 value={anthropic}
                 onChange={(e) => setAnthropic(e.target.value)}
                 placeholder="sk-ant-…"
@@ -223,10 +220,8 @@ export function AgentChatLlmSettings() {
                   </Button>
                 )}
               </div>
-              <Input
+              <MaskedSecretInput
                 id="settings-agent-google"
-                type="password"
-                autoComplete="off"
                 value={google}
                 onChange={(e) => setGoogle(e.target.value)}
                 placeholder="AI…"

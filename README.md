@@ -36,38 +36,28 @@ Most people’s first question is “does it know my bank?” Here’s what ship
 
 ## Quick start
 
-**Easiest path:** Open this project in **Cursor**, **Claude Code**, **GitHub Copilot**, **Codex**, or any coding agent you already use. You’ll want **[Docker Desktop](https://docs.docker.com/get-docker/)** (Mac or Windows) or **Docker + Compose** on Linux installed first — that’s the one thing the agent can’t download into thin air for you.
-
-**Docker housekeeping:** Keep Docker Desktop (or your Docker engine) **reasonably up to date** — older installs sometimes choke on newer Compose setups. When **this repo updates** (`git pull`), run `**docker compose up --build`** again (or `docker compose build --pull` then `docker compose up`) so your images match the latest code.
-
-Copy **everything** in the box below, paste it into your agent as **your** message, and let it run the steps (clone, env file, `docker compose`, checks). If anything fails, it can read error output and adjust.
+Copy **everything** in the box below, paste it into your agent (**Cursor**, **Claude Code**, **Codex**, etc.) as **your** message, and let it run the steps (clone, `docker compose`, checks). If anything fails, it can read error output and adjust.
 
 ```text
-You’re my local setup assistant for Arth — an AGPL-3.0 personal finance app.
+You’re my local setup assistant for Arth — a personal finance app.
 
-Repository: https://github.com/kupsas/Arth-AFS  (GitHub name: kupsas/Arth-AFS)
+Repository: https://github.com/kupsas/arth  (GitHub name: kupsas/arth)
 
 Goal: Run Arth on my machine with Docker so I can use the app in the browser at http://localhost:3000
 
 Please do the following:
 
 1. If we’re not already inside this repo, clone it and `cd` into the project root:
-   git clone https://github.com/kupsas/Arth-AFS.git && cd Arth-AFS
+   git clone https://github.com/kupsas/arth.git && cd arth
 
 2. Verify Docker works on my system (`docker --version` and `docker compose version`). If Docker isn’t installed or the daemon isn’t running, stop and tell me exactly what to install or start (Docker Desktop on Mac/Windows, or Docker Engine + Compose on Linux). If Docker Desktop has a pending update, mention that I should install it — stale Docker often causes weird failures.
 
-3. From the repo root, if `.env` doesn’t exist yet, copy the template:
-   cp .env.example .env
-   Tell me that the onboarding will ask for an AI API key (Google, Anthropic, or OpenAI) — this is required for auto-labelling to work well. If I also want Ask Arth (the chat), I can add those keys in `.env` (documented in the comments there).
-
-4. Start the stack (first run builds images — it may take a few minutes):
+3. Start the stack (first run builds images — it may take a few minutes):
    docker compose up --build
    Keep this running while I use the app.
    If I just pulled fresh code from GitHub, use the same command (or `docker compose build --pull` then `docker compose up`) so containers rebuild — don’t assume old images are still valid.
 
-5. When the containers are healthy, tell me to open http://localhost:3000 in my browser — that’s Arth’s UI. The backend also listens on port 8000; only mention http://localhost:8000/docs if I ask for developer API docs.
-
-6. Optional heads-up for later: if I connect Gmail, Google needs redirect URL http://127.0.0.1:8090/ (Compose already exposes 8090). Full walkthrough: scraper/README.md in this repo.
+4. When the containers are healthy, tell me to open http://localhost:3000 in my browser — that’s Arth’s UI. The backend also listens on port 8000; only mention http://localhost:8000/docs if I ask for developer API docs.
 
 If anything errors, show me the command and the message, fix what you can, and explain the next step in plain language.
 ```
@@ -77,7 +67,6 @@ If anything errors, show me the command and the message, fix what you can, and e
 ```bash
 git clone https://github.com/kupsas/Arth-AFS.git
 cd Arth-AFS
-cp .env.example .env   # optional: edit for Ask Arth (onboarding handles auto-labelling keys)
 docker compose up --build
 ```
 
@@ -87,7 +76,6 @@ Open **[http://localhost:3000](http://localhost:3000)**. Your data survives rest
 
 ```bash
 python3 -m pip install -r requirements.txt
-cp .env.example .env
 
 # Terminal A — backend
 python3 -m uvicorn api.main:app --port 8000 --reload --no-access-log

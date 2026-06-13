@@ -72,15 +72,6 @@ def _pdf_card_tail(pdf_path) -> str | None:
     return None
 
 
-def _card_last4_from_subject(subject: str) -> str | None:
-    sl = subject.lower()
-    if "diners privilege" in sl or "diners club" in sl:
-        return "5778"
-    if "swiggy" in sl:
-        return "1905"
-    return None
-
-
 class HDFCCCStatementEmailParser(BaseStatementEmailParser):
     """Decrypt HDFC CC PDF attachments and parse with :class:`HDFCCreditCardPdfParser`."""
 
@@ -107,7 +98,7 @@ class HDFCCCStatementEmailParser(BaseStatementEmailParser):
                 "birth in onboarding (see password ingredients).",
             )
 
-        last4 = _card_last4_from_subject(email_subject or "")
+        last4 = None
         try:
             decrypted, _used = decrypt_pdf_with_password_candidates(pdf_bytes, candidates)
         except pikepdf.PasswordError as e:
@@ -117,21 +108,29 @@ class HDFCCCStatementEmailParser(BaseStatementEmailParser):
                 "keys, registered name, and date of birth.",
             ) from e
         try:
+            last4 = _pdf_card_tail(decrypted)
             if last4 is None:
-                last4 = _pdf_card_tail(decrypted)
-            if last4 is None or last4 not in self.accounts:
                 logger.warning(
                     "Could not map HDFC CC PDF to an account "
-                    "(configured_card_slots=%d subject_len=%d inferred_tail=%s)",
+                    "(configured_card_slots=%d subject_len=%d inferred_tail=no)",
                     len(self.accounts),
                     len(email_subject or ""),
-                    "yes" if last4 is not None else "no",
                 )
                 return []
 
-            entry = self.accounts[last4]
-            account_id = entry["account_id"]
-            source_key = entry["source_key"]
+            entry = self.accounts.get(last4)
+            if not entry:
+                account_id = f"HDFC_CC_{last4}"
+                source_key = f"hdfc_cc_{last4}"
+                logger.info(
+                    "HDFC CC PDF tail …%s not in configured slots (%d); using %s",
+                    last4,
+                    len(self.accounts),
+                    source_key,
+                )
+            else:
+                account_id = entry["account_id"]
+                source_key = entry["source_key"]
 
             rows = HDFCCreditCardPdfParser().parse(decrypted)
             return [_stamp(r, account_id, source_key) for r in rows]

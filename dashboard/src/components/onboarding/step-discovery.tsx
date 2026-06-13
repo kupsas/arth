@@ -288,7 +288,7 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
             ) : (
               DISCOVERY_UI_SECTIONS.map((cat) => {
                 const meta = discoveryCategoryMeta[cat]
-                const institutions = grouped[cat]
+                const institutions = grouped[cat].filter((g) => g.totalMessages > 0)
                 return (
                   <section key={cat} className="space-y-3" aria-labelledby={`discover-section-${cat}`}>
                     <h3 id={`discover-section-${cat}`} className="text-sm font-semibold tracking-tight">

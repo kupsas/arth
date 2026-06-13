@@ -187,10 +187,18 @@ def _ordered_backfill_sources(bank: BankSendersConfig) -> list[dict[str, str]]:
     for _sender, cfg in bank.items():
         st_raw = str(cfg.get("instrument_type") or "unknown").lower().strip()
         rank = _INSTRUMENT_TYPE_RANK.get(st_raw, 5)
-        for acct in cfg.get("accounts", {}).values():
+        parser_key = str(cfg.get("parser_key") or "").strip().lower()
+        accounts = cfg.get("accounts") or {}
+        for acct in accounts.values():
             sk = str(acct.get("source_key") or "").strip()
             if not sk:
                 continue
+            prev = best.get(sk)
+            if prev is None or rank < prev[0]:
+                best[sk] = (rank, st_raw)
+        # SBI CAS e-statement: sender may persist with empty accounts until PDF parse self-maps.
+        if parser_key == "sbi_statement" and not accounts:
+            sk = "sbi_savings"
             prev = best.get(sk)
             if prev is None or rank < prev[0]:
                 best[sk] = (rank, st_raw)

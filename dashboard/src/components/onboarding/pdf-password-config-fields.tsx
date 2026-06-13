@@ -149,7 +149,8 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
       needsSbiStatementSource(sources);
 
     const showSbiMobileLast5Field =
-      (mode === "wizard" && needsSbiStatementSource(sources)) ||
+      (mode === "wizard" &&
+        (needsSbiStatementSource(sources) || neededFields.has("sbi_mobile_last5"))) ||
       (mode === "resume-import" && neededFields.has("sbi_mobile_last5"));
 
     React.useImperativeHandle(ref, () => ({

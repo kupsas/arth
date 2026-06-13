@@ -89,14 +89,17 @@ class SBIStatementEmailParser(BaseStatementEmailParser):
                 continue
             entry = self.accounts.get(last4)
             if not entry:
-                logger.warning(
-                    "SBIStatementEmailParser: no account mapping for savings tail …%s "
-                    "(configured_account_slots=%d)",
+                account_id = f"SBI_SAV_{last4}"
+                source_key = "sbi_savings"
+                logger.info(
+                    "SBIStatementEmailParser: no configured slot for savings tail …%s; using %s",
                     last4,
-                    len(self.accounts),
+                    account_id,
                 )
-                continue
-            out.append(_stamp_meta(row, entry["account_id"], entry["source_key"]))
+            else:
+                account_id = entry["account_id"]
+                source_key = entry["source_key"]
+            out.append(_stamp_meta(row, account_id, source_key))
         return out
 
 

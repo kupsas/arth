@@ -174,6 +174,9 @@ export function PreClassificationForm(props: PreClassificationFormProps = {}) {
   const [saving, setSaving] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
   const [saveError, setSaveError] = React.useState<string | null>(null);
+  const [firstNameTouched, setFirstNameTouched] = React.useState(false);
+  const [lastNameTouched, setLastNameTouched] = React.useState(false);
+  const [saveAttempted, setSaveAttempted] = React.useState(false);
 
   /** Normalise localStorage / bad merges once so types and length are always safe for React + API. */
   React.useEffect(() => {
@@ -196,6 +199,8 @@ export function PreClassificationForm(props: PreClassificationFormProps = {}) {
 
   const firstNameInvalid = !d.firstName.trim();
   const lastNameInvalid = !d.lastName.trim();
+  const showFirstNameError = firstNameInvalid && (firstNameTouched || saveAttempted);
+  const showLastNameError = lastNameInvalid && (lastNameTouched || saveAttempted);
   const firstNameLen = d.firstName.length;
   const lastNameLen = d.lastName.length;
 
@@ -289,6 +294,7 @@ export function PreClassificationForm(props: PreClassificationFormProps = {}) {
   async function onSave() {
     setMessage(null);
     setSaveError(null);
+    setSaveAttempted(true);
     if (!d.firstName.trim()) {
       setSaveError("First name is required — add how your bank usually prints your given name(s).");
       return;
@@ -352,17 +358,19 @@ export function PreClassificationForm(props: PreClassificationFormProps = {}) {
             placeholder='e.g. "Ada Lovelace"'
             maxLength={ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}
             value={d.firstName}
-            aria-invalid={firstNameInvalid}
-            aria-describedby={firstNameInvalid ? "pc-first-hint pc-first-err" : "pc-first-hint"}
-            onChange={(e) =>
+            aria-invalid={showFirstNameError}
+            aria-describedby={showFirstNameError ? "pc-first-hint pc-first-err" : "pc-first-hint"}
+            onBlur={() => setFirstNameTouched(true)}
+            onChange={(e) => {
+              setFirstNameTouched(true);
               setD((p) => ({
                 ...p,
                 firstName: guardSingleLineText(
                   e.target.value,
                   ONBOARDING_INPUT_LIMITS.preclassFirstLastChars,
                 ),
-              }))
-            }
+              }));
+            }}
             autoComplete="given-name"
           />
           <p id="pc-first-hint" className="text-xs text-muted-foreground">
@@ -370,7 +378,7 @@ export function PreClassificationForm(props: PreClassificationFormProps = {}) {
             {ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}). Control characters and line breaks are
             stripped automatically.
           </p>
-          {firstNameInvalid && (
+          {showFirstNameError && (
             <p id="pc-first-err" className="text-xs text-destructive" role="alert">
               First name is required to save — we use it to build safe bank-text aliases.
             </p>
@@ -383,17 +391,19 @@ export function PreClassificationForm(props: PreClassificationFormProps = {}) {
             placeholder='e.g. "Kuppa"'
             maxLength={ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}
             value={d.lastName}
-            aria-invalid={lastNameInvalid}
-            aria-describedby={lastNameInvalid ? "pc-last-hint pc-last-err" : "pc-last-hint"}
-            onChange={(e) =>
+            aria-invalid={showLastNameError}
+            aria-describedby={showLastNameError ? "pc-last-hint pc-last-err" : "pc-last-hint"}
+            onBlur={() => setLastNameTouched(true)}
+            onChange={(e) => {
+              setLastNameTouched(true);
               setD((p) => ({
                 ...p,
                 lastName: guardSingleLineText(
                   e.target.value,
                   ONBOARDING_INPUT_LIMITS.preclassFirstLastChars,
                 ),
-              }))
-            }
+              }));
+            }}
             autoComplete="family-name"
           />
           <p id="pc-last-hint" className="text-xs text-muted-foreground">
@@ -401,7 +411,7 @@ export function PreClassificationForm(props: PreClassificationFormProps = {}) {
             {lastNameLen}/{ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}). We pair it with your first
             name so a bare surname never acts as a risky catch-all in bank text.
           </p>
-          {lastNameInvalid && (
+          {showLastNameError && (
             <p id="pc-last-err" className="text-xs text-destructive" role="alert">
               Add your surname here too, then tap <strong>Save config</strong> — we pair it with your first name so
               we don&apos;t mix you up with someone else who shares the same family name.

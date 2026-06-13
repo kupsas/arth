@@ -25,8 +25,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MaskedSecretInput } from "@/components/ui/masked-secret-input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChat } from "@/hooks/use-chat";
 import {
@@ -169,10 +169,8 @@ function AgentKeysBlockingModal({ onSaved }: { onSaved: () => void }) {
             <div className="grid gap-3">
               <div className="space-y-1">
                 <Label htmlFor="chat-gate-anthropic">Anthropic</Label>
-                <Input
+                <MaskedSecretInput
                   id="chat-gate-anthropic"
-                  type="password"
-                  autoComplete="off"
                   value={anthropic}
                   onChange={(e) => setAnthropic(e.target.value)}
                   placeholder="sk-ant-…"
@@ -180,10 +178,8 @@ function AgentKeysBlockingModal({ onSaved }: { onSaved: () => void }) {
               </div>
               <div className="space-y-1">
                 <Label htmlFor="chat-gate-google">Google AI</Label>
-                <Input
+                <MaskedSecretInput
                   id="chat-gate-google"
-                  type="password"
-                  autoComplete="off"
                   value={google}
                   onChange={(e) => setGoogle(e.target.value)}
                   placeholder="AI…"

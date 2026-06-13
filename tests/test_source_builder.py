@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from api.models import ScraperAccountMapping, Transaction, UserPipelineSource
 from scraper.source_builder import (
+    _PDF_ONLY_SELF_MAPPING_PARSERS,
     _infer_accounts_dict,
     discovery_has_non_nse_broker_mail,
     filter_redundant_nse_broker_sources,
@@ -201,17 +202,20 @@ def test_icici_direct_statement_uses_template_placeholder_accounts(infer_session
     assert acct["0000"]["source_key"] == "icici_direct_statement"
 
 
-def test_hdfc_cc_statement_swiggy_subject_maps_last4(infer_session: tuple[Session, str]) -> None:
+def test_hdfc_cc_statement_swiggy_subject_does_not_hardcode_last4(
+    infer_session: tuple[Session, str],
+) -> None:
+    """Swiggy product name in subject must not map to a repo-owner card tail."""
     session, uid = infer_session
     cfg = {"parser_key": "hdfc_cc_statement"}
     subj = "Your HDFC Bank Credit Card statement (Swiggy HDFC Bank Credit Card)"
     acct = _infer_accounts_dict(
         cfg, [subj, "<html><body>PDF in attachment</body></html>"], session=session, user_id=uid
     )
-    assert "1905" in acct
+    assert acct == {}
 
 
-def test_hdfc_cc_statement_swiggy_subject_prefixed_like_gmail_fetch_maps_last4(
+def test_hdfc_cc_statement_swiggy_subject_prefixed_like_gmail_fetch_does_not_hardcode_last4(
     infer_session: tuple[Session, str],
 ) -> None:
     """Production persist-sources prefixes ``Subject:`` onto the HTML body before inference."""
@@ -220,7 +224,7 @@ def test_hdfc_cc_statement_swiggy_subject_prefixed_like_gmail_fetch_maps_last4(
     subj = "Your HDFC Bank Credit Card statement (Swiggy HDFC Bank Credit Card)"
     combined = f"Subject: {subj}\n\n<html><body>PDF in attachment</body></html>"
     acct = _infer_accounts_dict(cfg, [combined], session=session, user_id=uid)
-    assert "1905" in acct
+    assert acct == {}
 
 
 def test_hdfc_inbound_fixture_masked_account(infer_session: tuple[Session, str]) -> None:
@@ -316,8 +320,6 @@ def test_sync_pipeline_sources_second_hdfc_account_gets_suffix_key(
     import datetime
     import hashlib
 
-    from parsers.uploads import PARSER_REGISTRY
-
     session, uid = infer_session
     session.add(
         UserPipelineSource(
@@ -353,4 +355,21 @@ def test_sync_pipeline_sources_second_hdfc_account_gets_suffix_key(
     ).first()
     assert row is not None
     assert row.source_key == "hdfc_savings_2222"
-    assert "hdfc_savings_2222" in PARSER_REGISTRY
+
+
+def test_pdf_only_self_mapping_includes_sbi_statement() -> None:
+    assert "sbi_statement" in _PDF_ONLY_SELF_MAPPING_PARSERS
+
+
+def test_ordered_backfill_sources_emits_sbi_savings_for_empty_accounts() -> None:
+    from api.routes.onboarding import _ordered_backfill_sources
+
+    bank = {
+        "cbssbi.cas@alerts.sbi.bank.in": {
+            "parser_key": "sbi_statement",
+            "instrument_type": "savings",
+            "accounts": {},
+        },
+    }
+    sources = _ordered_backfill_sources(bank)
+    assert sources == [{"source_key": "sbi_savings", "instrument_type": "savings"}]
