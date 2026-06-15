@@ -14,7 +14,7 @@ fastapi>=0.136.1
 uvicorn[standard]>=0.34
 # litellm 1.83.x pins httpx==0.28.1; a bare >=0.27 lets pip pick 0.28.0 and the solver fails.
 httpx==0.28.1
-requests>=2.31
+requests>=2.34.2
 urllib3>=2.7.0  # patched transitive (pip-audit / OSV); bounds CVE fixes on urllib3
 # Goals architecture — IMF CPI via SDMX (inflation_service); pulls pandas via sdmx1
 sdmx1>=1.0
